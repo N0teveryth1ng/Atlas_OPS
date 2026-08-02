@@ -1,0 +1,40 @@
+<form action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="resume" accept=".pdf,.doc,.docx">
+    <button type="submit">Upload</button>
+</form>
+
+
+<form action="/match" method="post">
+    <textarea name="jd_text" rows="6" cols="60" placeholder="Paste job description here"></textarea>
+    <button type="submit">Check Match</button>
+</form>
+
+
+{% if keywords %}
+<ul>
+  {% for kw in keywords %}
+    <li>{{ kw }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+
+{% if match_score is defined %}
+<h3>Match Score: {{ match_score }}%</h3>
+
+<p>Matched:</p>
+<ul>
+  {% for kw in matched_keywords %}
+    <li>{{ kw }}</li>
+  {% endfor %}
+</ul>
+
+<p>Missing:</p>
+<ul>
+  {% for kw in missing_keywords %}
+    <li>{{ kw }}</li>
+  {% endfor %}
+</ul>
+
+<p>Should Apply: {{ should_apply }}</p>
+{% endif %}
