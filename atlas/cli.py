@@ -163,8 +163,14 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    return _execute_run(args, run_kind="run")
+
+
+def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
+    from .db import emailed_job_ids, mark_digest_sent, mark_jobs_emailed, save_digest
+    from .digest import build_digest, render_html, render_text
+    from .emailer import EmailError, send_digest
     from .pipeline import run_pipeline
-    from .ranker import rank
 
     settings = get_settings()
     conn = connect()
@@ -176,25 +182,57 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     client = _make_client()
-    run_id = start_run(conn, "run")
-    if args.collect:
+    run_id = start_run(conn, run_kind)
+    if getattr(args, "collect", False):
         from .sourcing import run_sourcing
 
         run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
 
-    results = run_pipeline(conn, run_id, profile, settings, client, limit=args.limit)
-    ranked = rank(results)
-    finish_run(
-        conn, run_id, "ok", summary={"processed": len(results), "ranked": len(ranked)}
+    results = run_pipeline(
+        conn, run_id, profile, settings, client, limit=getattr(args, "limit", None)
     )
-    conn.close()
+    already_sent = emailed_job_ids(conn)
+    digest = build_digest(results, settings, run_id=run_id, already_sent=already_sent)
+    print(render_text(digest))
 
-    print(f"Processed {len(results)} job(s); {len(ranked)} above skip.")
-    for item in ranked[: settings.filters.top_k]:
-        print(
-            f"  [{item.score:5.1f}] {item.final_recommendation.value:<12} "
-            f"{(item.job.title or '?')} @ {item.job.company or '?'}"
-        )
+    sent = False
+    if getattr(args, "email", False):
+        if digest.is_empty():
+            print("No new matches; skipping email.")
+        else:
+            try:
+                send_digest(digest, settings)
+                mark_jobs_emailed(conn, digest.job_ids())
+                sent = True
+                print(f"Emailed {digest.item_count} job(s).")
+            except EmailError as exc:
+                print(f"Email not sent: {exc}", file=sys.stderr)
+
+    digest_id = save_digest(conn, run_id, settings.filters.top_k, render_html(digest), render_text(digest))
+    if sent:
+        mark_digest_sent(conn, digest_id)
+    finish_run(conn, run_id, "ok", summary=digest.summary.model_dump())
+    conn.close()
+    return 0
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    from .scheduler import serve
+
+    settings = get_settings()
+    hour = args.hour if args.hour is not None else settings.schedule.daily_hour
+
+    run_args = argparse.Namespace(
+        collect=not args.no_collect, limit=args.limit, email=not args.no_email
+    )
+
+    def run_once() -> None:
+        code = _execute_run(run_args, run_kind="scheduled")
+        if code:
+            logger.warning("Scheduled run exited with code %s", code)
+
+    print(f"Scheduling daily run at {hour:02d}:00 local time (Ctrl+C to stop).")
+    serve(run_once, daily_hour=hour, run_immediately=not args.no_immediate)
     return 0
 
 
@@ -288,10 +326,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Show the latest saved profile").set_defaults(func=cmd_status)
 
-    p_run = sub.add_parser("run", help="Run the pipeline (Phase 5)")
+    p_run = sub.add_parser("run", help="Run the pipeline")
     p_run.add_argument("--collect", action="store_true", help="Fetch new jobs first (Phase 4)")
     p_run.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
-    p_run.set_defaults(func=cmd_run)
+    p_run.add_argument("--no-email", dest="email", action="store_false", help="Do not email the digest")
+    p_run.set_defaults(func=cmd_run, email=True)
+
+    p_sched = sub.add_parser("schedule", help="Run once now, then daily at the configured hour")
+    p_sched.add_argument("--hour", type=int, default=None, help="Local hour 0-23 (default: config)")
+    p_sched.add_argument("--no-collect", action="store_true", help="Do not fetch new jobs")
+    p_sched.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
+    p_sched.add_argument("--no-email", dest="email", action="store_false", help="Do not email")
+    p_sched.add_argument("--no-immediate", dest="immediate", action="store_false", help="Wait until the next hour")
+    p_sched.set_defaults(func=cmd_schedule, email=True, immediate=True)
 
     sub.add_parser("collect", help="Fetch + normalize + dedupe jobs (Phase 4)").set_defaults(
         func=cmd_collect
@@ -309,6 +356,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # never crash on odd job titles
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     setup_logging()
     return args.func(args)

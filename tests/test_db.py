@@ -1,8 +1,12 @@
 from atlas.db import (
     connect,
+    emailed_job_ids,
     get_latest_profile,
     init_db,
     job_seen,
+    mark_digest_sent,
+    mark_jobs_emailed,
+    save_digest,
     save_profile,
     start_run,
     upsert_job,
@@ -44,3 +48,22 @@ def test_upsert_job_dedupes_by_key(tmp_path):
     row = conn.execute("SELECT urls_json FROM jobs WHERE id = ?", (id1,)).fetchone()
     assert "http://x" in row["urls_json"]
     assert "http://y" in row["urls_json"]
+
+
+def test_emailed_jobs_are_tracked_for_idempotency(tmp_path):
+    conn = _conn(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(conn, run_id, Job(source="a", url="http://x", dedupe_key="k", title="T"))
+
+    assert emailed_job_ids(conn) == set()
+    mark_jobs_emailed(conn, [job_id])
+    assert emailed_job_ids(conn) == {job_id}
+
+
+def test_digest_roundtrip(tmp_path):
+    conn = _conn(tmp_path)
+    digest_id = save_digest(conn, run_id=None, top_k=10, html="<b>hi</b>", text="hi")
+    assert digest_id > 0
+    mark_digest_sent(conn, digest_id)
+    row = conn.execute("SELECT sent_at FROM digests WHERE id = ?", (digest_id,)).fetchone()
+    assert row["sent_at"] is not None

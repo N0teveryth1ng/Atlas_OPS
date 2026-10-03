@@ -47,7 +47,8 @@ Design rules:
 - **Phase 2** — structured JD parsing + hard filters + golden set. *(done)*
 - **Phase 3** — skill ontology / alias map + weighted matching. *(done)*
 - **Phase 4** — collectors, query planner, normalize, dedupe. *(done)*
-- **Phase 5** — evaluator + adversarial verifier. *(current)*
+- **Phase 5** — evaluator + adversarial verifier. *(done)*
+- **Phase 6** — ranker, digest, email, scheduling. *(current)*
 - **Phase 6** — ranker, digest, email, scheduling.
 - **Phase 7** — feedback loop + tuning.
 - **Phase 8 (deferred)** — tailoring / assisted applying.
@@ -132,6 +133,24 @@ parse (regex + LLM) -> hard filter (code) -> skill match -> evaluator (LLM)
 Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
 `filter_results`, `evaluations`, `verifications`), so any decision is traceable.
 
+## Digest, email, scheduling (Phase 6)
+
+- **Digest** (`atlas/digest.py`) — one digest per run, grouped into **Strong
+  matches**, **Worth a look**, and **Needs review** (low-confidence parse). Each
+  item shows title, company, location, link, fit score, up to 3 reasons for, the
+  main risk, missing skills, and the seniority assessment. It also carries the
+  funnel summary: processed → filtered out (with per-rule rejection counts) →
+  evaluated → sent.
+- **Email** (`atlas/emailer.py`) — sent via the [Resend](https://resend.com) API.
+  Requires `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TO_EMAIL`. If not
+  configured, the digest is printed to the console and nothing is sent.
+- **Idempotency** — every emailed job is stamped in `jobs.emailed_at`; a job is
+  never emailed twice. Re-running is safe and prints “no new matches”.
+- **Scheduling** (`atlas/scheduler.py`) — `atlas schedule` runs once immediately
+  then daily at `schedule.daily_hour` (default 09:00 local). For unattended
+  operation, prefer Windows Task Scheduler, cron/systemd, or GitHub Actions.
+  Sending nothing when nothing clears the bar is a valid, expected outcome.
+
 ## CLI
 
 ```bash
@@ -139,8 +158,10 @@ python -m atlas.cli profile --resume resume.pdf --describe "target roles..." --o
 python -m atlas.cli review profile.json     # review + approve
 python -m atlas.cli status
 python -m atlas.cli collect                   # fetch + normalize + dedupe (Phase 4)
-python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank
+python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank -> email
 python -m atlas.cli run --collect --limit 50  # fetch first, then process
+python -m atlas.cli run --no-email            # build + print the digest only
+python -m atlas.cli schedule --hour 9         # run now, then daily at 09:00
 python -m atlas.cli eval                     # golden-set evaluation (deterministic)
 python -m atlas.cli eval --with-llm          # + live LLM precision@10 gate
 ```
