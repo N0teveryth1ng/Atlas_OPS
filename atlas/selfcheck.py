@@ -444,8 +444,9 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
     from .digest import build_digest
     from .emailer import ResendEmailer, send_digest
     from .config import Settings
+    from .job_status import JobStatus
     from .pipeline import ProcessedJob
-    from .schemas import Job, Recommendation, Verdict, VerifierVerdict
+    from .schemas import FilterResult, Job, Recommendation, Verdict, VerifierVerdict
     from .skills import SkillMatch
 
     conn = connect(":memory:")
@@ -462,11 +463,13 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
     result = ProcessedJob(
         job_id=job_id,
         job=job,
+        filter_result=FilterResult(passed=True),
         verdict=Verdict(fit_score=80, recommendation=Recommendation.apply, reasons_for=["ok"]),
         verifier=VerifierVerdict(veto=False),
         skill_match=SkillMatch(must_have_coverage=1.0, nice_to_have_coverage=1.0),
         final_recommendation=Recommendation.apply,
         score=80.0,
+        status=JobStatus.ranked,
     )
     sent_payloads: list[Any] = []
 

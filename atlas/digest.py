@@ -13,6 +13,7 @@ from html import escape
 from pydantic import BaseModel, Field
 
 from .config import Settings
+from .job_status import SHIPPABLE, InvariantViolation, JobStatus
 from .schemas import Recommendation
 
 MAX_REASONS = 3
@@ -31,6 +32,8 @@ class DigestItem(BaseModel):
     missing_skills: list[str] = Field(default_factory=list)
     seniority_assessment: str | None = None
     needs_review: bool = False
+    status: str = JobStatus.new.value
+    filter_passed: bool = False
 
 
 class DigestSection(BaseModel):
@@ -97,6 +100,8 @@ def _item_from_result(result) -> DigestItem:
         missing_skills=list(match.missing_must_haves) if match is not None else [],
         seniority_assessment=(verdict.seniority_assessment if verdict is not None else None),
         needs_review=result.needs_review,
+        status=result.status.value,
+        filter_passed=bool(result.filter_result is not None and result.filter_result.passed),
     )
 
 
@@ -113,10 +118,16 @@ def build_digest(
 
     strong: list[DigestItem] = []
     worth: list[DigestItem] = []
-    review: list[DigestItem] = []
 
     for result in results:
-        if result.filter_result is not None and not result.filter_result.passed:
+        # Invariant (audit D-4/L8): a needs_review job must never be rendered.
+        if result.status == JobStatus.needs_review:
+            raise InvariantViolation("needs_review job reached the digest builder")
+        if result.filter_result is None:
+            # A missing filter result row is treated as not passed.
+            summary.filtered_out += 1
+            continue
+        if not result.filter_result.passed:
             summary.filtered_out += 1
             for rejection in result.filter_result.rejections:
                 summary.rejection_counts[rejection.rule_id] = (
@@ -130,15 +141,19 @@ def build_digest(
         if result.final_recommendation == Recommendation.skip:
             continue
 
+        # This result is about to be rendered: enforce the shipping invariant.
+        if result.status not in SHIPPABLE or result.verdict is None:
+            raise InvariantViolation(
+                f"unverified job reached the digest: status={result.status.value}"
+            )
+
         item = _item_from_result(result)
-        if item.needs_review:
-            review.append(item)
-        elif result.final_recommendation == Recommendation.strong_apply:
+        if result.final_recommendation == Recommendation.strong_apply:
             strong.append(item)
         else:
             worth.append(item)
 
-    for bucket in (strong, worth, review):
+    for bucket in (strong, worth):
         bucket.sort(key=lambda item: item.score, reverse=True)
 
     sections: list[DigestSection] = []
@@ -146,8 +161,6 @@ def build_digest(
         sections.append(DigestSection(title="Strong matches", items=strong))
     if worth:
         sections.append(DigestSection(title="Worth a look", items=worth))
-    if review:
-        sections.append(DigestSection(title="Needs review (low-confidence parse)", items=review))
 
     summary.sent = sum(len(section.items) for section in sections)
     digest = Digest(run_id=run_id, summary=summary, sections=sections)

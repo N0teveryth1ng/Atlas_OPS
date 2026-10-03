@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import REPO_ROOT
+from .job_status import JobStatus, transition
 from .schemas import CandidateProfile, Job
 
 DEFAULT_DB_PATH = REPO_ROOT / "atlas.db"
@@ -69,7 +70,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     description_raw TEXT,
     posted_at       TEXT,
     fetched_at      TEXT,
-    emailed_at      TEXT
+    emailed_at      TEXT,
+    status          TEXT NOT NULL DEFAULT 'new'
 );
 
 CREATE TABLE IF NOT EXISTS parsed_jds (
@@ -164,6 +166,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "emailed_at" not in job_cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN emailed_at TEXT")
+    if "status" not in job_cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'new'")
     digest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(digests)")}
     if "text" not in digest_cols:
         conn.execute("ALTER TABLE digests ADD COLUMN text TEXT")
@@ -277,6 +281,22 @@ def upsert_job(conn: sqlite3.Connection, run_id: int, job: Job) -> tuple[int, bo
 def job_seen(conn: sqlite3.Connection, dedupe_key: str) -> bool:
     row = conn.execute("SELECT 1 FROM jobs WHERE dedupe_key = ? LIMIT 1", (dedupe_key,)).fetchone()
     return row is not None
+
+
+def get_job_status(conn: sqlite3.Connection, job_id: int) -> JobStatus:
+    row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"job {job_id} not found")
+    return JobStatus(row["status"] or JobStatus.new.value)
+
+
+def set_job_status(conn: sqlite3.Connection, job_id: int, new_status: JobStatus) -> JobStatus:
+    """Persist a status change, enforcing the legal transition graph."""
+    current = get_job_status(conn, job_id)
+    resolved = transition(current, new_status)
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (resolved.value, job_id))
+    conn.commit()
+    return resolved
 
 
 # --------------------------------------------------------------------------- #

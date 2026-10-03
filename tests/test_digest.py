@@ -1,5 +1,8 @@
+import pytest
+
 from atlas.config import get_settings
 from atlas.digest import build_digest, render_html, render_text
+from atlas.job_status import InvariantViolation, JobStatus
 from atlas.pipeline import ProcessedJob
 from atlas.schemas import (
     FilterRejection,
@@ -23,7 +26,7 @@ def _job(i: int, title: str = "Junior Python Dev", company: str = "C") -> Job:
     )
 
 
-def _result(i, rec, score=80.0, needs_review=False):
+def _result(i, rec, score=80.0, needs_review=False, status=JobStatus.ranked):
     verdict = Verdict(
         fit_score=score,
         seniority_fit=90,
@@ -42,6 +45,7 @@ def _result(i, rec, score=80.0, needs_review=False):
         final_recommendation=rec,
         score=score,
         needs_review=needs_review,
+        status=status,
     )
 
 
@@ -49,15 +53,19 @@ def test_build_digest_sections():
     results = [
         _result(1, Recommendation.strong_apply, 90),
         _result(2, Recommendation.apply, 70),
-        _result(3, Recommendation.maybe, 50, needs_review=True),
     ]
     digest = build_digest(results, get_settings())
     titles = [section.title for section in digest.sections]
     assert "Strong matches" in titles
     assert "Worth a look" in titles
-    assert any("Needs review" in title for title in titles)
-    assert digest.summary.sent == 3
-    assert digest.item_count == 3
+    assert digest.summary.sent == 2
+    assert digest.item_count == 2
+
+
+def test_build_digest_raises_on_needs_review():
+    results = [_result(3, Recommendation.maybe, 50, needs_review=True, status=JobStatus.needs_review)]
+    with pytest.raises(InvariantViolation):
+        build_digest(results, get_settings())
 
 
 def test_build_digest_summary_counts_rejections():

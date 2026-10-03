@@ -197,9 +197,25 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     results = run_pipeline(
         conn, run_id, profile, settings, client, limit=getattr(args, "limit", None)
     )
+    from .job_status import InvariantViolation, JobStatus, assert_sent_subset
+
+    needs_review = [r for r in results if r.status == JobStatus.needs_review]
+    if needs_review:
+        print(f"{len(needs_review)} job(s) need review and were not ranked or emailed.")
+    shippable_results = [r for r in results if r.status != JobStatus.needs_review]
+
     already_sent = emailed_job_ids(conn)
-    digest = build_digest(results, settings, run_id=run_id, already_sent=already_sent)
+    digest = build_digest(shippable_results, settings, run_id=run_id, already_sent=already_sent)
     print(render_text(digest))
+
+    passed_ids = {
+        r.job_id for r in results if r.filter_result is not None and r.filter_result.passed
+    }
+    try:
+        assert_sent_subset(passed_ids, set(digest.job_ids()))
+    except InvariantViolation as exc:
+        logger.error("shipping invariant violated, aborting email: %s", exc)
+        digest = build_digest([], settings, run_id=run_id)
 
     sent = False
     if getattr(args, "email", False):

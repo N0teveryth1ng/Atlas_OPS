@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .config import Settings, get_settings
-from .db import log_stage
+from .db import log_stage, set_job_status
 from .evaluator import evaluate_job
 from .filters import apply_hard_filters
 from .jd_parser import parse_jd
+from .job_status import JobStatus, transition
 from .llm import LLMClient
 from .ranker import final_score
 from .schemas import (
@@ -48,6 +49,13 @@ class ProcessedJob:
     final_recommendation: Recommendation = Recommendation.skip
     score: float = 0.0
     needs_review: bool = False
+    status: JobStatus = JobStatus.new
+
+    def advance(self, new_status: JobStatus, conn: sqlite3.Connection | None = None) -> None:
+        """Move to ``new_status``, enforcing the state machine; optionally persist."""
+        self.status = transition(self.status, new_status)
+        if conn is not None and self.job_id is not None:
+            set_job_status(conn, self.job_id, new_status)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -106,6 +114,7 @@ def process_job(
     conn: sqlite3.Connection | None = None,
 ) -> ProcessedJob:
     result = ProcessedJob(job_id=job_id, job=job)
+    result.advance(JobStatus.parsed, conn)
 
     parsed = parse_jd(client, title=job.title or "", description=job.description_raw or "")
     result.parsed = parsed
@@ -136,9 +145,16 @@ def process_job(
                     evidence=rejection.evidence,
                 )
     if not filter_result.passed:
+        result.advance(JobStatus.rejected, conn)
         result.final_recommendation = Recommendation.skip
         return result
 
+    if result.needs_review:
+        result.advance(JobStatus.needs_review, conn)
+        result.final_recommendation = Recommendation.maybe
+        return result
+
+    result.advance(JobStatus.passed_filters, conn)
     skill_match = match_skills(parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills)
     result.skill_match = skill_match
 
@@ -152,6 +168,7 @@ def process_job(
         cache=cache,
     )
     result.verdict = verdict
+    result.advance(JobStatus.evaluated, conn)
 
     verifier = verify_job(
         client,
@@ -164,6 +181,7 @@ def process_job(
         cache=cache,
     )
     result.verifier = verifier
+    result.advance(JobStatus.verified, conn)
 
     final = resolve_recommendation(verdict, verifier)
     if (
@@ -173,6 +191,7 @@ def process_job(
         final = Recommendation.maybe
     result.final_recommendation = final
     result.score = final_score(verdict, skill_match, job, settings)
+    result.advance(JobStatus.ranked, conn)
 
     if conn is not None:
         log_stage(

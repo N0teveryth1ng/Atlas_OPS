@@ -75,9 +75,24 @@ class ResendEmailer:
         return True
 
 
+def _assert_digest_shippable(digest) -> None:
+    """Refuse to send a digest containing any job that did not pass filters."""
+    from .job_status import SHIPPABLE, InvariantViolation
+
+    allowed = {status.value for status in SHIPPABLE}
+    for section in getattr(digest, "sections", []):
+        for item in section.items:
+            if not getattr(item, "filter_passed", False) or item.status not in allowed:
+                raise InvariantViolation(
+                    f"refusing to email job {item.job_id}: status={item.status} "
+                    f"filter_passed={getattr(item, 'filter_passed', False)}"
+                )
+
+
 def send_digest(digest, settings: Settings | None = None, *, emailer: ResendEmailer | None = None) -> bool:
     from .digest import render_html, render_text
 
+    _assert_digest_shippable(digest)
     settings = settings or get_settings()
     if emailer is None:
         emailer = ResendEmailer(
