@@ -32,9 +32,10 @@ filters:
   top_k: 10
 
 models:
-  extractor: "llama-3.3-70b-versatile"
-  evaluator: "llama-3.3-70b-versatile"
-  verifier: "llama-3.1-8b-instant"
+  extractor: "openai/gpt-oss-120b"
+  evaluator: "openai/gpt-oss-120b"
+  # Different model family from the evaluator, for adversarial independence.
+  verifier: "qwen/qwen3.8-27b"
   temperature: 0.0
 
 ranking:

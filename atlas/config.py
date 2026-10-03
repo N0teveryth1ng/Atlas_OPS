@@ -49,9 +49,9 @@ class FiltersConfig(BaseModel):
 
 
 class ModelsConfig(BaseModel):
-    extractor: str = "llama-3.3-70b-versatile"
-    evaluator: str = "llama-3.3-70b-versatile"
-    verifier: str = "llama-3.1-8b-instant"
+    extractor: str = "openai/gpt-oss-120b"
+    evaluator: str = "openai/gpt-oss-120b"
+    verifier: str = "qwen/qwen3.8-27b"
     temperature: float = 0.0
 
 
