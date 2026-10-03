@@ -9,8 +9,9 @@ without touching the real toolchain.
 from __future__ import annotations
 
 import json
+import sys
 
-from atlas.selfcheck import FAIL, PASS, CheckResult, main, run_checks
+from atlas.selfcheck import FAIL, PASS, CheckResult, _run, main, run_checks
 
 
 def _passing(_ctx) -> CheckResult:
@@ -73,6 +74,12 @@ def test_cli_registers_selfcheck():
     args = build_parser().parse_args(["selfcheck", "--fast"])
     assert args.func.__name__ == "cmd_selfcheck"
     assert args.full is False
+
+
+def test_run_decodes_non_utf8_output_without_crashing():
+    rc, output = _run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\x9d done')"])
+    assert rc == 0
+    assert "done" in output
 
 
 def test_pytest_signature_strips_timing():

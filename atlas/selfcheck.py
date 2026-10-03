@@ -129,6 +129,8 @@ def _git_sha() -> str:
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=20,
             check=False,
         )
@@ -163,6 +165,8 @@ def _tracked_files() -> list[str]:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
         check=False,
     )
@@ -185,6 +189,8 @@ def _run(cmd: list[str], timeout: int = 600) -> tuple[int, str]:
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -713,6 +719,8 @@ def check_h3_history_secrets(_: dict) -> CheckResult:
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=180,
             check=False,
         )
