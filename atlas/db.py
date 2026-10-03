@@ -11,11 +11,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .config import REPO_ROOT
+from .job_status import JobStatus, transition
 from .schemas import CandidateProfile, Job
 
 DEFAULT_DB_PATH = REPO_ROOT / "atlas.db"
@@ -69,7 +70,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     description_raw TEXT,
     posted_at       TEXT,
     fetched_at      TEXT,
-    emailed_at      TEXT
+    emailed_at      TEXT,
+    status          TEXT NOT NULL DEFAULT 'new'
 );
 
 CREATE TABLE IF NOT EXISTS parsed_jds (
@@ -138,7 +140,7 @@ CREATE TABLE IF NOT EXISTS eval_history (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def db_path() -> Path:
@@ -164,6 +166,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "emailed_at" not in job_cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN emailed_at TEXT")
+    if "status" not in job_cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'new'")
     digest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(digests)")}
     if "text" not in digest_cols:
         conn.execute("ALTER TABLE digests ADD COLUMN text TEXT")
@@ -180,7 +184,7 @@ def start_run(conn: sqlite3.Connection, kind: str) -> int:
         (kind, _now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def finish_run(
@@ -210,13 +214,11 @@ def save_profile(conn: sqlite3.Connection, profile: CandidateProfile) -> int:
         ),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def get_latest_profile(conn: sqlite3.Connection) -> CandidateProfile | None:
-    row = conn.execute(
-        "SELECT data_json FROM profiles ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    row = conn.execute("SELECT data_json FROM profiles ORDER BY id DESC LIMIT 1").fetchone()
     if row is None:
         return None
     return CandidateProfile.model_validate_json(row["data_json"])
@@ -271,12 +273,28 @@ def upsert_job(conn: sqlite3.Connection, run_id: int, job: Job) -> tuple[int, bo
         ),
     )
     conn.commit()
-    return int(cur.lastrowid), True
+    return int(cur.lastrowid or 0), True
 
 
 def job_seen(conn: sqlite3.Connection, dedupe_key: str) -> bool:
     row = conn.execute("SELECT 1 FROM jobs WHERE dedupe_key = ? LIMIT 1", (dedupe_key,)).fetchone()
     return row is not None
+
+
+def get_job_status(conn: sqlite3.Connection, job_id: int) -> JobStatus:
+    row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"job {job_id} not found")
+    return JobStatus(row["status"] or JobStatus.new.value)
+
+
+def set_job_status(conn: sqlite3.Connection, job_id: int, new_status: JobStatus) -> JobStatus:
+    """Persist a status change, enforcing the legal transition graph."""
+    current = get_job_status(conn, job_id)
+    resolved = transition(current, new_status)
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (resolved.value, job_id))
+    conn.commit()
+    return resolved
 
 
 # --------------------------------------------------------------------------- #
@@ -312,7 +330,7 @@ def save_digest(
         (run_id, _now(), top_k, html, text),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
@@ -338,19 +356,17 @@ def record_feedback(
         (job_id, verdict, reason_code, note, _now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def load_feedback(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT f.id, f.job_id, f.verdict, f.reason_code, f.note, f.created_at,
                j.company, j.title, j.url, j.dedupe_key, j.description_raw
         FROM feedback f
         LEFT JOIN jobs j ON j.id = f.job_id
         ORDER BY f.id
-        """
-    ).fetchall()
+        """).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -362,14 +378,7 @@ def record_eval_history(
         (_now(), name, int(bool(passed)), json.dumps(metrics or {})),
     )
     conn.commit()
-    return int(cur.lastrowid)
-
-
-def latest_eval_history(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT * FROM eval_history WHERE name = ? ORDER BY id DESC LIMIT 1", (name,)
-    ).fetchone()
-    return dict(row) if row else None
+    return int(cur.lastrowid or 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -403,4 +412,4 @@ def log_stage(
             (job_id, model, prompt_version, _now(), json.dumps(data or {})),
         )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)

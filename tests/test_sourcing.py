@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from atlas.collectors.base import Collector
 from atlas.config import Settings
@@ -6,7 +6,7 @@ from atlas.db import connect, init_db, start_run
 from atlas.schemas import Job
 from atlas.sourcing import collect, is_fresh
 
-NOW = datetime(2024, 6, 1, tzinfo=timezone.utc)
+NOW = datetime(2024, 6, 1, tzinfo=UTC)
 
 
 class FakeCollector(Collector):
@@ -20,7 +20,13 @@ class FakeCollector(Collector):
 
 
 def _job(**kwargs) -> Job:
-    base = dict(source="fake", title="Backend Engineer", company="Acme", location="Pune", url="http://a")
+    base = {
+        "source": "fake",
+        "title": "Backend Engineer",
+        "company": "Acme",
+        "location": "Pune",
+        "url": "http://a",
+    }
     base.update(kwargs)
     return Job(**base)
 
@@ -76,7 +82,6 @@ def test_run_sourcing_defined_exactly_once():
     defs = [
         node
         for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "run_sourcing"
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run_sourcing"
     ]
     assert len(defs) == 1

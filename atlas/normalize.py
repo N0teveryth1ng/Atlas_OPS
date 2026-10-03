@@ -10,13 +10,13 @@ import hashlib
 import html
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .schemas import Job, RemoteType
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
-_SCRIPT_STYLE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.I | re.S)
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _BOILERPLATE_MARKERS = [
     "equal opportunity",
     "we are an equal",
@@ -77,7 +77,7 @@ def normalize_job(job: Job, *, now: datetime | None = None) -> Job:
             job.remote_type = RemoteType.remote
 
     job.dedupe_key = make_dedupe_key(job.company, job.title, job.location)
-    job.fetched_at = now or datetime.now(timezone.utc)
+    job.fetched_at = now or datetime.now(UTC)
     if not job.urls:
         job.urls = [job.url]
     return job

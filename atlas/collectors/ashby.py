@@ -33,7 +33,9 @@ class AshbyCollector(Collector):
                     company=token,
                     location=item.get("location"),
                     url=link,
-                    description_raw=item.get("descriptionPlain") or item.get("descriptionHtml") or "",
+                    description_raw=item.get("descriptionPlain")
+                    or item.get("descriptionHtml")
+                    or "",
                     posted_at=parse_datetime(item.get("publishedAt")),
                 )
             )

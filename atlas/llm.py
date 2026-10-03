@@ -17,7 +17,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -84,16 +84,15 @@ class LLMClient:
         self.max_validation_retries = max_validation_retries
         self.max_api_retries = max_api_retries
 
+        self._client: _GroqLike
         if client is not None:
             self._client = client
         else:
             from groq import Groq  # imported lazily so tests need no dependency
 
             if not api_key:
-                raise LLMError(
-                    "GROQ_API_KEY is not set. Add it to .env before running LLM calls."
-                )
-            self._client = Groq(api_key=api_key)
+                raise LLMError("GROQ_API_KEY is not set. Add it to .env before running LLM calls.")
+            self._client = cast(_GroqLike, Groq(api_key=api_key))
 
     # -- transport -------------------------------------------------------- #
 
@@ -179,32 +178,3 @@ class LLMClient:
             f"Could not get a valid {schema.__name__} after "
             f"{self.max_validation_retries} attempts: {last_error}"
         )
-
-    def complete_text(
-        self,
-        *,
-        system: str,
-        user: str,
-        model: str | None = None,
-        temperature: float | None = None,
-    ) -> str:
-        """Plain text completion (used for short free-form answers)."""
-        model = model or self.default_model
-        temperature = self.temperature if temperature is None else temperature
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-        # JSON mode is not forced here; reuse the transport without it.
-        last_exc: Exception | None = None
-        for attempt in range(1, self.max_api_retries + 1):
-            try:
-                response = self._client.chat.completions.create(
-                    model=model, messages=messages, temperature=temperature
-                )
-                return (response.choices[0].message.content or "").strip()
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                if attempt < self.max_api_retries:
-                    time.sleep(2 ** (attempt - 1))
-        raise LLMError(f"LLM transport failed: {last_exc}")

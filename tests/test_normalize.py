@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 from atlas.normalize import (
     dedupe_jobs,
     description_signature,
@@ -12,7 +10,13 @@ from atlas.schemas import Job, RemoteType
 
 
 def _job(**kwargs) -> Job:
-    base = dict(source="test", title="Backend Engineer", company="Acme", location="Pune", url="http://a")
+    base = {
+        "source": "test",
+        "title": "Backend Engineer",
+        "company": "Acme",
+        "location": "Pune",
+        "url": "http://a",
+    }
     base.update(kwargs)
     return Job(**base)
 
@@ -52,9 +56,23 @@ def test_dedupe_merges_same_key_urls():
 
 def test_dedupe_merges_cross_source_by_description_signature():
     desc = "Build services with Python. " * 20
-    a = normalize_job(_job(source="remoteok", company="Acme", title="Backend Engineer", url="http://a", description_raw=desc))
+    a = normalize_job(
+        _job(
+            source="remoteok",
+            company="Acme",
+            title="Backend Engineer",
+            url="http://a",
+            description_raw=desc,
+        )
+    )
     b = normalize_job(
-        _job(source="remotive", company="Acme Inc", title="Software Engineer (Backend)", url="http://b", description_raw=desc)
+        _job(
+            source="remotive",
+            company="Acme Inc",
+            title="Software Engineer (Backend)",
+            url="http://b",
+            description_raw=desc,
+        )
     )
     merged = dedupe_jobs([a, b])
     assert len(merged) == 1

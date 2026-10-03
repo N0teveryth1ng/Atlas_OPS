@@ -246,6 +246,18 @@ class ParsedJD(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
+class EvidenceSource(str, Enum):
+    jd = "jd"
+    profile = "profile"
+
+
+class Evidence(BaseModel):
+    """A verbatim quote plus the source it came from (audit D-3)."""
+
+    quote: str = ""
+    source: EvidenceSource = EvidenceSource.jd
+
+
 class Verdict(BaseModel):
     """LLM evaluator output for a surviving job."""
 
@@ -256,9 +268,9 @@ class Verdict(BaseModel):
     growth_fit: float = Field(default=0, ge=0, le=100)
     company_signal: float = Field(default=0, ge=0, le=100)
     recommendation: Recommendation = Recommendation.maybe
-    reasons_for: list[str] = Field(default_factory=list)
-    reasons_against: list[str] = Field(default_factory=list)
-    seniority_assessment: str | None = None
+    reasons_for: list[Evidence] = Field(default_factory=list)
+    reasons_against: list[Evidence] = Field(default_factory=list)
+    seniority_assessment: Evidence | None = None
     uncertainties: list[str] = Field(default_factory=list)
 
 
@@ -267,7 +279,7 @@ class VerifierVerdict(BaseModel):
 
     veto: bool = False
     downgrade_to: Recommendation | None = None
-    reasons_against: list[str] = Field(default_factory=list)
+    reasons_against: list[Evidence] = Field(default_factory=list)
     hidden_seniority_signals: list[str] = Field(default_factory=list)
 
 

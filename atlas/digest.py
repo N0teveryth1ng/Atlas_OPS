@@ -7,12 +7,13 @@ HTML email and a plain-text fallback. Also carries the per-run funnel summary
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import escape
 
 from pydantic import BaseModel, Field
 
 from .config import Settings
+from .job_status import SHIPPABLE, InvariantViolation, JobStatus
 from .schemas import Recommendation
 
 MAX_REASONS = 3
@@ -31,6 +32,8 @@ class DigestItem(BaseModel):
     missing_skills: list[str] = Field(default_factory=list)
     seniority_assessment: str | None = None
     needs_review: bool = False
+    status: str = JobStatus.new.value
+    filter_passed: bool = False
 
 
 class DigestSection(BaseModel):
@@ -44,11 +47,12 @@ class RunSummary(BaseModel):
     rejection_counts: dict[str, int] = Field(default_factory=dict)
     evaluated: int = 0
     sent: int = 0
+    quote_validation_failures: int = 0
 
 
 class Digest(BaseModel):
     run_id: int | None = None
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     subject: str = ""
     summary: RunSummary = Field(default_factory=RunSummary)
     sections: list[DigestSection] = Field(default_factory=list)
@@ -79,10 +83,10 @@ def _item_from_result(result) -> DigestItem:
 
     risks: list[str] = []
     if verdict is not None:
-        risks.extend(verdict.reasons_against)
+        risks.extend(item.quote for item in verdict.reasons_against)
     if verifier is not None and verifier.veto:
-        risks.extend(verifier.reasons_against)
-    reasons_for = list(verdict.reasons_for) if verdict is not None else []
+        risks.extend(item.quote for item in verifier.reasons_against)
+    reasons_for = [item.quote for item in verdict.reasons_for] if verdict is not None else []
 
     return DigestItem(
         job_id=result.job_id,
@@ -95,8 +99,14 @@ def _item_from_result(result) -> DigestItem:
         reasons_for=reasons_for[:MAX_REASONS],
         main_risk=risks[0] if risks else None,
         missing_skills=list(match.missing_must_haves) if match is not None else [],
-        seniority_assessment=(verdict.seniority_assessment if verdict is not None else None),
+        seniority_assessment=(
+            verdict.seniority_assessment.quote
+            if verdict is not None and verdict.seniority_assessment
+            else None
+        ),
         needs_review=result.needs_review,
+        status=result.status.value,
+        filter_passed=bool(result.filter_result is not None and result.filter_result.passed),
     )
 
 
@@ -113,10 +123,16 @@ def build_digest(
 
     strong: list[DigestItem] = []
     worth: list[DigestItem] = []
-    review: list[DigestItem] = []
 
     for result in results:
-        if result.filter_result is not None and not result.filter_result.passed:
+        # Invariant (audit D-4/L8): a needs_review job must never be rendered.
+        if result.status == JobStatus.needs_review:
+            raise InvariantViolation("needs_review job reached the digest builder")
+        if result.filter_result is None:
+            # A missing filter result row is treated as not passed.
+            summary.filtered_out += 1
+            continue
+        if not result.filter_result.passed:
             summary.filtered_out += 1
             for rejection in result.filter_result.rejections:
                 summary.rejection_counts[rejection.rule_id] = (
@@ -130,15 +146,19 @@ def build_digest(
         if result.final_recommendation == Recommendation.skip:
             continue
 
+        # This result is about to be rendered: enforce the shipping invariant.
+        if result.status not in SHIPPABLE or result.verdict is None:
+            raise InvariantViolation(
+                f"unverified job reached the digest: status={result.status.value}"
+            )
+
         item = _item_from_result(result)
-        if item.needs_review:
-            review.append(item)
-        elif result.final_recommendation == Recommendation.strong_apply:
+        if result.final_recommendation == Recommendation.strong_apply:
             strong.append(item)
         else:
             worth.append(item)
 
-    for bucket in (strong, worth, review):
+    for bucket in (strong, worth):
         bucket.sort(key=lambda item: item.score, reverse=True)
 
     sections: list[DigestSection] = []
@@ -146,8 +166,6 @@ def build_digest(
         sections.append(DigestSection(title="Strong matches", items=strong))
     if worth:
         sections.append(DigestSection(title="Worth a look", items=worth))
-    if review:
-        sections.append(DigestSection(title="Needs review (low-confidence parse)", items=review))
 
     summary.sent = sum(len(section.items) for section in sections)
     digest = Digest(run_id=run_id, summary=summary, sections=sections)
@@ -213,9 +231,12 @@ def render_html(digest: Digest) -> str:
     rows.append(f"<p style='color:#666;margin:0 0 16px'>{esc(_summary_line(digest.summary))}</p>")
     if digest.summary.rejection_counts:
         counts = ", ".join(
-            f"{esc(rule)}: {count}" for rule, count in sorted(digest.summary.rejection_counts.items())
+            f"{esc(rule)}: {count}"
+            for rule, count in sorted(digest.summary.rejection_counts.items())
         )
-        rows.append(f"<p style='color:#999;font-size:12px;margin:0 0 16px'>rejections: {counts}</p>")
+        rows.append(
+            f"<p style='color:#999;font-size:12px;margin:0 0 16px'>rejections: {counts}</p>"
+        )
 
     if digest.is_empty():
         rows.append("<p>No matches met the bar today. Sending nothing is a valid result.</p>")

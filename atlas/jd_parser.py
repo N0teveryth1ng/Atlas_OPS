@@ -19,44 +19,54 @@ logger = logging.getLogger(__name__)
 
 _NUM = r"\d+(?:\.\d+)?"
 
-_RANGE_RE = re.compile(rf"({_NUM})\s*(?:-|–|—|to)\s*({_NUM})\s*\+?\s*(?:years?|yrs?)\b", re.I)
-_PLUS_RE = re.compile(rf"({_NUM})\s*\+\s*(?:years?|yrs?)\b", re.I)
+_RANGE_RE = re.compile(
+    rf"({_NUM})\s*(?:-|–|—|to)\s*({_NUM})\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE
+)
+_PLUS_RE = re.compile(rf"({_NUM})\s*\+\s*(?:years?|yrs?)\b", re.IGNORECASE)
 _MIN_RE = re.compile(
     rf"(?:minimum(?:\s+of)?|at\s+least|min\.?|over|more\s+than)\s*({_NUM})\s*(?:years?|yrs?)",
-    re.I,
+    re.IGNORECASE,
 )
 _YEARS_OF_RE = re.compile(
     rf"({_NUM})\s*(?:years?|yrs?)\s+of\s+(?:relevant\s+|professional\s+|industry\s+)?experience",
-    re.I,
+    re.IGNORECASE,
 )
 # A bare "N years" / "N yrs" (optionally "N years experience"). Many postings
 # state the requirement without "of experience"; missing these let an
 # over-qualified role slip through the hard filter.
-_BARE_YEARS_RE = re.compile(rf"({_NUM})\s*\+?\s*(?:years?|yrs?)\b", re.I)
+_BARE_YEARS_RE = re.compile(rf"({_NUM})\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
 # Reject "N years" when it clearly is not a requirement ("over the last 3 years",
 # "founded 5 years ago").
 _NON_REQ_BEFORE_RE = re.compile(
     r"(?:last|past|next|previous|over|nearly|almost|after|before|every|per|around|about|"
     r"for\s+the|since)\s+(?:the\s+)?$",
-    re.I,
+    re.IGNORECASE,
 )
 _NON_REQ_AFTER_RE = re.compile(
     r"^\s*(?:ago|old|of\s+age|in\s+business|running|strong|now)\b",
-    re.I,
+    re.IGNORECASE,
 )
 _FRESHER_RE = re.compile(
     r"\b(fresher|fresh(?:er)?\s+graduate|entry[\s-]?level|no\s+(?:prior\s+)?experience|"
     r"recent\s+graduate|graduate\s+trainee|trainee|internship|0\s*[-–]\s*1\s*years?)\b",
-    re.I,
+    re.IGNORECASE,
 )
 
 _RED_FLAG_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\b(10|1[1-9]|[2-9]\d)\s*\+?\s*(?:years?|yrs?)\b", re.I), "very_high_experience"),
-    (re.compile(r"\bteam\s+lead\b|\blead\s+a\s+team\b|\bmentor\s+juniors?\b", re.I), "leadership_expected"),
-    (re.compile(r"\bon-?call\s+24|24\s*x\s*7|24/7\b", re.I), "always_on_call"),
-    (re.compile(r"\bunpaid\b|\bwithout\s+compensation\b", re.I), "unpaid"),
     (
-        re.compile(r"\bown\s+the\s+architecture\b|\bset\s+the\s+technical\s+direction\b", re.I),
+        re.compile(r"\b(10|1[1-9]|[2-9]\d)\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE),
+        "very_high_experience",
+    ),
+    (
+        re.compile(r"\bteam\s+lead\b|\blead\s+a\s+team\b|\bmentor\s+juniors?\b", re.IGNORECASE),
+        "leadership_expected",
+    ),
+    (re.compile(r"\bon-?call\s+24|24\s*x\s*7|24/7\b", re.IGNORECASE), "always_on_call"),
+    (re.compile(r"\bunpaid\b|\bwithout\s+compensation\b", re.IGNORECASE), "unpaid"),
+    (
+        re.compile(
+            r"\bown\s+the\s+architecture\b|\bset\s+the\s+technical\s+direction\b", re.IGNORECASE
+        ),
         "ownership_of_architecture",
     ),
 ]
@@ -112,17 +122,25 @@ def extract_years(text: str) -> tuple[float | None, float | None, str | None]:
         low, high = sorted((float(match.group(1)), float(match.group(2))))
         candidates.append((match.start(), match.end(), low, high, match.group(0), True))
     for match in _PLUS_RE.finditer(text):
-        candidates.append((match.start(), match.end(), float(match.group(1)), None, match.group(0), False))
+        candidates.append(
+            (match.start(), match.end(), float(match.group(1)), None, match.group(0), False)
+        )
     for match in _MIN_RE.finditer(text):
-        candidates.append((match.start(), match.end(), float(match.group(1)), None, match.group(0), False))
+        candidates.append(
+            (match.start(), match.end(), float(match.group(1)), None, match.group(0), False)
+        )
     for match in _YEARS_OF_RE.finditer(text):
-        candidates.append((match.start(), match.end(), float(match.group(1)), None, match.group(0), False))
+        candidates.append(
+            (match.start(), match.end(), float(match.group(1)), None, match.group(0), False)
+        )
     for match in _BARE_YEARS_RE.finditer(text):
         before = text[max(0, match.start() - 24) : match.start()]
         after = text[match.end() : match.end() + 16]
         if _NON_REQ_BEFORE_RE.search(before) or _NON_REQ_AFTER_RE.search(after):
             continue
-        candidates.append((match.start(), match.end(), float(match.group(1)), None, match.group(0), False))
+        candidates.append(
+            (match.start(), match.end(), float(match.group(1)), None, match.group(0), False)
+        )
 
     if not candidates:
         fresher = _FRESHER_RE.search(text)
@@ -133,9 +151,7 @@ def extract_years(text: str) -> tuple[float | None, float | None, str | None]:
     # A standalone "X years of experience" that begins inside an "A-B years"
     # range is the range's upper bound, not a separate requirement: drop it.
     ranges = [c for c in candidates if c[5]]
-    kept = [
-        c for c in candidates if c[5] or not any(r[0] <= c[0] < r[1] for r in ranges)
-    ]
+    kept = [c for c in candidates if c[5] or not any(r[0] <= c[0] < r[1] for r in ranges)]
     kept.sort(key=lambda item: item[2], reverse=True)
     best = kept[0]
     return best[2], best[3], best[4]
@@ -146,9 +162,11 @@ def detect_title_seniority(title: str) -> Seniority:
     lowered = (title or "").lower()
     best = Seniority.unknown
     for pattern, level in _TITLE_RULES:
-        if re.search(rf"(?<![a-z]){re.escape(pattern)}(?![a-z])", lowered):
-            if SENIORITY_RANK[level] > SENIORITY_RANK[best]:
-                best = level
+        if (
+            re.search(rf"(?<![a-z]){re.escape(pattern)}(?![a-z])", lowered)
+            and SENIORITY_RANK[level] > SENIORITY_RANK[best]
+        ):
+            best = level
     return best
 
 
@@ -193,7 +211,9 @@ def merge_jd(regex_jd: ParsedJD, llm_jd: ParsedJD) -> ParsedJD:
     """Merge regex and LLM parses, always taking the more conservative value."""
     merged = llm_jd.model_copy(deep=True)
 
-    mins = [y for y in (regex_jd.min_years_experience, llm_jd.min_years_experience) if y is not None]
+    mins = [
+        y for y in (regex_jd.min_years_experience, llm_jd.min_years_experience) if y is not None
+    ]
     merged.min_years_experience = max(mins) if mins else None
     if merged.max_years_experience is None:
         merged.max_years_experience = regex_jd.max_years_experience

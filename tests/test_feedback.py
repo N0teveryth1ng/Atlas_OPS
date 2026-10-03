@@ -4,11 +4,20 @@ from atlas.config import get_settings
 from atlas.db import (
     connect,
     init_db,
-    record_feedback as db_record_feedback,
     start_run,
     upsert_job,
 )
-from atlas.feedback import apply_feedback, export_golden, record_feedback
+from atlas.db import (
+    record_feedback as db_record_feedback,
+)
+from atlas.feedback import (
+    FeedbackTuning,
+    _renormalise,
+    apply_feedback,
+    export_golden,
+    load_and_apply,
+    record_feedback,
+)
 from atlas.ranker import final_score
 from atlas.schemas import Job, Recommendation, Verdict
 from atlas.skills import SkillMatch
@@ -89,6 +98,54 @@ def test_feedback_demonstrably_changes_ranking():
     after = final_score(verdict, match, job, tuned)
 
     assert after < before
+
+
+def test_summary_variants():
+    assert FeedbackTuning().summary() == "No feedback recorded yet."
+    tuning = FeedbackTuning(feedback_count=3, blacklist_added=["BadCo"], targets_added=["GoodCo"])
+    text = tuning.summary()
+    assert "3 feedback item(s) applied" in text
+    assert "blacklisted: BadCo" in text
+    assert "boosted: GoodCo" in text
+
+
+def test_apply_feedback_empty_and_renormalise_guard():
+    settings = get_settings()
+    tuned, tuning = apply_feedback(settings, [])
+    assert tuning.feedback_count == 0
+    assert tuned.ranking.weights.fit_score == settings.ranking.weights.fit_score
+    assert _renormalise({"a": 0.0, "b": 0.0}) == {"a": 0.0, "b": 0.0}
+
+
+def test_too_senior_bumps_seniority_weight():
+    settings = get_settings()
+    rows = [{"verdict": "bad", "reason_code": "too_senior", "company": "X"}]
+    tuned, _ = apply_feedback(settings, rows)
+    assert tuned.ranking.weights.seniority_fit > settings.ranking.weights.seniority_fit
+
+
+def test_load_and_apply_uses_stored_feedback(tmp_path):
+    conn, job_id = _setup(tmp_path)
+    db_record_feedback(conn, job_id, "bad", "bad_company", None)
+    settings = get_settings()
+    tuned, tuning = load_and_apply(conn, settings)
+    conn.close()
+    assert tuning.feedback_count == 1
+    assert "Acme" in tuned.companies.blacklist_companies
+
+
+def test_export_golden_skips_incomplete_and_duplicate(tmp_path):
+    conn, job_id = _setup(tmp_path)
+    run_id = start_run(conn, "t2")
+    upsert_job(conn, run_id, Job(source="t", url="http://y", dedupe_key="k2", title="NoDesc"))
+    db_record_feedback(conn, job_id, "bad", "other", None)
+    db_record_feedback(conn, 2, "good", None, None)
+    out = tmp_path / "feedback.jsonl"
+    out.write_text("not json\n" + json.dumps({"id": f"feedback_{job_id}"}) + "\n", encoding="utf-8")
+
+    written = export_golden(conn, out)
+    conn.close()
+    assert written == 0
 
 
 def test_export_golden_grows_eval_set(tmp_path):

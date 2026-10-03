@@ -21,10 +21,11 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, cast
 
 from .config import REPO_ROOT, get_settings
 from .prompt_store import load_prompt
@@ -58,7 +59,7 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 PII_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("phone_in", re.compile(r"\+91[\s-]?\d{10}")),
     ("windows_user_path", re.compile(r"C:\\Users\\[^\"'\s]+")),
-    ("resume_path", re.compile(r"Soham[_\s]Das", re.I)),
+    ("resume_path", re.compile(r"Soham[_\s]Das", re.IGNORECASE)),
 ]
 
 REQUIRED_IGNORES = [
@@ -75,7 +76,7 @@ REQUIRED_IGNORES = [
 
 SENSITIVE_TRACKED = re.compile(
     r"(^|/)(\.env$|.*\.(pem|key|p12|pfx)$|profile\.json$|.*\.db$|.*\.sqlite3?$)",
-    re.I,
+    re.IGNORECASE,
 )
 
 
@@ -124,7 +125,14 @@ class SelfCheckReport:
 def _git_sha() -> str:
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=20
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
         )
         return out.stdout.strip() if out.returncode == 0 else "unknown"
     except Exception:  # noqa: BLE001
@@ -153,7 +161,14 @@ def _prompt_versions() -> dict[str, str]:
 
 def _tracked_files() -> list[str]:
     out = subprocess.run(
-        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=30
+        ["git", "ls-files"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
     )
     if out.returncode != 0:
         return []
@@ -170,7 +185,14 @@ def _read_text(path: Path) -> str:
 def _run(cmd: list[str], timeout: int = 600) -> tuple[int, str]:
     try:
         out = subprocess.run(
-            cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout
+            cmd,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
         )
         combined = (out.stdout or "") + (out.stderr or "")
         return out.returncode, combined
@@ -181,9 +203,12 @@ def _run(cmd: list[str], timeout: int = 600) -> tuple[int, str]:
 
 
 def _module_available(name: str) -> bool:
-    return subprocess.run(
-        [sys.executable, "-c", f"import {name}"], capture_output=True
-    ).returncode == 0
+    return (
+        subprocess.run(
+            [sys.executable, "-c", f"import {name}"], capture_output=True, check=False
+        ).returncode
+        == 0
+    )
 
 
 def _ok(cid: str, name: str, evidence: str, detail: list[str] | None = None, mode: str = "fast"):
@@ -215,9 +240,11 @@ def check_h1_working_tree(_: dict) -> CheckResult:
     if branch != "main":
         problems.append(f"on branch '{branch}', not 'main'")
     if not problems:
-        behind_rc, behind = _run(["git", "rev-list", "--left-right", "--count", "HEAD...origin/main"])
+        behind_rc, behind = _run(
+            ["git", "rev-list", "--left-right", "--count", "HEAD...origin/main"]
+        )
         if behind_rc == 0 and behind.strip():
-            left, _, right = behind.strip().partition("\t")
+            _left, _sep, right = behind.strip().partition("\t")
             if right.strip() and right.strip() != "0":
                 problems.append(f"{right.strip()} commit(s) behind origin/main")
     if problems:
@@ -246,7 +273,11 @@ def check_h4_gitignore(_: dict) -> CheckResult:
     missing = [p for p in REQUIRED_IGNORES if p not in text]
     if missing:
         return _bad("H4", "gitignore covers sensitive/generated paths", f"missing: {missing}")
-    return _ok("H4", "gitignore covers sensitive/generated paths", f"{len(REQUIRED_IGNORES)} entries present")
+    return _ok(
+        "H4",
+        "gitignore covers sensitive/generated paths",
+        f"{len(REQUIRED_IGNORES)} entries present",
+    )
 
 
 def check_h5_env_connascence(_: dict) -> CheckResult:
@@ -284,7 +315,9 @@ def check_h6_requirements_pinned(_: dict) -> CheckResult:
 def check_h7_readme(_: dict) -> CheckResult:
     text = _read_text(REPO_ROOT / "README.md")
     if not text:
-        return _bad("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", "README.md missing")
+        return _bad(
+            "H7", "README documents setup/config/CLI/eval/selfcheck/schedule", "README.md missing"
+        )
     required = [
         "pip install",
         "python -m atlas.cli profile",
@@ -300,8 +333,14 @@ def check_h7_readme(_: dict) -> CheckResult:
     ]
     missing = [term for term in required if term not in text]
     if missing:
-        return _bad("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"missing: {missing}")
-    return _ok("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"{len(required)} terms present")
+        return _bad(
+            "H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"missing: {missing}"
+        )
+    return _ok(
+        "H7",
+        "README documents setup/config/CLI/eval/selfcheck/schedule",
+        f"{len(required)} terms present",
+    )
 
 
 def check_a1_autoapply_isolation(_: dict) -> CheckResult:
@@ -323,7 +362,9 @@ def check_a1_autoapply_isolation(_: dict) -> CheckResult:
                     offenders.append(f"{path.relative_to(REPO_ROOT)} imports {name}")
     if offenders:
         return _bad("A1", "auto-apply code not imported by pipeline", f"imports: {offenders}")
-    return _ok("A1", "auto-apply code not imported by pipeline", "no pipeline imports of legacy bots")
+    return _ok(
+        "A1", "auto-apply code not imported by pipeline", "no pipeline imports of legacy bots"
+    )
 
 
 def check_a2_no_application_posts(_: dict) -> CheckResult:
@@ -338,7 +379,9 @@ def check_a2_no_application_posts(_: dict) -> CheckResult:
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{token}")
     if offenders:
         return _bad("A2", "pipeline cannot POST to application endpoints", f"tokens: {offenders}")
-    return _ok("A2", "pipeline cannot POST to application endpoints", "no browser/apply tokens in atlas/")
+    return _ok(
+        "A2", "pipeline cannot POST to application endpoints", "no browser/apply tokens in atlas/"
+    )
 
 
 def check_a3_no_submit_flag(_: dict) -> CheckResult:
@@ -369,8 +412,12 @@ def check_a4_tracked_pii(_: dict) -> CheckResult:
 def check_g5_golden_provenance(_: dict) -> CheckResult:
     path = REPO_ROOT / "eval" / "golden_set.jsonl"
     if not path.exists():
-        return _blocked("G5", "golden set is real + human-labelled", "eval/golden_set.jsonl missing")
-    cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return _blocked(
+            "G5", "golden set is real + human-labelled", "eval/golden_set.jsonl missing"
+        )
+    cases = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
     problems: list[str] = []
     if len(cases) < 40:
         problems.append(f"count {len(cases)} < 40")
@@ -425,14 +472,66 @@ def check_l5_verifier_invariant(_: dict) -> CheckResult:
                     problems.append(f"veto ignored for {rec}")
                 if not veto and rank[final] > rank[rec]:
                     problems.append(f"upgraded {rec}->{final}")
-                if down is not None and not veto and rank[final] > rank[down] and rank[down] < rank[rec]:
+                if (
+                    down is not None
+                    and not veto
+                    and rank[final] > rank[down]
+                    and rank[down] < rank[rec]
+                ):
                     problems.append(f"downgrade_to not applied {rec}->{final}")
     if problems:
         return _bad("L5", "verifier can only downgrade/veto", "; ".join(sorted(set(problems))[:4]))
     return _ok("L5", "verifier can only downgrade/veto", "all 4x2x5 combinations bounded")
 
 
+def check_d3_quote_validation(_: dict) -> CheckResult:
+    from .evidence import validate_verdict_evidence
+    from .schemas import Evidence, EvidenceSource, Recommendation, Verdict
+
+    jd_text = "We build backend services in Python and ship to production."
+    good = Verdict(
+        fit_score=70,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="backend services in Python", source=EvidenceSource.jd)],
+    )
+    if validate_verdict_evidence(good, jd_text, ""):
+        return _bad("D3", "quotes must appear in source", "verbatim quote rejected")
+    bad = Verdict(
+        fit_score=70,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="fabricated claim never written", source=EvidenceSource.jd)],
+    )
+    if not validate_verdict_evidence(bad, jd_text, ""):
+        return _bad("D3", "quotes must appear in source", "fabricated quote accepted")
+    return _ok(
+        "D3", "quotes must appear in source", "present quote accepted, absent quote rejected"
+    )
+
+
+def check_d4_status_machine(_: dict) -> CheckResult:
+    from .job_status import SHIPPABLE, IllegalTransition, JobStatus, transition
+
+    problems: list[str] = []
+    for bad_status in (JobStatus.rejected, JobStatus.needs_review, JobStatus.new):
+        if bad_status in SHIPPABLE:
+            problems.append(f"{bad_status.value} shippable")
+    if not {JobStatus.verified, JobStatus.ranked} <= SHIPPABLE:
+        problems.append("verified/ranked not shippable")
+    try:
+        transition(JobStatus.new, JobStatus.ranked)
+    except IllegalTransition:
+        pass
+    else:
+        problems.append("new->ranked allowed")
+    if transition(JobStatus.new, JobStatus.parsed) != JobStatus.parsed:
+        problems.append("new->parsed blocked")
+    if problems:
+        return _bad("D4", "job status machine guards shipping", "; ".join(problems))
+    return _ok("D4", "job status machine guards shipping", "illegal transitions blocked")
+
+
 def check_d1_email_idempotency(_: dict) -> CheckResult:
+    from .config import Settings
     from .db import (
         connect,
         emailed_job_ids,
@@ -443,9 +542,17 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
     )
     from .digest import build_digest
     from .emailer import ResendEmailer, send_digest
-    from .config import Settings
+    from .job_status import JobStatus
     from .pipeline import ProcessedJob
-    from .schemas import Job, Recommendation, Verdict, VerifierVerdict
+    from .schemas import (
+        Evidence,
+        EvidenceSource,
+        FilterResult,
+        Job,
+        Recommendation,
+        Verdict,
+        VerifierVerdict,
+    )
     from .skills import SkillMatch
 
     conn = connect(":memory:")
@@ -458,15 +565,21 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
         url="https://x/1",
         dedupe_key="selfcheck-d1",
     )
-    job_id, _ = upsert_job(conn, run_id, job)
+    job_id, _created = upsert_job(conn, run_id, job)
     result = ProcessedJob(
         job_id=job_id,
         job=job,
-        verdict=Verdict(fit_score=80, recommendation=Recommendation.apply, reasons_for=["ok"]),
+        filter_result=FilterResult(passed=True),
+        verdict=Verdict(
+            fit_score=80,
+            recommendation=Recommendation.apply,
+            reasons_for=[Evidence(quote="Backend Engineer", source=EvidenceSource.jd)],
+        ),
         verifier=VerifierVerdict(veto=False),
         skill_match=SkillMatch(must_have_coverage=1.0, nice_to_have_coverage=1.0),
         final_recommendation=Recommendation.apply,
         score=80.0,
+        status=JobStatus.ranked,
     )
     sent_payloads: list[Any] = []
 
@@ -489,17 +602,28 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
     again = build_digest([result], settings, run_id=run_id, already_sent=emailed_job_ids(conn))
     conn.close()
     if not again.is_empty() or len(sent_payloads) != 1:
-        return _bad("D1", "email idempotency", f"resent={not again.is_empty()} sends={len(sent_payloads)}")
+        return _bad(
+            "D1", "email idempotency", f"resent={not again.is_empty()} sends={len(sent_payloads)}"
+        )
     return _ok("D1", "email idempotency", "second pass sends nothing")
 
 
 def check_e2e_dryrun(_: dict) -> CheckResult:
     from .config import Settings
-    from .db import connect, get_latest_profile, init_db, save_profile, start_run, upsert_job
+    from .db import (
+        connect,
+        get_latest_profile,
+        init_db,
+        save_profile,
+        start_run,
+        upsert_job,
+    )
     from .digest import build_digest
     from .pipeline import run_pipeline
     from .schemas import (
         CandidateProfile,
+        Evidence,
+        EvidenceSource,
         ExperienceLevel,
         Job,
         Proficiency,
@@ -516,7 +640,9 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
                 return schema(
                     fit_score=85,
                     recommendation=Recommendation.apply,
-                    reasons_for=["strong python fit"],
+                    reasons_for=[
+                        Evidence(quote="Junior Python Developer", source=EvidenceSource.jd)
+                    ],
                 )
             if name == "VerifierVerdict":
                 return schema(veto=False)
@@ -545,7 +671,10 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
         ),
     )
     stored = get_latest_profile(conn)
-    results = run_pipeline(conn, run_id, stored, settings, FakeLLM())
+    if stored is None:
+        conn.close()
+        return _bad("E2E", "end-to-end dry run (fake LLM, no network)", "no stored profile")
+    results = run_pipeline(conn, run_id, stored, settings, cast(Any, FakeLLM()))
     digest = build_digest(results, settings, run_id=run_id)
     conn.close()
     if not results or digest.is_empty():
@@ -571,6 +700,8 @@ FAST_CHECKS: list[Callable[[dict], CheckResult]] = [
     check_g5_golden_provenance,
     check_g3_seniority_matrix,
     check_l5_verifier_invariant,
+    check_d3_quote_validation,
+    check_d4_status_machine,
     check_d1_email_idempotency,
     check_e2e_dryrun,
 ]
@@ -588,7 +719,10 @@ def check_h3_history_secrets(_: dict) -> CheckResult:
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=180,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return _blocked("H3", "no secrets in git history", "history scan timed out")
@@ -609,7 +743,7 @@ def check_t1_tests(_: dict) -> CheckResult:
 
 
 def check_t2_coverage(_: dict) -> CheckResult:
-    rc, output = _run(
+    rc, _output = _run(
         [
             sys.executable,
             "-m",
@@ -625,7 +759,9 @@ def check_t2_coverage(_: dict) -> CheckResult:
     )
     cov_path = REPO_ROOT / "coverage.json"
     if not cov_path.exists():
-        return _blocked("T2", "coverage floors (>=90% high-risk modules)", f"coverage report missing (rc={rc})")
+        return _blocked(
+            "T2", "coverage floors (>=90% high-risk modules)", f"coverage report missing (rc={rc})"
+        )
     data = json.loads(cov_path.read_text(encoding="utf-8"))
     files = data.get("files", {})
     below: list[str] = []
@@ -638,7 +774,9 @@ def check_t2_coverage(_: dict) -> CheckResult:
         if pct < floor:
             below.append(f"{rel}={pct:.0f}%<{floor}%")
     if below:
-        return _bad("T2", "coverage floors (>=90% high-risk modules)", "; ".join(below), below, mode="full")
+        return _bad(
+            "T2", "coverage floors (>=90% high-risk modules)", "; ".join(below), below, mode="full"
+        )
     return _ok("T2", "coverage floors (>=90% high-risk modules)", "all floors met", mode="full")
 
 
@@ -648,25 +786,27 @@ def check_t3_lint_format_types(_: dict) -> CheckResult:
     black = _module_available("black")
     mypy = _module_available("mypy")
     if ruff:
-        rc, _ = _run([sys.executable, "-m", "ruff", "check", "atlas", "tests"], timeout=300)
+        rc, _out = _run([sys.executable, "-m", "ruff", "check", "atlas", "tests"], timeout=300)
         if rc != 0:
             problems.append("ruff")
     else:
         problems.append("ruff:unavailable")
     if black:
-        rc, _ = _run([sys.executable, "-m", "black", "--check", "atlas", "tests"], timeout=300)
+        rc, _out = _run([sys.executable, "-m", "black", "--check", "atlas", "tests"], timeout=300)
         if rc != 0:
             problems.append("black")
     else:
         problems.append("black:unavailable")
     if mypy:
-        rc, _ = _run([sys.executable, "-m", "mypy", "atlas"], timeout=300)
+        rc, _out = _run([sys.executable, "-m", "mypy", "atlas"], timeout=300)
         if rc != 0:
             problems.append("mypy")
     else:
         problems.append("mypy:unavailable")
     if problems:
-        return _bad("T3", "ruff + black + mypy clean", f"failing: {problems}", problems, mode="full")
+        return _bad(
+            "T3", "ruff + black + mypy clean", f"failing: {problems}", problems, mode="full"
+        )
     return _ok("T3", "ruff + black + mypy clean", "all three clean", mode="full")
 
 
@@ -677,18 +817,34 @@ def _pytest_signature(output: str) -> str:
 
 def check_t4_flaky(_: dict) -> CheckResult:
     signatures: list[str] = []
-    for _ in range(3):
+    for _run_index in range(3):
         rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly"], timeout=600)
         if rc != 0:
-            return _bad("T4", "suite is not order/run dependent", f"run rc={rc}", [output[-400:]], mode="full")
+            return _bad(
+                "T4",
+                "suite is not order/run dependent",
+                f"run rc={rc}",
+                [output[-400:]],
+                mode="full",
+            )
         signatures.append(_pytest_signature(output))
     rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "randomly"], timeout=600)
     if rc != 0:
-        return _bad("T4", "suite is not order/run dependent", f"random-order rc={rc}", [output[-400:]], mode="full")
+        return _bad(
+            "T4",
+            "suite is not order/run dependent",
+            f"random-order rc={rc}",
+            [output[-400:]],
+            mode="full",
+        )
     signatures.append(_pytest_signature(output))
     if len(set(signatures)) != 1:
-        return _bad("T4", "suite is not order/run dependent", f"varying results: {signatures}", mode="full")
-    return _ok("T4", "suite is not order/run dependent", f"4 runs stable: {signatures[0]}", mode="full")
+        return _bad(
+            "T4", "suite is not order/run dependent", f"varying results: {signatures}", mode="full"
+        )
+    return _ok(
+        "T4", "suite is not order/run dependent", f"4 runs stable: {signatures[0]}", mode="full"
+    )
 
 
 def check_t7_no_network(_: dict) -> CheckResult:
@@ -715,10 +871,18 @@ def check_t5_mutation(_: dict) -> CheckResult:
 def check_t6_vulture(_: dict) -> CheckResult:
     if not _module_available("vulture"):
         return _blocked("T6", "no unexplained dead code (vulture)", "vulture not installed")
-    rc, output = _run([sys.executable, "-m", "vulture", "atlas", "--min-confidence", "80"], timeout=300)
+    rc, output = _run(
+        [sys.executable, "-m", "vulture", "atlas", "--min-confidence", "80"], timeout=300
+    )
     findings = [line for line in output.splitlines() if line.strip()]
     if rc != 0 and findings:
-        return _bad("T6", "no unexplained dead code (vulture)", f"{len(findings)} findings", findings, mode="full")
+        return _bad(
+            "T6",
+            "no unexplained dead code (vulture)",
+            f"{len(findings)} findings",
+            findings,
+            mode="full",
+        )
     return _ok("T6", "no unexplained dead code (vulture)", "no findings", mode="full")
 
 
@@ -760,7 +924,7 @@ def run_checks(
                 CheckResult(check.__name__, check.__name__, FAIL, f"check raised: {exc!r}", mode)
             )
     return SelfCheckReport(
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         mode=mode,
         git_sha=git_sha or _git_sha(),
         config_hash=_config_hash(),
@@ -776,8 +940,10 @@ def run_checks(
 
 def format_report(report: SelfCheckReport) -> str:
     lines = [
-        f"Atlas self-check ({report.mode})  sha={report.git_sha[:12]}  "
-        f"config={report.config_hash}",
+        (
+            f"Atlas self-check ({report.mode})  sha={report.git_sha[:12]}  "
+            f"config={report.config_hash}"
+        ),
     ]
     for check in report.checks:
         lines.append(f"{check.id:>4} | {check.name:<44} | {check.status:<7} | {check.evidence}")

@@ -1,10 +1,11 @@
 import json
 
+from fake_llm import make_client
+
 from atlas.config import get_settings
 from atlas.db import connect, init_db, save_profile, start_run, upsert_job
 from atlas.pipeline import process_job
 from atlas.schemas import CandidateProfile, Job, Proficiency, Recommendation, Skill
-from fake_llm import make_client
 
 PARSED = {
     "title": "Junior Python Developer",
@@ -25,7 +26,7 @@ EVAL = {
     "growth_fit": 75,
     "company_signal": 60,
     "recommendation": "apply",
-    "reasons_for": ["JD targets 0-2 years"],
+    "reasons_for": [{"quote": "0-2 years experience", "source": "jd"}],
     "reasons_against": [],
 }
 
@@ -33,7 +34,7 @@ VERIFY_OK = {"veto": False, "downgrade_to": None, "reasons_against": []}
 VERIFY_VETO = {
     "veto": True,
     "downgrade_to": "skip",
-    "reasons_against": ["expects ownership of architecture"],
+    "reasons_against": [{"quote": "0-2 years experience", "source": "jd"}],
 }
 
 

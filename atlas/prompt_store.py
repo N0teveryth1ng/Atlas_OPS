@@ -12,8 +12,7 @@ record which prompt produced it.
 from __future__ import annotations
 
 import re
-from functools import lru_cache
-from pathlib import Path
+from functools import cache
 
 from .config import REPO_ROOT
 
@@ -25,7 +24,7 @@ class PromptNotFoundError(FileNotFoundError):
     pass
 
 
-@lru_cache(maxsize=None)
+@cache
 def load_prompt(name: str) -> tuple[str, str]:
     """Load ``prompts/<name>.md``.
 

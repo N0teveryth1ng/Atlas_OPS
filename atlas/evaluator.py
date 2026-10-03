@@ -11,6 +11,11 @@ import hashlib
 import logging
 
 from .config import Settings, get_settings
+from .evidence import (
+    EvidenceValidationError,
+    validate_verdict_evidence,
+    validation_retry_message,
+)
 from .llm import LLMClient
 from .prompt_store import load_prompt
 from .render import render_job, render_parsed_jd, render_profile, render_skill_match
@@ -18,6 +23,18 @@ from .schemas import CandidateProfile, Job, ParsedJD, Verdict
 from .skills import SkillMatch
 
 logger = logging.getLogger(__name__)
+
+MAX_EVIDENCE_RETRIES = 2
+
+
+def job_source_text(job: Job) -> str:
+    """The 'jd' text that evidence quotes must appear in."""
+    return f"{job.title or ''}\n{job.description_raw or ''}"
+
+
+def profile_source_text(profile: CandidateProfile) -> str:
+    """The 'profile' text that evidence quotes must appear in."""
+    return render_profile(profile)
 
 
 def inputs_hash(*parts: str) -> str:
@@ -73,12 +90,26 @@ def evaluate_job(
         return cache[key]
 
     logger.info("Evaluator: scoring '%s' @ '%s'", job.title, job.company)
-    verdict = client.call_json(
-        schema=Verdict,
-        system=system,
-        user=user,
-        model=settings.models.evaluator,
-    )
-    if cache is not None:
-        cache[key] = verdict
-    return verdict
+    jd_text = job_source_text(job)
+    profile_text = profile_source_text(profile)
+    errors: list[str] = []
+    for attempt in range(MAX_EVIDENCE_RETRIES + 1):
+        prompt = user if attempt == 0 else f"{user}\n\n{validation_retry_message(errors)}"
+        verdict = client.call_json(
+            schema=Verdict,
+            system=system,
+            user=prompt,
+            model=settings.models.evaluator,
+        )
+        errors = validate_verdict_evidence(verdict, jd_text, profile_text)
+        if not errors:
+            if cache is not None:
+                cache[key] = verdict
+            return verdict
+        logger.warning(
+            "Evaluator evidence validation failed (attempt %d/%d): %s",
+            attempt + 1,
+            MAX_EVIDENCE_RETRIES + 1,
+            errors,
+        )
+    raise EvidenceValidationError(errors)

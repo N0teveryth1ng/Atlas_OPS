@@ -3,33 +3,26 @@
 Call :func:`setup_logging` once at process start (CLI entrypoint or scheduled
 run). Logs go to stderr and to ``logs/atlas.log``.
 
-A per-run ``run_id`` can be attached via :func:`set_run_id` so every record
-from a single pipeline execution is greppable.
+Every record carries a ``run_id`` field (currently ``-``) so per-run
+correlation is possible from the log format alone.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
-from pathlib import Path
 
 from .config import REPO_ROOT
 
 LOG_DIR = REPO_ROOT / "logs"
-DEFAULT_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 
 _run_id: str = "-"
 
 
 class _RunIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D102
+    def filter(self, record: logging.LogRecord) -> bool:
         record.run_id = _run_id
         return True
-
-
-def set_run_id(run_id: str) -> None:
-    global _run_id
-    _run_id = run_id
 
 
 def setup_logging(level: int = logging.INFO) -> logging.Logger:
@@ -49,13 +42,13 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     stream = logging.StreamHandler(sys.stderr)
     stream.setFormatter(formatter)
     stream.addFilter(_RunIdFilter())
-    stream._atlas_handler = True  # type: ignore[attr-defined]
+    stream._atlas_handler = True  # type: ignore[attr-defined]  # custom idempotency marker
     root.addHandler(stream)
 
     file_handler = logging.FileHandler(LOG_DIR / "atlas.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
     file_handler.addFilter(_RunIdFilter())
-    file_handler._atlas_handler = True  # type: ignore[attr-defined]
+    file_handler._atlas_handler = True  # type: ignore[attr-defined]  # custom idempotency marker
     root.addHandler(file_handler)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)

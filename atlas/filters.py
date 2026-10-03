@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .config import Settings
 from .jd_parser import SENIORITY_RANK, detect_title_seniority
@@ -33,7 +33,7 @@ DISALLOWED_SENIORITY = {
     Seniority.manager,
 }
 
-_SALARY_RE = re.compile(r"(\d[\d,\.]*)\s*(k|m|lpa|lakh|lakhs|per annum|/yr|/year)?", re.I)
+_SALARY_RE = re.compile(r"(\d[\d,\.]*)\s*(k|m|lpa|lakh|lakhs|per annum|/yr|/year)?", re.IGNORECASE)
 
 
 def _parse_salary(text: str) -> float | None:
@@ -91,7 +91,9 @@ def apply_hard_filters(
     # 3. Location / remote preference.
     if parsed.remote_type == RemoteType.remote and not settings.targets.remote_ok:
         rejections.append(
-            FilterRejection(rule_id="location_mismatch", evidence="remote role but remote not allowed")
+            FilterRejection(
+                rule_id="location_mismatch", evidence="remote role but remote not allowed"
+            )
         )
     if settings.targets.locations and parsed.remote_type != RemoteType.remote:
         haystack = f"{job.location or ''} {parsed.location or ''}".lower()
@@ -151,8 +153,8 @@ def apply_hard_filters(
     if job.posted_at and settings.filters.max_job_age_days:
         posted = job.posted_at
         if posted.tzinfo is None:
-            posted = posted.replace(tzinfo=timezone.utc)
-        age_days = (datetime.now(timezone.utc) - posted).days
+            posted = posted.replace(tzinfo=UTC)
+        age_days = (datetime.now(UTC) - posted).days
         if age_days > settings.filters.max_job_age_days:
             rejections.append(
                 FilterRejection(rule_id="stale_job", evidence=f"posted {age_days} days ago")

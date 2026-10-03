@@ -11,13 +11,15 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .config import Settings, get_settings
-from .db import log_stage
+from .db import log_stage, set_job_status
 from .evaluator import evaluate_job
+from .evidence import EvidenceValidationError
 from .filters import apply_hard_filters
 from .jd_parser import parse_jd
+from .job_status import JobStatus, transition
 from .llm import LLMClient
 from .ranker import final_score
 from .schemas import (
@@ -48,6 +50,14 @@ class ProcessedJob:
     final_recommendation: Recommendation = Recommendation.skip
     score: float = 0.0
     needs_review: bool = False
+    evidence_failed: bool = False
+    status: JobStatus = JobStatus.new
+
+    def advance(self, new_status: JobStatus, conn: sqlite3.Connection | None = None) -> None:
+        """Move to ``new_status``, enforcing the state machine; optionally persist."""
+        self.status = transition(self.status, new_status)
+        if conn is not None and self.job_id is not None:
+            set_job_status(conn, self.job_id, new_status)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -57,7 +67,7 @@ def _parse_dt(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def load_jobs(
@@ -106,6 +116,7 @@ def process_job(
     conn: sqlite3.Connection | None = None,
 ) -> ProcessedJob:
     result = ProcessedJob(job_id=job_id, job=job)
+    result.advance(JobStatus.parsed, conn)
 
     parsed = parse_jd(client, title=job.title or "", description=job.description_raw or "")
     result.parsed = parsed
@@ -136,43 +147,61 @@ def process_job(
                     evidence=rejection.evidence,
                 )
     if not filter_result.passed:
+        result.advance(JobStatus.rejected, conn)
         result.final_recommendation = Recommendation.skip
         return result
 
+    if result.needs_review:
+        result.advance(JobStatus.needs_review, conn)
+        result.final_recommendation = Recommendation.maybe
+        return result
+
+    result.advance(JobStatus.passed_filters, conn)
     skill_match = match_skills(parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills)
     result.skill_match = skill_match
 
-    verdict = evaluate_job(
-        client,
-        profile=profile,
-        job=job,
-        parsed_jd=parsed,
-        skill_match=skill_match,
-        settings=settings,
-        cache=cache,
-    )
-    result.verdict = verdict
+    try:
+        verdict = evaluate_job(
+            client,
+            profile=profile,
+            job=job,
+            parsed_jd=parsed,
+            skill_match=skill_match,
+            settings=settings,
+            cache=cache,
+        )
+        result.verdict = verdict
+        result.advance(JobStatus.evaluated, conn)
 
-    verifier = verify_job(
-        client,
-        profile=profile,
-        job=job,
-        parsed_jd=parsed,
-        verdict=verdict,
-        skill_match=skill_match,
-        settings=settings,
-        cache=cache,
-    )
-    result.verifier = verifier
+        verifier = verify_job(
+            client,
+            profile=profile,
+            job=job,
+            parsed_jd=parsed,
+            verdict=verdict,
+            skill_match=skill_match,
+            settings=settings,
+            cache=cache,
+        )
+        result.verifier = verifier
+        result.advance(JobStatus.verified, conn)
+    except EvidenceValidationError as exc:
+        logger.warning("job %s: unverifiable evidence: %s", job_id, exc)
+        result.evidence_failed = True
+        result.needs_review = True
+        result.advance(JobStatus.needs_review, conn)
+        result.final_recommendation = Recommendation.maybe
+        return result
 
     final = resolve_recommendation(verdict, verifier)
-    if (
-        skill_match.must_have_coverage < settings.filters.must_have_coverage_floor
-        and final in {Recommendation.apply, Recommendation.strong_apply}
-    ):
+    if skill_match.must_have_coverage < settings.filters.must_have_coverage_floor and final in {
+        Recommendation.apply,
+        Recommendation.strong_apply,
+    }:
         final = Recommendation.maybe
     result.final_recommendation = final
     result.score = final_score(verdict, skill_match, job, settings)
+    result.advance(JobStatus.ranked, conn)
 
     if conn is not None:
         log_stage(
@@ -219,7 +248,9 @@ def run_pipeline(
     logger.info("Pipeline: processing %d job(s)", len(jobs))
     for job_id, job in jobs:
         try:
-            processed.append(process_job(client, job_id, job, profile, settings, cache=cache, conn=conn))
+            processed.append(
+                process_job(client, job_id, job, profile, settings, cache=cache, conn=conn)
+            )
         except Exception as exc:  # noqa: BLE001 - one bad job must not kill the run
             logger.warning("job %s failed: %s", job_id, exc)
     return processed

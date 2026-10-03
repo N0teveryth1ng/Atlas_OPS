@@ -71,7 +71,9 @@ def _renormalise(weights: dict[str, float]) -> dict[str, float]:
     return {key: round(value / total, 6) for key, value in weights.items()}
 
 
-def apply_feedback(settings: Settings, feedback_rows: list[dict]) -> tuple[Settings, FeedbackTuning]:
+def apply_feedback(
+    settings: Settings, feedback_rows: list[dict]
+) -> tuple[Settings, FeedbackTuning]:
     tuned = settings.model_copy(deep=True)
     tuning = FeedbackTuning(feedback_count=len(feedback_rows))
     if not feedback_rows:

@@ -98,7 +98,7 @@ def make_embedder(model_name: str = "all-MiniLM-L6-v2"):
     """Return an ``embed(list[str]) -> list[list[float]]`` callable, or None."""
     try:
         from sentence_transformers import SentenceTransformer
-    except Exception:  # pragma: no cover - import depends on optional install
+    except ImportError:  # pragma: no cover - import depends on optional install
         logger.info("sentence-transformers not installed; using fuzzy fallback")
         return None
     model = SentenceTransformer(model_name)

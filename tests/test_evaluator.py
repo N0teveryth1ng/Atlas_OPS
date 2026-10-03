@@ -1,6 +1,8 @@
+from fake_llm import make_client
+
 from atlas.config import get_settings
 from atlas.evaluator import evaluate_job
-from atlas.ranker import final_score
+from atlas.ranker import final_score, preference_bonus, rank
 from atlas.schemas import (
     CandidateProfile,
     Job,
@@ -12,7 +14,6 @@ from atlas.schemas import (
 )
 from atlas.skills import SkillMatch
 from atlas.verifier import resolve_recommendation, verify_job
-from fake_llm import make_client
 
 EVAL_PAYLOAD = {
     "fit_score": 82,
@@ -22,9 +23,9 @@ EVAL_PAYLOAD = {
     "growth_fit": 70,
     "company_signal": 60,
     "recommendation": "apply",
-    "reasons_for": ["JD asks for 0-2 years"],
+    "reasons_for": [{"quote": "Junior Python Dev", "source": "jd"}],
     "reasons_against": [],
-    "seniority_assessment": "Open to a fresher per the JD.",
+    "seniority_assessment": {"quote": "Junior Python Dev", "source": "jd"},
     "uncertainties": [],
 }
 
@@ -45,7 +46,9 @@ def _job():
 
 
 def _parsed():
-    return ParsedJD(title="Junior Python Dev", title_seniority=Seniority.junior, min_years_experience=0)
+    return ParsedJD(
+        title="Junior Python Dev", title_seniority=Seniority.junior, min_years_experience=0
+    )
 
 
 def _match():
@@ -56,10 +59,20 @@ def test_evaluate_job_returns_verdict_and_caches():
     client = make_client(verdict=EVAL_PAYLOAD)
     cache: dict = {}
     first = evaluate_job(
-        client, profile=_profile(), job=_job(), parsed_jd=_parsed(), skill_match=_match(), cache=cache
+        client,
+        profile=_profile(),
+        job=_job(),
+        parsed_jd=_parsed(),
+        skill_match=_match(),
+        cache=cache,
     )
     second = evaluate_job(
-        client, profile=_profile(), job=_job(), parsed_jd=_parsed(), skill_match=_match(), cache=cache
+        client,
+        profile=_profile(),
+        job=_job(),
+        parsed_jd=_parsed(),
+        skill_match=_match(),
+        cache=cache,
     )
 
     assert first.recommendation == Recommendation.apply
@@ -72,7 +85,12 @@ def test_verify_job_returns_verifier_verdict():
     client = make_client(parsed=None, verdict=EVAL_PAYLOAD, verifier=VERIFY_PAYLOAD)
     verdict = Verdict(**EVAL_PAYLOAD)
     result = verify_job(
-        client, profile=_profile(), job=_job(), parsed_jd=_parsed(), verdict=verdict, skill_match=_match()
+        client,
+        profile=_profile(),
+        job=_job(),
+        parsed_jd=_parsed(),
+        verdict=verdict,
+        skill_match=_match(),
     )
     assert isinstance(result, VerifierVerdict)
     assert result.veto is False
@@ -102,3 +120,33 @@ def test_final_score_bounds_and_weights():
     assert 0 <= score <= 100
     # fit(.5) + coverage(.3) + seniority(.15) = 95
     assert score == 95.0
+
+
+def test_preference_bonus_for_target_company():
+    settings = get_settings()
+    settings.companies.target_companies = ["DreamCorp"]
+    assert preference_bonus(Job(source="t", url="u", company="DreamCorp"), settings) == 100.0
+    assert preference_bonus(Job(source="t", url="u", company="Other"), settings) == 0.0
+    assert preference_bonus(Job(source="t", url="u", company=""), settings) == 0.0
+
+
+def test_rank_drops_skips_and_honours_include_maybe():
+    from atlas.job_status import JobStatus
+    from atlas.pipeline import ProcessedJob
+    from atlas.schemas import FilterResult
+
+    def result(rec):
+        return ProcessedJob(
+            job_id=1,
+            job=Job(source="t", url="u", title="T", company="C"),
+            filter_result=FilterResult(passed=True),
+            skill_match=SkillMatch(must_have_coverage=1.0, nice_to_have_coverage=0.0),
+            final_recommendation=rec,
+            score=50.0,
+            status=JobStatus.ranked,
+        )
+
+    skipped = result(Recommendation.skip)
+    maybe = result(Recommendation.maybe)
+    assert rank([skipped, maybe]) == [maybe]
+    assert rank([skipped, maybe], include_maybe=False) == []

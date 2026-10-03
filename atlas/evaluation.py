@@ -75,11 +75,15 @@ class EvalReport:
         )
 
 
-def evaluate(cases: list[EvalCase] | None = None, *, settings: Settings | None = None) -> EvalReport:
+def evaluate(
+    cases: list[EvalCase] | None = None, *, settings: Settings | None = None
+) -> EvalReport:
     settings = settings or get_settings()
     cases = cases if cases is not None else load_golden_set()
     allowed = settings.candidate.my_years_experience + settings.candidate.experience_tolerance
-    profile = CandidateProfile(total_experience_months=int(settings.candidate.my_years_experience * 12))
+    profile = CandidateProfile(
+        total_experience_months=int(settings.candidate.my_years_experience * 12)
+    )
     disallowed = {s.value for s in DISALLOWED_SENIORITY}
 
     report = EvalReport(total=len(cases))
@@ -118,10 +122,14 @@ def evaluate(cases: list[EvalCase] | None = None, *, settings: Settings | None =
 def format_report(report: EvalReport) -> str:
     lines = [
         f"Golden set cases:            {report.total}",
-        f"Year-extraction accuracy:    {report.year_accuracy:.1%} "
-        f"({report.year_correct}/{report.year_checked}) target >= {YEAR_ACCURACY_TARGET:.0%}",
-        f"Experience pass-throughs:    {len(report.experience_pass_through)} (must be 0) "
-        f"{report.experience_pass_through}",
+        (
+            f"Year-extraction accuracy:    {report.year_accuracy:.1%} "
+            f"({report.year_correct}/{report.year_checked}) target >= {YEAR_ACCURACY_TARGET:.0%}"
+        ),
+        (
+            f"Experience pass-throughs:    {len(report.experience_pass_through)} (must be 0) "
+            f"{report.experience_pass_through}"
+        ),
         f"False rejects (apply->skip): {report.false_rejects}",
         f"Label inconsistencies:       {report.label_inconsistencies}",
         f"RESULT:                      {'PASS' if report.accepted else 'FAIL'}",
@@ -165,7 +173,9 @@ class SkillEvalReport:
 
     @property
     def accepted(self) -> bool:
-        return self.new_accuracy >= SKILL_ACCURACY_TARGET and self.new_correct >= self.baseline_correct
+        return (
+            self.new_accuracy >= SKILL_ACCURACY_TARGET and self.new_correct >= self.baseline_correct
+        )
 
 
 def load_skill_cases(path: Path | str = SKILL_CASES_PATH) -> list[SkillEvalCase]:
@@ -185,7 +195,11 @@ def evaluate_skill_matching(cases: list[SkillEvalCase] | None = None) -> SkillEv
 
     for case in cases:
         profile_skills = [
-            Skill(name=name, canonical_name=ontology.canonicalize(name), proficiency=Proficiency.working)
+            Skill(
+                name=name,
+                canonical_name=ontology.canonicalize(name),
+                proficiency=Proficiency.working,
+            )
             for name in case.profile_skills
         ]
 
@@ -209,8 +223,10 @@ def format_skill_report(report: SkillEvalReport) -> str:
         [
             f"Skill cases:                 {report.total}",
             f"Baseline (set-overlap):      {report.baseline_accuracy:.1%} ({report.baseline_correct}/{report.total})",
-            f"Ontology matcher:            {report.new_accuracy:.1%} ({report.new_correct}/{report.total}) "
-            f"target >= {SKILL_ACCURACY_TARGET:.0%}",
+            (
+                f"Ontology matcher:            {report.new_accuracy:.1%} "
+                f"({report.new_correct}/{report.total}) target >= {SKILL_ACCURACY_TARGET:.0%}"
+            ),
             f"Matcher failures:            {report.failures}",
             f"RESULT:                      {'PASS' if report.accepted else 'FAIL'}",
         ]
@@ -263,7 +279,9 @@ class PrecisionReport:
 
 
 def precision_at_k(results: list[PrecisionCaseResult], k: int = 10) -> float:
-    candidates = sorted((r for r in results if r.predicted_apply), key=lambda r: r.score, reverse=True)
+    candidates = sorted(
+        (r for r in results if r.predicted_apply), key=lambda r: r.score, reverse=True
+    )
     top = candidates[:k]
     if not top:
         return 0.0
@@ -300,15 +318,30 @@ def evaluate_with_llm(cases, client, settings: Settings) -> PrecisionReport:
             continue
         match = match_skills(parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills)
         verdict = evaluate_job(
-            client, profile=profile, job=job, parsed_jd=parsed, skill_match=match, settings=settings, cache=cache
+            client,
+            profile=profile,
+            job=job,
+            parsed_jd=parsed,
+            skill_match=match,
+            settings=settings,
+            cache=cache,
         )
         verifier = verify_job(
-            client, profile=profile, job=job, parsed_jd=parsed, verdict=verdict, skill_match=match, settings=settings, cache=cache
+            client,
+            profile=profile,
+            job=job,
+            parsed_jd=parsed,
+            verdict=verdict,
+            skill_match=match,
+            settings=settings,
+            cache=cache,
         )
         final = resolve_recommendation(verdict, verifier)
         predicted = final in {Recommendation.apply, Recommendation.strong_apply}
         report.results.append(
-            PrecisionCaseResult(case.id, case.label, predicted, final_score(verdict, match, job, settings))
+            PrecisionCaseResult(
+                case.id, case.label, predicted, final_score(verdict, match, job, settings)
+            )
         )
     return report
 
