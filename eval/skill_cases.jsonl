@@ -1,0 +1,19 @@
+{"id":"alias_react_01","profile_skills":["React"],"jd_skill":"ReactJS","should_match":true}
+{"id":"alias_react_02","profile_skills":["React"],"jd_skill":"react.js","should_match":true}
+{"id":"alias_js_03","profile_skills":["JavaScript"],"jd_skill":"JS","should_match":true}
+{"id":"alias_node_04","profile_skills":["Node.js"],"jd_skill":"NodeJS","should_match":true}
+{"id":"alias_pg_05","profile_skills":["PostgreSQL"],"jd_skill":"Postgres","should_match":true}
+{"id":"alias_psql_06","profile_skills":["PostgreSQL"],"jd_skill":"psql","should_match":true}
+{"id":"alias_k8s_07","profile_skills":["Kubernetes"],"jd_skill":"K8s","should_match":true}
+{"id":"alias_csharp_08","profile_skills":["C#"],"jd_skill":"CSharp","should_match":true}
+{"id":"alias_cpp_09","profile_skills":["C++"],"jd_skill":"CPP","should_match":true}
+{"id":"alias_ts_10","profile_skills":["TypeScript"],"jd_skill":"TS","should_match":true}
+{"id":"related_django_11","profile_skills":["Python"],"jd_skill":"Django","should_match":true}
+{"id":"related_flask_12","profile_skills":["Python"],"jd_skill":"Flask","should_match":true}
+{"id":"related_python_13","profile_skills":["Django"],"jd_skill":"Python","should_match":true}
+{"id":"related_react_js_14","profile_skills":["JavaScript"],"jd_skill":"React","should_match":true}
+{"id":"related_k8s_docker_15","profile_skills":["Docker"],"jd_skill":"Kubernetes","should_match":true}
+{"id":"distinct_reactnative_16","profile_skills":["React"],"jd_skill":"React Native","should_match":false}
+{"id":"distinct_java_17","profile_skills":["Java"],"jd_skill":"JavaScript","should_match":false}
+{"id":"distinct_mysql_18","profile_skills":["MySQL"],"jd_skill":"PostgreSQL","should_match":false}
+{"id":"distinct_python_java_19","profile_skills":["Python"],"jd_skill":"Java","should_match":false}

@@ -44,8 +44,8 @@ Design rules:
 
 - **Phase 0** — audit + repo hygiene + config/logging skeleton. *(done)*
 - **Phase 1** — Pydantic schemas, LLM client, config, SQLite, input modes. *(done)*
-- **Phase 2** — structured JD parsing + hard filters + golden set. *(current)*
-- **Phase 3** — skill ontology / alias map + weighted matching.
+- **Phase 2** — structured JD parsing + hard filters + golden set. *(done)*
+- **Phase 3** — skill ontology / alias map + weighted matching. *(current)*
 - **Phase 4** — collectors, query planner, normalize, dedupe.
 - **Phase 5** — evaluator + adversarial verifier.
 - **Phase 6** — ranker, digest, email, scheduling.
@@ -82,7 +82,7 @@ all keys.
 atlas/            # pipeline package
 config.yaml       # user preferences
 companies.yaml    # target company list (planned)
-skills.yaml       # skill ontology / alias map (planned)
+skills.yaml       # skill ontology / alias map
 prompts/          # versioned prompt files
 eval/             # golden set + eval harness
 tests/            # unit tests

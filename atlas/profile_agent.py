@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_skill_name(name: str) -> str:
-    """Phase-1 normalisation; Phase 3 replaces this with the skill ontology."""
-    return " ".join(name.lower().split())
+    """Canonicalise a skill name via the ontology (Phase 3)."""
+    from .skills import get_ontology
+
+    return get_ontology().canonicalize(name)
 
 
 def derive_experience_level(total_experience_months: int) -> ExperienceLevel:

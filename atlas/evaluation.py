@@ -21,10 +21,13 @@ from pathlib import Path
 from .config import REPO_ROOT, Settings, get_settings
 from .filters import DISALLOWED_SENIORITY, apply_hard_filters
 from .jd_parser import parse_jd_regex_only
-from .schemas import CandidateProfile, Job
+from .schemas import CandidateProfile, Job, Proficiency, Skill
+from .skills import get_ontology, match_skills
 
 GOLDEN_SET_PATH = REPO_ROOT / "eval" / "golden_set.jsonl"
+SKILL_CASES_PATH = REPO_ROOT / "eval" / "skill_cases.jsonl"
 YEAR_ACCURACY_TARGET = 0.95
+SKILL_ACCURACY_TARGET = 0.95
 
 
 @dataclass
@@ -129,4 +132,92 @@ def format_report(report: EvalReport) -> str:
 def run_eval(path: Path | str = GOLDEN_SET_PATH) -> bool:
     report = evaluate(load_golden_set(path))
     print(format_report(report))
+    return report.accepted
+
+
+# --------------------------------------------------------------------------- #
+# Skill matching (Phase 3)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class SkillEvalCase:
+    id: str
+    profile_skills: list[str]
+    jd_skill: str
+    should_match: bool
+
+
+@dataclass
+class SkillEvalReport:
+    total: int = 0
+    baseline_correct: int = 0
+    new_correct: int = 0
+    failures: list[str] = field(default_factory=list)
+
+    @property
+    def baseline_accuracy(self) -> float:
+        return self.baseline_correct / self.total if self.total else 1.0
+
+    @property
+    def new_accuracy(self) -> float:
+        return self.new_correct / self.total if self.total else 1.0
+
+    @property
+    def accepted(self) -> bool:
+        return self.new_accuracy >= SKILL_ACCURACY_TARGET and self.new_correct >= self.baseline_correct
+
+
+def load_skill_cases(path: Path | str = SKILL_CASES_PATH) -> list[SkillEvalCase]:
+    cases: list[SkillEvalCase] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        cases.append(SkillEvalCase(**json.loads(line)))
+    return cases
+
+
+def evaluate_skill_matching(cases: list[SkillEvalCase] | None = None) -> SkillEvalReport:
+    ontology = get_ontology()
+    cases = cases if cases is not None else load_skill_cases()
+    report = SkillEvalReport(total=len(cases))
+
+    for case in cases:
+        profile_skills = [
+            Skill(name=name, canonical_name=ontology.canonicalize(name), proficiency=Proficiency.working)
+            for name in case.profile_skills
+        ]
+
+        match = match_skills([case.jd_skill], [], profile_skills, ontology=ontology)
+        new_match = case.jd_skill not in match.missing_must_haves
+
+        # Old behaviour: exact lowercase name overlap only.
+        base_norm = " ".join(case.jd_skill.lower().split())
+        baseline_match = any(base_norm == " ".join(n.lower().split()) for n in case.profile_skills)
+
+        report.baseline_correct += baseline_match == case.should_match
+        report.new_correct += new_match == case.should_match
+        if new_match != case.should_match:
+            report.failures.append(case.id)
+
+    return report
+
+
+def format_skill_report(report: SkillEvalReport) -> str:
+    return "\n".join(
+        [
+            f"Skill cases:                 {report.total}",
+            f"Baseline (set-overlap):      {report.baseline_accuracy:.1%} ({report.baseline_correct}/{report.total})",
+            f"Ontology matcher:            {report.new_accuracy:.1%} ({report.new_correct}/{report.total}) "
+            f"target >= {SKILL_ACCURACY_TARGET:.0%}",
+            f"Matcher failures:            {report.failures}",
+            f"RESULT:                      {'PASS' if report.accepted else 'FAIL'}",
+        ]
+    )
+
+
+def run_skill_eval(path: Path | str = SKILL_CASES_PATH) -> bool:
+    report = evaluate_skill_matching(load_skill_cases(path))
+    print(format_skill_report(report))
     return report.accepted

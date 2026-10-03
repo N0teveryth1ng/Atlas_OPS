@@ -1,0 +1,148 @@
+# Skill ontology: canonical key -> aliases, category, related skills.
+# `aliases` and `related` are matched after key-normalisation (case, spaces,
+# dots, dashes, underscores and slashes are ignored; `+` and `#` are kept).
+# `related` is a bi-directional-ish courtesy edge used for partial credit.
+
+skills:
+  python:
+    display: Python
+    category: language
+    aliases: [py, python3]
+    related: [django, flask, fastapi]
+  javascript:
+    display: JavaScript
+    category: language
+    aliases: [js, ecmascript, es6, es2015]
+    related: [nodejs, react, typescript]
+  typescript:
+    display: TypeScript
+    category: language
+    aliases: [ts]
+    related: [javascript]
+  java:
+    display: Java
+    category: language
+    related: []
+  csharp:
+    display: C#
+    category: language
+    aliases: [c#, c-sharp, c sharp]
+    related: [dotnet]
+  cpp:
+    display: C++
+    category: language
+    aliases: [c++, c plus plus, cplusplus]
+    related: []
+  html:
+    display: HTML
+    category: language
+    aliases: [html5]
+    related: [css]
+  css:
+    display: CSS
+    category: language
+    aliases: [css3]
+    related: [html]
+  sql:
+    display: SQL
+    category: database
+    related: [postgresql, mysql]
+  react:
+    display: React
+    category: framework
+    aliases: [reactjs, react.js, react js]
+    related: [javascript, nextjs]
+  reactnative:
+    display: React Native
+    category: framework
+    aliases: [react native, react-native, rn]
+    related: []
+  nextjs:
+    display: Next.js
+    category: framework
+    aliases: [next.js, next js, next]
+    related: [react, javascript]
+  nodejs:
+    display: Node.js
+    category: framework
+    aliases: [node, node.js, node js]
+    related: [javascript]
+  django:
+    display: Django
+    category: framework
+    related: [python]
+  flask:
+    display: Flask
+    category: framework
+    related: [python]
+  fastapi:
+    display: FastAPI
+    category: framework
+    aliases: [fast api]
+    related: [python]
+  dotnet:
+    display: .NET
+    category: framework
+    aliases: [".net", net, dot net]
+    related: [csharp]
+  postgresql:
+    display: PostgreSQL
+    category: database
+    aliases: [postgres, psql, pg]
+    related: [sql]
+  mysql:
+    display: MySQL
+    category: database
+    related: [sql]
+  mongodb:
+    display: MongoDB
+    category: database
+    aliases: [mongo]
+    related: []
+  docker:
+    display: Docker
+    category: tool
+    related: [kubernetes]
+  kubernetes:
+    display: Kubernetes
+    category: tool
+    aliases: [k8s]
+    related: [docker]
+  git:
+    display: Git
+    category: tool
+    aliases: [github, gitlab]
+    related: []
+  aws:
+    display: AWS
+    category: cloud
+    aliases: [amazon web services]
+    related: []
+  gcp:
+    display: GCP
+    category: cloud
+    aliases: [google cloud, google cloud platform]
+    related: []
+  azure:
+    display: Azure
+    category: cloud
+    aliases: [microsoft azure]
+    related: []
+  tensorflow:
+    display: TensorFlow
+    category: library
+    aliases: [tf]
+    related: [python]
+  pytorch:
+    display: PyTorch
+    category: library
+    aliases: [torch]
+    related: [python]
+  pandas:
+    display: pandas
+    category: library
+    related: [python]
+  numpy:
+    display: NumPy
+    category: library
+    related: [python]
