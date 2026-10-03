@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import REPO_ROOT, get_settings
-from .db import connect, get_latest_profile, init_db, save_profile
+from .db import connect, finish_run, get_latest_profile, init_db, save_profile, start_run
 from .llm import LLMClient
 from .logging_setup import setup_logging
 from .profile_agent import build_profile, render_profile_summary
@@ -163,8 +163,42 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    print("`run` is implemented in Phase 4+. Not available yet.", file=sys.stderr)
+    print("`run` is implemented in Phase 5+. Not available yet.", file=sys.stderr)
     return 1
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    from .sourcing import run_sourcing
+
+    settings = get_settings()
+    conn = connect()
+    init_db(conn)
+    profile = get_latest_profile(conn)
+    if profile is None:
+        print("No saved profile. Run `profile` first.", file=sys.stderr)
+        conn.close()
+        return 2
+
+    run_id = start_run(conn, "collect")
+    result = run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
+    finish_run(
+        conn,
+        run_id,
+        "ok",
+        summary={
+            "queries": len(result.queries),
+            "jobs": len(result.jobs),
+            "new_jobs": result.new_jobs,
+            "dropped_stale": result.dropped_stale,
+        },
+    )
+    conn.close()
+
+    print(f"Queries: {len(result.queries)}   Collected: {len(result.jobs)}   "
+          f"New: {result.new_jobs}   Stale dropped: {result.dropped_stale}")
+    for item in result.source_yields:
+        print(f"  {item.source:<12} fetched={item.fetched:<5} kept={item.kept}")
+    return 0
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
@@ -222,6 +256,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="Run the pipeline (later phases)")
     p_run.set_defaults(func=cmd_run)
+
+    sub.add_parser("collect", help="Fetch + normalize + dedupe jobs (Phase 4)").set_defaults(
+        func=cmd_collect
+    )
 
     p_eval = sub.add_parser("eval", help="Run the golden-set evaluation (Phase 2)")
     p_eval.add_argument("--golden", help="Path to a golden-set .jsonl (default: eval/golden_set.jsonl)")

@@ -1,0 +1,17 @@
+# Target companies polled directly through their public ATS job-board APIs.
+# These are high-precision sources: jobs here are first-party, not aggregator
+# reposts. Add or remove board tokens as you like.
+#
+# The token is the slug in the company's board URL, e.g.
+#   https://boards.greenhouse.io/ACME        -> greenhouse: [acme]
+#   https://jobs.lever.co/ACME               -> lever: [acme]
+#   https://jobs.ashbyhq.com/ACME            -> ashby: [acme]
+
+companies:
+  greenhouse: []
+    # - stripe
+    # - databricks
+  lever: []
+    # - netflix
+  ashby: []
+    # - openai

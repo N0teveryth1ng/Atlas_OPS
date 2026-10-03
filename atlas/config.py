@@ -55,6 +55,19 @@ class ModelsConfig(BaseModel):
     temperature: float = 0.0
 
 
+class SourcesConfig(BaseModel):
+    """Which collectors run, and their parameters (plan section 5.3)."""
+
+    remoteok: bool = True
+    remotive: bool = True
+    adzuna: bool = True
+    greenhouse: bool = True
+    lever: bool = True
+    ashby: bool = True
+    adzuna_country: str = "in"
+    results_per_page: int = 50
+
+
 class RankingWeights(BaseModel):
     fit_score: float = 0.50
     must_have_coverage: float = 0.30
@@ -87,6 +100,7 @@ class Settings(BaseModel):
     companies: CompaniesConfig = Field(default_factory=CompaniesConfig)
     filters: FiltersConfig = Field(default_factory=FiltersConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
+    sources: SourcesConfig = Field(default_factory=SourcesConfig)
     ranking: RankingConfig = Field(default_factory=RankingConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     secrets: Secrets = Field(default_factory=Secrets)
