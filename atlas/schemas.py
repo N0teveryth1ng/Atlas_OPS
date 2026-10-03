@@ -269,3 +269,18 @@ class VerifierVerdict(BaseModel):
     downgrade_to: Recommendation | None = None
     reasons_against: list[str] = Field(default_factory=list)
     hidden_seniority_signals: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Hard filter
+# --------------------------------------------------------------------------- #
+
+
+class FilterRejection(BaseModel):
+    rule_id: str
+    evidence: str
+
+
+class FilterResult(BaseModel):
+    passed: bool
+    rejections: list[FilterRejection] = Field(default_factory=list)

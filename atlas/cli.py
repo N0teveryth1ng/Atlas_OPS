@@ -168,8 +168,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    print("`eval` is implemented in Phase 2+. Not available yet.", file=sys.stderr)
-    return 1
+    from .evaluation import run_eval
+
+    ok = run_eval(Path(args.golden)) if args.golden else run_eval()
+    return 0 if ok else 1
 
 
 def cmd_feedback(args: argparse.Namespace) -> int:
@@ -218,7 +220,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Run the pipeline (later phases)")
     p_run.set_defaults(func=cmd_run)
 
-    p_eval = sub.add_parser("eval", help="Run the golden-set evaluation (later phases)")
+    p_eval = sub.add_parser("eval", help="Run the golden-set evaluation (Phase 2)")
+    p_eval.add_argument("--golden", help="Path to a golden-set .jsonl (default: eval/golden_set.jsonl)")
     p_eval.set_defaults(func=cmd_eval)
 
     p_fb = sub.add_parser("feedback", help="Record feedback (later phases)")

@@ -42,9 +42,9 @@ Design rules:
 
 ## Phased roadmap
 
-- **Phase 0** — audit + repo hygiene + config/logging skeleton. *(current)*
-- **Phase 1** — Pydantic schemas, LLM client, config, SQLite, input modes.
-- **Phase 2** — structured JD parsing + hard filters + golden set.
+- **Phase 0** — audit + repo hygiene + config/logging skeleton. *(done)*
+- **Phase 1** — Pydantic schemas, LLM client, config, SQLite, input modes. *(done)*
+- **Phase 2** — structured JD parsing + hard filters + golden set. *(current)*
 - **Phase 3** — skill ontology / alias map + weighted matching.
 - **Phase 4** — collectors, query planner, normalize, dedupe.
 - **Phase 5** — evaluator + adversarial verifier.
@@ -84,7 +84,7 @@ config.yaml       # user preferences
 companies.yaml    # target company list (planned)
 skills.yaml       # skill ontology / alias map (planned)
 prompts/          # versioned prompt files
-eval/             # golden set + eval harness (planned)
+eval/             # golden set + eval harness
 tests/            # unit tests
 auto_applications/# legacy Playwright bots, retained for Phase 8 (disabled)
 ```
@@ -95,7 +95,21 @@ auto_applications/# legacy Playwright bots, retained for Phase 8 (disabled)
 python -m atlas.cli profile --resume resume.pdf --describe "target roles..." --out profile.json
 python -m atlas.cli review profile.json     # review + approve
 python -m atlas.cli status
+python -m atlas.cli eval                     # golden-set evaluation (Phase 2 gate)
 ```
+
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest                             # unit tests (year regex, filters, parser, LLM, DB)
+python eval/eval.py                          # standalone golden-set eval
+```
+
+The golden set lives in `eval/golden_set.jsonl` (one JSON object per line:
+`id, title, description, company, location, label, reason, expected_min_years,
+expected_seniority`). It is bootstrapped with synthetic cases and should be
+expanded with ~40 real labelled JDs.
 
 ## Security
 
