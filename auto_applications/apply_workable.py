@@ -1,18 +1,22 @@
 # automation script for applying to jobs on Workable --- playwright will be used over here
 
+import re
+import os
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from resend_mail import email_sender
+
 
 PROFILE = {
     "First name": "Soham",
     "Last name": "Das",
-    "Email": "dassoham2071@gmail.com",
+    "Email": os.environ.get("APPLICANT_EMAIL", ""),
     "Phone": "+91 7044855404",
     "Location": "Kolkata, India",
     "LinkedIn": "https://www.linkedin.com/in/sohamdas2071/",
     "GitHub": "https://github.com/N0teveryth1ng",
 }
 
-RESUME_PATH = "C:\Users\S Das\Downloads\Soham_Das_Resume [MXT].pdf"
+RESUME_PATH = r"C:\Users\S Das\Downloads\Soham_Das_Resume [MXT].pdf"
 
 
 def safe_fill(page, label, value, timeout=2000):
@@ -29,6 +33,25 @@ def safe_upload(page, label, filepath, timeout=2000):
         return True
     except Exception:
         return False
+
+
+def submit_and_confirm(page) -> tuple[bool, bool]:
+    try:
+        submit_buttons = page.get_by_role("button", name=re.compile(r"submit|send application", re.I))
+        if submit_buttons.count():
+            submit_buttons.first.click(timeout=5000)
+        else:
+            page.locator("input[type='submit']").first.click(timeout=5000)
+    except Exception:
+        return False, False
+
+    confirmation = page.get_by_text(
+        re.compile(r"application (has been )?(submitted|received)|thank you for (your )?application|successfully submitted", re.I)
+    )
+    try:
+        return True, confirmation.first.is_visible(timeout=7000)
+    except Exception:
+        return True, False
 
 
 def generate_answer(question_text, resume_text, client):
@@ -49,7 +72,7 @@ def generate_answer(question_text, resume_text, client):
     return response.choices[0].message.content.strip()
 
 
-def fill_custom_questions(page, resume_text, client):
+def fill_custom_questions(page, resume_text, client, email_sender):
     labels = page.locator("label").all()
     for label_el in labels:
         try:
@@ -67,15 +90,21 @@ def fill_custom_questions(page, resume_text, client):
         safe_fill(page, label_text, answer)
 
 
-def apply_to_workable(job_url: str, resume_text: str, client) -> dict:
-    """
-    Applies to a single Workable job posting (apply.workable.com/...).
-    Returns a result dict for logging: {url, status, error}
-    """
+def apply_to_workable(job_url: str, resume_text: str, client, email_sender, resume_path: str | None = None) -> dict:
+    
     result = {"url": job_url, "status": "failed", "error": None}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-notifications",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+            ],
+        )
         page = browser.new_page()
 
         try:
@@ -86,23 +115,33 @@ def apply_to_workable(job_url: str, resume_text: str, client) -> dict:
             except Exception:
                 pass
 
-            safe_fill(page, "First name", PROFILE["First name"])
-            safe_fill(page, "Last name", PROFILE["Last name"])
-            safe_fill(page, "Email", PROFILE["Email"])
+            core_fields_filled = [
+                safe_fill(page, "First name", PROFILE["First name"]),
+                safe_fill(page, "Last name", PROFILE["Last name"]),
+                safe_fill(page, "Email", PROFILE["Email"]),
+            ]
             safe_fill(page, "Phone", PROFILE["Phone"])
             safe_fill(page, "Location", PROFILE["Location"])
             safe_fill(page, "LinkedIn", PROFILE["LinkedIn"])
             safe_fill(page, "GitHub", PROFILE["GitHub"])
 
-            safe_upload(page, "Resume", RESUME_PATH)
+            resume_uploaded = safe_upload(page, "Resume", resume_path or RESUME_PATH)
 
-            fill_custom_questions(page, resume_text, client)
+            fill_custom_questions(page, resume_text, client, email_sender)
 
-            # NOTE: submit is commented out on purpose during testing.
-            # Uncomment only once you've verified the form fills correctly.
-            # page.click("button[type='submit']")
-
-            result["status"] = "filled_not_submitted"
+            if not any(core_fields_filled):
+                result["error"] = "Could not identify or fill the application contact fields"
+            elif not resume_uploaded:
+                result["error"] = "Resume upload did not complete"
+            else:
+                submitted, confirmed = submit_and_confirm(page)
+                if not submitted:
+                    result["error"] = "Could not find or click the final submit button"
+                elif confirmed:
+                    result["status"] = "filled_and_submitted"
+                else:
+                    result["status"] = "submitted_unconfirmed"
+                    result["error"] = "Final submit was clicked, but no confirmation was detected"
 
         except Exception as e:
             result["error"] = str(e)

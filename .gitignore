@@ -1,2 +1,26 @@
-.env.env
+# --- secrets ---
 .env
+.env.*
+!.env.example
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- app data / personal (never commit) ---
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+profile.json
+logs/
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db

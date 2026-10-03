@@ -1,8 +1,16 @@
-fastapi==0.136.1
-httpx==0.28.1
+# --- core pipeline ---
+pydantic==2.12.5
+PyYAML==6.0.3
 python-dotenv==1.2.2
-Jinja2==3.1.6
-uvicorn==0.46.0
-pypdf
+httpx==0.28.1
+tenacity
 groq
+pypdf
+
+# --- legacy prototype (FastAPI UI; being retired) ---
+fastapi==0.136.1
+uvicorn==0.46.0
+Jinja2==3.1.6
+
+# --- browser automation (auto-apply, deferred; files kept for Phase 8) ---
 playwright

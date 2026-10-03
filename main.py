@@ -10,9 +10,15 @@ from datetime import datetime
 from pypdf import PdfReader
 import httpx
 from resend_mail import email_sender
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except Exception:
+    sync_playwright = None
+    PLAYWRIGHT_AVAILABLE = False
 from typing import Optional
 import asyncio
+from urllib.parse import urljoin
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -35,6 +41,7 @@ templates = Jinja2Templates(directory="templates")
 
 extracted_keywords = []
 resume_text = ""
+resume_path: Optional[str] = None
 
 
 # accessing home page
@@ -90,16 +97,17 @@ async def give_resume(request: Request, resume: UploadFile = File(...)):
                 "rest api", "graphql", "microservices", "react", "vue", "angular", "typescript",
                 "javascript", "node", "java", "spring", "c#", "dotnet", "ruby", "rails",
             ]
-            extracted = [kw for kw in candidate_keywords if kw in resume_text_lower]
+            extracted = [kw for kw in candidate in resume_text_lower]
 
-        global extracted_keywords, resume_text
+        global extracted_keywords, resume_text, resume_path
         extracted_keywords = extracted
+        resume_path = f"uploads/{resume.filename}"
         return templates.TemplateResponse(
             request=request, 
             name="test.html",
             context={
                 "filename": resume.filename,
-                "keywords": data["keywords"],
+                "keywords": extracted,
                 "pipeline_started": True,
             }
         )
@@ -165,42 +173,85 @@ async def match_job(request: Request, jd_text: str = Form(...)):
 
 
 # find jobs (automation)
-SUPPORTED_PATTERNS = ["ashbyhq.com", "lever.co", "jobs.lever.co", "workable.com", "apply.workable.com"]
-SUPPORTED_KEYWORDS = ["ashby", "lever", "workable"]
-
+SUPPORTED_PATTERNS = [
+    "ashbyhq.com", "workable.com", "apply.workable.com",
+    "lever.co", "jobs.lever.co", "greenhouse.io", "boards.greenhouse.io",
+]
 
 def find_supported_apply_url(html_text: str) -> Optional[str]:
     import re
+    from html import unescape
 
-    candidates = re.findall(r"https?://[^\"'\s]+", html_text)
+    candidates = re.findall(r"https?://[^\"\'\s<>]+", unescape(html_text))
     for candidate in candidates:
-        if any(pattern in candidate for pattern in SUPPORTED_PATTERNS) and "remotive.com/remote-jobs" not in candidate:
+        candidate = candidate.rstrip(".,;:)]}\"")
+        if any(pattern in candidate.lower() for pattern in SUPPORTED_PATTERNS):
             return candidate
     return None
 
 
 def resolve_remotive_apply_url(remotive_url: str) -> Optional[str]:
+    if not PLAYWRIGHT_AVAILABLE:
+        print(f"[resolve_remotive] Playwright unavailable for {remotive_url}")
+        return None
+    
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(remotive_url, timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=20000)
-            html = page.content()
-            supported_url = find_supported_apply_url(html)
-            browser.close()
-            return supported_url
-    except Exception:
+            try:
+                page = browser.new_page()
+                page.goto(remotive_url, timeout=30000, wait_until="domcontentloaded")
+
+                # Remotive commonly exposes the ATS link in the page markup.
+                supported_url = find_supported_apply_url(page.content())
+                if supported_url:
+                    return supported_url
+
+                # Some postings reveal the outbound link only after clicking Apply.
+                apply_links = page.locator("a, button").filter(has_text="Apply")
+                if apply_links.count():
+                    try:
+                        with page.expect_popup(timeout=3000) as popup_info:
+                            apply_links.first.click(timeout=3000)
+                        target_page = popup_info.value
+                        target_page.wait_for_load_state("domcontentloaded", timeout=15000)
+                        supported_url = find_supported_apply_url(target_page.content())
+                        if supported_url:
+                            return supported_url
+                        if any(pattern in target_page.url.lower() for pattern in SUPPORTED_PATTERNS):
+                            return target_page.url
+                    except Exception:
+                        try:
+                            apply_links.first.click(timeout=3000)
+                            page.wait_for_load_state("domcontentloaded", timeout=15000)
+                            supported_url = find_supported_apply_url(page.content())
+                            if supported_url:
+                                return supported_url
+                            if any(pattern in page.url.lower() for pattern in SUPPORTED_PATTERNS):
+                                return page.url
+                        except Exception:
+                            pass
+                print(f"[resolve_remotive] No supported ATS link found on {remotive_url}")        
+                return None
+            finally:
+                browser.close()
+    except Exception as e:
+        print(f"[resolve_remotive] EXCEPTION for {remotive_url}: {e}")
         return None
 
 
 def normalize_remotive_job(job):
+    description = job.get("description") or ""
+    # The public API sometimes embeds the employer's ATS link in the
+    # description. Prefer it so we do not need to visit a Cloudflare-protected
+    # Remotive detail page.
+    direct_apply_url = find_supported_apply_url(description)
     return {
         "title": job.get("title"),
         "company": job.get("company_name"),
         "location": job.get("candidate_required_location"),
-        "job_url": job.get("url"),
-        "description": job.get("description"),
+        "job_url": direct_apply_url or job.get("url"),
+        "description": description,
         "source": "remotive",
     }
 
@@ -240,6 +291,16 @@ GENERIC_KEYWORDS = {
     "technology",
     "technical",
 }
+
+def normalize_himalayas_job(job):
+    return {
+        "title": job.get("title"),
+        "company": job.get("company", {}).get("name"),
+        "location": job.get("location"),
+        "job_url": job.get("external_api_url") or job.get("himalayas_url"), # Assuming external_api_url provides direct link
+        "description": job.get("description"),
+        "source": "himalayas",
+    }
 
 
 def normalize_themuse_job(job):
@@ -284,16 +345,31 @@ async def search_jobs():
 
     try:
         async with httpx.AsyncClient() as client:
-            remotive_data = await safe_fetch_jobs_json(client, "https://remotive.com/api/remote-jobs", headers)
-            if remotive_data:
-                remotive_jobs = remotive_data.get("jobs", [])[:MAX_PER_SOURCE]
-                for job in remotive_jobs:
-                    normalized = normalize_remotive_job(job)
-                    if normalized["job_url"] and is_job_relevant(normalized, extracted_keywords):
-                        matched_jobs.append(normalized)
-                        if len(matched_jobs) >= MAX_MATCHED_JOBS:
-                            break
+            # Deprioritize Remotive as a primary source for direct apply links
+            # remotive_data = await safe_fetch_jobs_json(client, "https://remotive.com/api/remote-jobs", headers)
+            # if remotive_data:
+            #     remotive_jobs = remotive_data.get("jobs", [])[:MAX_PER_SOURCE]
+            #     for job in remotive_jobs:
+            #         normalized = normalize_remotive_job(job)
+            #         if normalized["job_url"] and is_job_relevant(normalized, extracted_keywords):
+            #             matched_jobs.append(normalized)
+            #             if len(matched_jobs) >= MAX_MATCHED_JOBS:
+            #                 break
 
+            # Integrate Himalayas as a job source
+            himalayas_data = await safe_fetch_jobs_json(client, "https://himalayas.app/jobs/api", headers)
+            if himalayas_data:
+                for job in himalayas_data.get("jobs", [])[:MAX_PER_SOURCE]:
+                    try:
+                        normalized = normalize_himalayas_job(job)
+                        if normalized["job_url"] and is_job_relevant(normalized, extracted_keywords):
+                            matched_jobs.append(normalized)
+                            if len(matched_jobs) >= MAX_MATCHED_JOBS:
+                                break
+                    except Exception as exc:
+                        print(f"[search_jobs] failed to evaluate Himalayas job: {exc}")
+
+            # Existing remoteok and themuse integrations (can remain as fallback or secondary sources)
             if len(matched_jobs) < MAX_MATCHED_JOBS:
                 remoteok_data = await safe_fetch_jobs_json(client, "https://remoteok.com/api", headers)
                 if isinstance(remoteok_data, list):
@@ -328,20 +404,24 @@ async def search_jobs():
 # aplication scripts
 from auto_applications.apply_ahsby import apply_to_ashby
 from auto_applications.apply_workable import apply_to_workable
+from auto_applications.apply_generic_ats import apply_to_generic_ats
 
 
 # auto apply to job
-def apply_to_job(job_url, resume_text, client, email_sender, resolved=False):
+def apply_to_job(job_url, resume_text, client, email_sender, resume_path=None, resolved=False):
     if "ashbyhq.com" in job_url:
-        return apply_to_ashby(job_url, resume_text, client, email_sender)
+        return apply_to_ashby(job_url, resume_text, client, email_sender, resume_path)
 
     elif "workable.com" in job_url:
-        return apply_to_workable(job_url, resume_text, client, email_sender)
+        return apply_to_workable(job_url, resume_text, client, email_sender, resume_path)
 
-    elif "remotive.com/remote-jobs" in job_url and not resolved:
+    elif any(pattern in job_url for pattern in ["lever.co", "greenhouse.io"]):
+        return apply_to_generic_ats(job_url, resume_text, client, email_sender, resume_path)
+
+    elif any(source in job_url for source in ["remotive.com/remote-jobs", "themuse.com/jobs", "remoteok.com/remote-jobs"]) and not resolved:
         target_url = resolve_remotive_apply_url(job_url)
         if target_url:
-            return apply_to_job(target_url, resume_text, client, email_sender, resolved=True)
+            return apply_to_job(target_url, resume_text, client, email_sender, resume_path, resolved=True)
 
     return {
         "url": job_url,
@@ -351,6 +431,7 @@ def apply_to_job(job_url, resume_text, client, email_sender, resolved=False):
 
 
 SUCCESS_TARGET = 3
+APPLY_LIMIT = 3
 pipeline_task: Optional[asyncio.Task] = None
 
 pipeline_status = {
@@ -359,6 +440,7 @@ pipeline_status = {
     "current_job": None,
     "matched_jobs": 0,
     "attempted_applications": 0,
+    "filled_and_submitted": 0,
     "filled_not_submitted": 0,
     "skipped": 0,
     "failed": 0,
@@ -376,6 +458,7 @@ async def _run_pipeline_worker():
     pipeline_status["last_error"] = None
     pipeline_status["matched_jobs"] = 0
     pipeline_status["attempted_applications"] = 0
+    pipeline_status["filled_and_submitted"] = 0
     pipeline_status["filled_not_submitted"] = 0
     pipeline_status["skipped"] = 0
     pipeline_status["failed"] = 0
@@ -391,15 +474,28 @@ async def _run_pipeline_worker():
         pipeline_status["stage"] = "applying"
         pipeline_status["updated_at"] = datetime.utcnow().isoformat() + "Z"
         results = []
+        attempts = 0
         for job in jobs:
+            if attempts >= APPLY_LIMIT:
+                break
+
             pipeline_status["current_job"] = job.get("job_url")
             pipeline_status["updated_at"] = datetime.utcnow().isoformat() + "Z"
             try:
-                outcome = await asyncio.to_thread(apply_to_job, job["job_url"], resume_text, client, email_sender)
+                outcome = await asyncio.to_thread(apply_to_job, job["job_url"], resume_text, client, email_sender, resume_path)
             except Exception as e:
                 outcome = {"url": job.get("job_url"), "status": "failed", "error": str(e)}
+
+            # Keep the source listing in the summary email, even if Remotive
+            # handed off to a different ATS page for the actual submission.
+            outcome["application_url"] = outcome.get("url")
+            outcome["url"] = job.get("job_url")
+
+            # Unsupported listings are discovery results, not real attempts.
+            if outcome.get("status") != "skipped":
+                attempts += 1
             results.append(outcome)
-            pipeline_status["attempted_applications"] = len(results)
+            pipeline_status["attempted_applications"] = attempts
             pipeline_status["updated_at"] = datetime.utcnow().isoformat() + "Z"
 
             if sum(1 for r in results if r.get("status") in ["filled_not_submitted", "filled_and_submitted"]) >= SUCCESS_TARGET:
@@ -407,7 +503,8 @@ async def _run_pipeline_worker():
 
         stats = {
             "matched_jobs": len(jobs),
-            "attempted_applications": len(results),
+            "attempted_applications": attempts,
+            "filled_and_submitted": sum(1 for r in results if r.get("status") == "filled_and_submitted"),
             "filled_not_submitted": sum(1 for r in results if r.get("status") == "filled_not_submitted"),
             "skipped": sum(1 for r in results if r.get("status") == "skipped"),
             "failed": sum(1 for r in results if r.get("status") == "failed"),
@@ -420,7 +517,9 @@ async def _run_pipeline_worker():
         pipeline_status["updated_at"] = datetime.utcnow().isoformat() + "Z"
 
         try:
-            email_sender(results)
+            if not email_sender(results):
+                pipeline_status["status"] = "completed_with_email_error"
+                pipeline_status["last_error"] = "Application-summary email was not sent; see server logs."
         except Exception as email_err:
             pipeline_status["status"] = "completed_with_email_error"
             pipeline_status["last_error"] = str(email_err)
@@ -481,5 +580,3 @@ async def pipeline_status_endpoint():
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
-
-

@@ -1,0 +1,48 @@
+# Atlas_OPS preferences — single source of truth for behaviour.
+# Edit this file, not the code. Secrets stay in .env.
+
+candidate:
+  # Years of relevant professional experience. Fractions allowed.
+  my_years_experience: 0
+  # A role requiring up to (my_years + tolerance) is allowed. Fresher => 1.
+  experience_tolerance: 1
+
+targets:
+  target_roles: []
+  locations: []
+  remote_ok: true
+  employment_types: ["full-time", "internship"]
+  # Minimum annual salary; null disables the check.
+  salary_floor: null
+
+companies:
+  target_companies: []
+  blacklist_companies: []
+
+filters:
+  # Skills the candidate completely lacks; a job requiring one is rejected.
+  deal_breaker_skills: []
+  # Ignore jobs older than this many days.
+  max_job_age_days: 14
+  # Reject jobs whose must-have skill coverage is below this fraction.
+  must_have_coverage_floor: 0.6
+  # Do not email jobs scoring below this.
+  min_score_to_send: 60
+  # At most this many jobs per digest.
+  top_k: 10
+
+models:
+  extractor: "llama-3.3-70b-versatile"
+  evaluator: "llama-3.3-70b-versatile"
+  verifier: "llama-3.1-8b-instant"
+  temperature: 0.0
+
+ranking:
+  weights:
+    fit_score: 0.50
+    must_have_coverage: 0.30
+    seniority_fit: 0.15
+    preference_bonus: 0.05
+
+schedule:
+  daily_hour: 9
