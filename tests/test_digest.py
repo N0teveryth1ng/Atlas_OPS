@@ -5,6 +5,8 @@ from atlas.digest import build_digest, render_html, render_text
 from atlas.job_status import InvariantViolation, JobStatus
 from atlas.pipeline import ProcessedJob
 from atlas.schemas import (
+    Evidence,
+    EvidenceSource,
     FilterRejection,
     FilterResult,
     Job,
@@ -31,9 +33,12 @@ def _result(i, rec, score=80.0, needs_review=False, status=JobStatus.ranked):
         fit_score=score,
         seniority_fit=90,
         recommendation=rec,
-        reasons_for=["JD asks for 0-2 years", "Python core stack"],
-        reasons_against=["On-call rotation"],
-        seniority_assessment="Open to a fresher per the JD.",
+        reasons_for=[
+            Evidence(quote="JD asks for 0-2 years", source=EvidenceSource.jd),
+            Evidence(quote="Python core stack", source=EvidenceSource.profile),
+        ],
+        reasons_against=[Evidence(quote="On-call rotation", source=EvidenceSource.jd)],
+        seniority_assessment=Evidence(quote="Open to a fresher", source=EvidenceSource.jd),
     )
     return ProcessedJob(
         job_id=i,

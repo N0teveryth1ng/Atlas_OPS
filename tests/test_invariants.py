@@ -25,6 +25,8 @@ from atlas.pipeline import ProcessedJob, run_pipeline
 from atlas.ranker import rank
 from atlas.schemas import (
     CandidateProfile,
+    Evidence,
+    EvidenceSource,
     ExperienceLevel,
     FilterRejection,
     FilterResult,
@@ -42,7 +44,11 @@ def _job(i: int, title: str = "Junior Python Dev") -> Job:
 
 
 def _verdict(score: float = 90.0) -> Verdict:
-    return Verdict(fit_score=score, recommendation=Recommendation.strong_apply, reasons_for=["ok"])
+    return Verdict(
+        fit_score=score,
+        recommendation=Recommendation.strong_apply,
+        reasons_for=[Evidence(quote="Junior Python Dev", source=EvidenceSource.jd)],
+    )
 
 
 def _passed_result(i: int, score: float = 85.0, status: JobStatus = JobStatus.ranked) -> ProcessedJob:

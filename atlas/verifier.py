@@ -10,7 +10,18 @@ from __future__ import annotations
 import logging
 
 from .config import Settings, get_settings
-from .evaluator import build_user_prompt, inputs_hash
+from .evaluator import (
+    MAX_EVIDENCE_RETRIES,
+    build_user_prompt,
+    inputs_hash,
+    job_source_text,
+    profile_source_text,
+)
+from .evidence import (
+    EvidenceValidationError,
+    validate_verifier_evidence,
+    validation_retry_message,
+)
 from .llm import LLMClient
 from .prompt_store import load_prompt
 from .schemas import (
@@ -62,15 +73,29 @@ def verify_job(
         return cache[key]
 
     logger.info("Verifier: challenging '%s' @ '%s'", job.title, job.company)
-    result = client.call_json(
-        schema=VerifierVerdict,
-        system=system,
-        user=user,
-        model=settings.models.verifier,
-    )
-    if cache is not None:
-        cache[key] = result
-    return result
+    jd_text = job_source_text(job)
+    profile_text = profile_source_text(profile)
+    errors: list[str] = []
+    for attempt in range(MAX_EVIDENCE_RETRIES + 1):
+        prompt = user if attempt == 0 else f"{user}\n\n{validation_retry_message(errors)}"
+        result = client.call_json(
+            schema=VerifierVerdict,
+            system=system,
+            user=prompt,
+            model=settings.models.verifier,
+        )
+        errors = validate_verifier_evidence(result, jd_text, profile_text)
+        if not errors:
+            if cache is not None:
+                cache[key] = result
+            return result
+        logger.warning(
+            "Verifier evidence validation failed (attempt %d/%d): %s",
+            attempt + 1,
+            MAX_EVIDENCE_RETRIES + 1,
+            errors,
+        )
+    raise EvidenceValidationError(errors)
 
 
 def resolve_recommendation(verdict: Verdict, verifier: VerifierVerdict) -> Recommendation:

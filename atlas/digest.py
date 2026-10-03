@@ -47,6 +47,7 @@ class RunSummary(BaseModel):
     rejection_counts: dict[str, int] = Field(default_factory=dict)
     evaluated: int = 0
     sent: int = 0
+    quote_validation_failures: int = 0
 
 
 class Digest(BaseModel):
@@ -82,10 +83,10 @@ def _item_from_result(result) -> DigestItem:
 
     risks: list[str] = []
     if verdict is not None:
-        risks.extend(verdict.reasons_against)
+        risks.extend(item.quote for item in verdict.reasons_against)
     if verifier is not None and verifier.veto:
-        risks.extend(verifier.reasons_against)
-    reasons_for = list(verdict.reasons_for) if verdict is not None else []
+        risks.extend(item.quote for item in verifier.reasons_against)
+    reasons_for = [item.quote for item in verdict.reasons_for] if verdict is not None else []
 
     return DigestItem(
         job_id=result.job_id,
@@ -98,7 +99,9 @@ def _item_from_result(result) -> DigestItem:
         reasons_for=reasons_for[:MAX_REASONS],
         main_risk=risks[0] if risks else None,
         missing_skills=list(match.missing_must_haves) if match is not None else [],
-        seniority_assessment=(verdict.seniority_assessment if verdict is not None else None),
+        seniority_assessment=(
+            verdict.seniority_assessment.quote if verdict is not None and verdict.seniority_assessment else None
+        ),
         needs_review=result.needs_review,
         status=result.status.value,
         filter_passed=bool(result.filter_result is not None and result.filter_result.passed),

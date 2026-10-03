@@ -446,7 +446,15 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
     from .config import Settings
     from .job_status import JobStatus
     from .pipeline import ProcessedJob
-    from .schemas import FilterResult, Job, Recommendation, Verdict, VerifierVerdict
+    from .schemas import (
+        Evidence,
+        EvidenceSource,
+        FilterResult,
+        Job,
+        Recommendation,
+        Verdict,
+        VerifierVerdict,
+    )
     from .skills import SkillMatch
 
     conn = connect(":memory:")
@@ -464,7 +472,11 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
         job_id=job_id,
         job=job,
         filter_result=FilterResult(passed=True),
-        verdict=Verdict(fit_score=80, recommendation=Recommendation.apply, reasons_for=["ok"]),
+        verdict=Verdict(
+            fit_score=80,
+            recommendation=Recommendation.apply,
+            reasons_for=[Evidence(quote="Backend Engineer", source=EvidenceSource.jd)],
+        ),
         verifier=VerifierVerdict(veto=False),
         skill_match=SkillMatch(must_have_coverage=1.0, nice_to_have_coverage=1.0),
         final_recommendation=Recommendation.apply,
@@ -503,6 +515,8 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
     from .pipeline import run_pipeline
     from .schemas import (
         CandidateProfile,
+        Evidence,
+        EvidenceSource,
         ExperienceLevel,
         Job,
         Proficiency,
@@ -519,7 +533,9 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
                 return schema(
                     fit_score=85,
                     recommendation=Recommendation.apply,
-                    reasons_for=["strong python fit"],
+                    reasons_for=[
+                        Evidence(quote="Junior Python Developer", source=EvidenceSource.jd)
+                    ],
                 )
             if name == "VerifierVerdict":
                 return schema(veto=False)

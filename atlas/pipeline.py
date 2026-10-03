@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from .config import Settings, get_settings
 from .db import log_stage, set_job_status
 from .evaluator import evaluate_job
+from .evidence import EvidenceValidationError
 from .filters import apply_hard_filters
 from .jd_parser import parse_jd
 from .job_status import JobStatus, transition
@@ -49,6 +50,7 @@ class ProcessedJob:
     final_recommendation: Recommendation = Recommendation.skip
     score: float = 0.0
     needs_review: bool = False
+    evidence_failed: bool = False
     status: JobStatus = JobStatus.new
 
     def advance(self, new_status: JobStatus, conn: sqlite3.Connection | None = None) -> None:
@@ -158,30 +160,38 @@ def process_job(
     skill_match = match_skills(parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills)
     result.skill_match = skill_match
 
-    verdict = evaluate_job(
-        client,
-        profile=profile,
-        job=job,
-        parsed_jd=parsed,
-        skill_match=skill_match,
-        settings=settings,
-        cache=cache,
-    )
-    result.verdict = verdict
-    result.advance(JobStatus.evaluated, conn)
+    try:
+        verdict = evaluate_job(
+            client,
+            profile=profile,
+            job=job,
+            parsed_jd=parsed,
+            skill_match=skill_match,
+            settings=settings,
+            cache=cache,
+        )
+        result.verdict = verdict
+        result.advance(JobStatus.evaluated, conn)
 
-    verifier = verify_job(
-        client,
-        profile=profile,
-        job=job,
-        parsed_jd=parsed,
-        verdict=verdict,
-        skill_match=skill_match,
-        settings=settings,
-        cache=cache,
-    )
-    result.verifier = verifier
-    result.advance(JobStatus.verified, conn)
+        verifier = verify_job(
+            client,
+            profile=profile,
+            job=job,
+            parsed_jd=parsed,
+            verdict=verdict,
+            skill_match=skill_match,
+            settings=settings,
+            cache=cache,
+        )
+        result.verifier = verifier
+        result.advance(JobStatus.verified, conn)
+    except EvidenceValidationError as exc:
+        logger.warning("job %s: unverifiable evidence: %s", job_id, exc)
+        result.evidence_failed = True
+        result.needs_review = True
+        result.advance(JobStatus.needs_review, conn)
+        result.final_recommendation = Recommendation.maybe
+        return result
 
     final = resolve_recommendation(verdict, verifier)
     if (

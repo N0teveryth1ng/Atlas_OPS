@@ -22,9 +22,9 @@ EVAL_PAYLOAD = {
     "growth_fit": 70,
     "company_signal": 60,
     "recommendation": "apply",
-    "reasons_for": ["JD asks for 0-2 years"],
+    "reasons_for": [{"quote": "Junior Python Dev", "source": "jd"}],
     "reasons_against": [],
-    "seniority_assessment": "Open to a fresher per the JD.",
+    "seniority_assessment": {"quote": "Junior Python Dev", "source": "jd"},
     "uncertainties": [],
 }
 

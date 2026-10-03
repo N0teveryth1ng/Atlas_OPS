@@ -206,6 +206,7 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
 
     already_sent = emailed_job_ids(conn)
     digest = build_digest(shippable_results, settings, run_id=run_id, already_sent=already_sent)
+    digest.summary.quote_validation_failures = sum(1 for r in results if r.evidence_failed)
     print(render_text(digest))
 
     passed_ids = {
