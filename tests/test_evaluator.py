@@ -1,6 +1,6 @@
 from atlas.config import get_settings
 from atlas.evaluator import evaluate_job
-from atlas.ranker import final_score
+from atlas.ranker import final_score, preference_bonus, rank
 from atlas.schemas import (
     CandidateProfile,
     Job,
@@ -102,3 +102,33 @@ def test_final_score_bounds_and_weights():
     assert 0 <= score <= 100
     # fit(.5) + coverage(.3) + seniority(.15) = 95
     assert score == 95.0
+
+
+def test_preference_bonus_for_target_company():
+    settings = get_settings()
+    settings.companies.target_companies = ["DreamCorp"]
+    assert preference_bonus(Job(source="t", url="u", company="DreamCorp"), settings) == 100.0
+    assert preference_bonus(Job(source="t", url="u", company="Other"), settings) == 0.0
+    assert preference_bonus(Job(source="t", url="u", company=""), settings) == 0.0
+
+
+def test_rank_drops_skips_and_honours_include_maybe():
+    from atlas.job_status import JobStatus
+    from atlas.pipeline import ProcessedJob
+    from atlas.schemas import FilterResult
+
+    def result(rec):
+        return ProcessedJob(
+            job_id=1,
+            job=Job(source="t", url="u", title="T", company="C"),
+            filter_result=FilterResult(passed=True),
+            skill_match=SkillMatch(must_have_coverage=1.0, nice_to_have_coverage=0.0),
+            final_recommendation=rec,
+            score=50.0,
+            status=JobStatus.ranked,
+        )
+
+    skipped = result(Recommendation.skip)
+    maybe = result(Recommendation.maybe)
+    assert rank([skipped, maybe]) == [maybe]
+    assert rank([skipped, maybe], include_maybe=False) == []

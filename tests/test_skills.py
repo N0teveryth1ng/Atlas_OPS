@@ -1,7 +1,19 @@
+import sys
+import types
+
 import pytest
 
 from atlas.schemas import Proficiency, Skill
-from atlas.skills import get_ontology, load_ontology, match_skills
+from atlas.skills import (
+    OntologyEntry,
+    SkillOntology,
+    _cosine,
+    _similarity,
+    get_ontology,
+    load_ontology,
+    make_embedder,
+    match_skills,
+)
 
 
 def _profile(*names, proficiency=Proficiency.working):
@@ -95,6 +107,62 @@ def test_no_false_merge_between_distinct_skills(jd, other):
     """Audit S2: fuzzy fallback must not conflate distinct technologies."""
     match = match_skills([jd], [], _profile(other))
     assert match.missing_must_haves == [jd]
+
+
+def test_ontology_entry_lookup():
+    ontology = get_ontology()
+    entry = ontology.entry("python")
+    assert entry is not None and entry.canonical == "python"
+    assert ontology.entry("definitely-not-a-skill") is None
+    assert ontology.related("definitely-not-a-skill") == set()
+
+
+def test_reverse_related_credit():
+    ontology = SkillOntology()
+    ontology.entries["a"] = OntologyEntry(canonical="a", related=["b"])
+    ontology.alias_to_canonical["a"] = "a"
+    profile = [Skill(name="a", canonical_name="a", proficiency=Proficiency.working)]
+    match = match_skills(["b"], [], profile, ontology=ontology)
+    assert match.must_have_coverage == 0.5
+
+
+def test_cosine_handles_zero_norm():
+    assert _cosine([1.0, 2.0], [1.0, 2.0]) == pytest.approx(1.0)
+    assert _cosine([0.0, 0.0], [1.0, 2.0]) == 0.0
+
+
+def test_similarity_uses_embedder_and_cache():
+    calls = {"n": 0}
+
+    def embedder(texts):
+        calls["n"] += 1
+        return [[1.0, 0.0] for _ in texts]
+
+    cache: dict = {}
+    first = _similarity("python", "python", embedder, cache)
+    second = _similarity("python", "python", embedder, cache)
+    assert first == second == pytest.approx(1.0)
+    assert calls["n"] == 1
+
+
+def test_make_embedder_wraps_sentence_transformer(monkeypatch):
+    class _Vec:
+        def tolist(self):
+            return [[0.1, 0.2]]
+
+    class _FakeST:
+        def __init__(self, _name):
+            pass
+
+        def encode(self, _texts, normalize_embeddings=True):
+            return _Vec()
+
+    fake = types.ModuleType("sentence_transformers")
+    fake.SentenceTransformer = _FakeST
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+
+    embed = make_embedder()
+    assert embed(["x"]) == [[0.1, 0.2]]
 
 
 def test_load_ontology_from_custom_file(tmp_path):

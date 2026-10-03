@@ -1,7 +1,7 @@
 import pytest
 from pydantic import BaseModel
 
-from atlas.llm import LLMClient, LLMError, extract_json
+from atlas.llm import LLMClient, LLMError, _looks_like_json_mode_error, extract_json
 
 
 class Item(BaseModel):
@@ -69,3 +69,40 @@ def test_call_json_raises_after_max_retries():
     with pytest.raises(LLMError):
         client.call_json(schema=Item, system="s", user="u")
     assert fake.chat.completions.calls == 2
+
+
+def test_extract_json_empty_response():
+    with pytest.raises(ValueError):
+        extract_json("")
+
+
+def test_looks_like_json_mode_error():
+    assert _looks_like_json_mode_error(Exception("response_format unsupported"))
+    assert _looks_like_json_mode_error(Exception("json_object not allowed"))
+    assert not _looks_like_json_mode_error(Exception("connection reset"))
+
+
+def test_json_mode_fallback_on_unsupported_error(monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    fake = FakeClient([Exception("response_format is not supported"), '{"value": 5}'])
+    client = LLMClient(client=fake)
+    assert client.call_json(schema=Item, system="s", user="u").value == 5
+
+
+def test_transport_failure_raises(monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    fake = FakeClient([Exception("boom")])
+    client = LLMClient(client=fake, max_api_retries=2)
+    with pytest.raises(LLMError):
+        client.call_json(schema=Item, system="s", user="u")
+    assert fake.chat.completions.calls == 2
+
+
+def test_client_requires_api_key():
+    with pytest.raises(LLMError):
+        LLMClient(api_key=None)
+
+
+def test_client_builds_groq_transport():
+    client = LLMClient(api_key="test-key")
+    assert client.default_model
