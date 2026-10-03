@@ -381,13 +381,6 @@ def record_eval_history(
     return int(cur.lastrowid or 0)
 
 
-def latest_eval_history(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        "SELECT * FROM eval_history WHERE name = ? ORDER BY id DESC LIMIT 1", (name,)
-    ).fetchone()
-    return dict(row) if row else None
-
-
 # --------------------------------------------------------------------------- #
 # Generic stage logging
 # --------------------------------------------------------------------------- #
