@@ -63,3 +63,20 @@ def test_collect_merges_cross_source_duplicates():
     result = collect([a, b], [""], settings=Settings(), now=NOW)
     assert len(result.jobs) == 1
     assert set(result.jobs[0].urls) == {"http://a", "http://b"}
+
+
+def test_run_sourcing_defined_exactly_once():
+    """Regression: a duplicated definition silently shadowed the first (audit T3)."""
+    import ast
+    import inspect
+
+    from atlas import sourcing
+
+    tree = ast.parse(inspect.getsource(sourcing))
+    defs = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "run_sourcing"
+    ]
+    assert len(defs) == 1
