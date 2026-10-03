@@ -7,8 +7,8 @@ fresher).
 
 Optimised for **precision and accuracy**, not scale or latency.
 
-> Status: under active rework. The legacy FastAPI prototype in `main.py` is
-> being replaced by a CLI + scheduled pipeline under `atlas/`. See the phased
+> Status: under active rework. The legacy FastAPI prototype has been retired;
+> the tool is now a CLI + scheduled pipeline under `atlas/`. See the phased
 > plan below.
 
 ## Goal / success metrics
@@ -79,14 +79,22 @@ all keys.
 ## Project layout
 
 ```
-atlas/            # pipeline package (being built)
+atlas/            # pipeline package
 config.yaml       # user preferences
 companies.yaml    # target company list (planned)
 skills.yaml       # skill ontology / alias map (planned)
-prompts/          # versioned prompt files (planned)
+prompts/          # versioned prompt files
 eval/             # golden set + eval harness (planned)
-tests/            # unit tests (planned)
-main.py           # legacy FastAPI prototype (to be retired)
+tests/            # unit tests
+auto_applications/# legacy Playwright bots, retained for Phase 8 (disabled)
+```
+
+## CLI
+
+```bash
+python -m atlas.cli profile --resume resume.pdf --describe "target roles..." --out profile.json
+python -m atlas.cli review profile.json     # review + approve
+python -m atlas.cli status
 ```
 
 ## Security
