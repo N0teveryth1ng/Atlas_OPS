@@ -1,0 +1,1938 @@
+[
+ {
+  "id": "title_000",
+  "kind": "title",
+  "title": "Senior Software Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_001",
+  "kind": "title",
+  "title": "Senior Backend Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_002",
+  "kind": "title",
+  "title": "Senior Frontend Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_003",
+  "kind": "title",
+  "title": "Senior Full Stack Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_004",
+  "kind": "title",
+  "title": "Senior Python Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_005",
+  "kind": "title",
+  "title": "Senior Java Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_006",
+  "kind": "title",
+  "title": "Senior Data Scientist",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_007",
+  "kind": "title",
+  "title": "Senior Data Analyst",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_008",
+  "kind": "title",
+  "title": "Senior Machine Learning Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_009",
+  "kind": "title",
+  "title": "Senior DevOps Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_010",
+  "kind": "title",
+  "title": "Senior QA Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_011",
+  "kind": "title",
+  "title": "Senior Mobile Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_012",
+  "kind": "title",
+  "title": "Senior Android Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_013",
+  "kind": "title",
+  "title": "Senior Cloud Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_014",
+  "kind": "title",
+  "title": "Senior Platform Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_015",
+  "kind": "title",
+  "title": "Senior Security Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_016",
+  "kind": "title",
+  "title": "Senior Web Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_017",
+  "kind": "title",
+  "title": "Senior API Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_018",
+  "kind": "title",
+  "title": "Sr. Software Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_019",
+  "kind": "title",
+  "title": "Sr. Backend Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_020",
+  "kind": "title",
+  "title": "Sr. Frontend Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_021",
+  "kind": "title",
+  "title": "Sr. Full Stack Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_022",
+  "kind": "title",
+  "title": "Sr. Python Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_023",
+  "kind": "title",
+  "title": "Sr. Java Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_024",
+  "kind": "title",
+  "title": "Sr. Data Scientist",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_025",
+  "kind": "title",
+  "title": "Sr. Data Analyst",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_026",
+  "kind": "title",
+  "title": "Sr. Machine Learning Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_027",
+  "kind": "title",
+  "title": "Sr. DevOps Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_028",
+  "kind": "title",
+  "title": "Sr. QA Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_029",
+  "kind": "title",
+  "title": "Sr. Mobile Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_030",
+  "kind": "title",
+  "title": "Sr. Android Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_031",
+  "kind": "title",
+  "title": "Sr. Cloud Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_032",
+  "kind": "title",
+  "title": "Sr. Platform Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_033",
+  "kind": "title",
+  "title": "Sr. Security Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_034",
+  "kind": "title",
+  "title": "Sr. Web Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_035",
+  "kind": "title",
+  "title": "Sr. API Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_036",
+  "kind": "title",
+  "title": "Sr Software Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_037",
+  "kind": "title",
+  "title": "Sr Backend Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_038",
+  "kind": "title",
+  "title": "Sr Frontend Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_039",
+  "kind": "title",
+  "title": "Sr Full Stack Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_040",
+  "kind": "title",
+  "title": "Sr Python Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_041",
+  "kind": "title",
+  "title": "Sr Java Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_042",
+  "kind": "title",
+  "title": "Sr Data Scientist",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_043",
+  "kind": "title",
+  "title": "Sr Data Analyst",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_044",
+  "kind": "title",
+  "title": "Sr Machine Learning Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_045",
+  "kind": "title",
+  "title": "Sr DevOps Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_046",
+  "kind": "title",
+  "title": "Sr QA Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_047",
+  "kind": "title",
+  "title": "Sr Mobile Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_048",
+  "kind": "title",
+  "title": "Sr Android Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_049",
+  "kind": "title",
+  "title": "Sr Cloud Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_050",
+  "kind": "title",
+  "title": "Sr Platform Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_051",
+  "kind": "title",
+  "title": "Sr Security Engineer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_052",
+  "kind": "title",
+  "title": "Sr Web Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_053",
+  "kind": "title",
+  "title": "Sr API Developer",
+  "expected_seniority": "senior"
+ },
+ {
+  "id": "title_054",
+  "kind": "title",
+  "title": "Lead Software Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_055",
+  "kind": "title",
+  "title": "Lead Backend Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_056",
+  "kind": "title",
+  "title": "Lead Frontend Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_057",
+  "kind": "title",
+  "title": "Lead Full Stack Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_058",
+  "kind": "title",
+  "title": "Lead Python Developer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_059",
+  "kind": "title",
+  "title": "Lead Java Developer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_060",
+  "kind": "title",
+  "title": "Lead Data Scientist",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_061",
+  "kind": "title",
+  "title": "Lead Data Analyst",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_062",
+  "kind": "title",
+  "title": "Lead Machine Learning Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_063",
+  "kind": "title",
+  "title": "Lead DevOps Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_064",
+  "kind": "title",
+  "title": "Lead QA Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_065",
+  "kind": "title",
+  "title": "Lead Mobile Developer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_066",
+  "kind": "title",
+  "title": "Lead Android Developer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_067",
+  "kind": "title",
+  "title": "Lead Cloud Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_068",
+  "kind": "title",
+  "title": "Lead Platform Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_069",
+  "kind": "title",
+  "title": "Lead Security Engineer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_070",
+  "kind": "title",
+  "title": "Lead Web Developer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_071",
+  "kind": "title",
+  "title": "Lead API Developer",
+  "expected_seniority": "lead"
+ },
+ {
+  "id": "title_072",
+  "kind": "title",
+  "title": "Principal Software Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_073",
+  "kind": "title",
+  "title": "Principal Backend Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_074",
+  "kind": "title",
+  "title": "Principal Frontend Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_075",
+  "kind": "title",
+  "title": "Principal Full Stack Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_076",
+  "kind": "title",
+  "title": "Principal Python Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_077",
+  "kind": "title",
+  "title": "Principal Java Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_078",
+  "kind": "title",
+  "title": "Principal Data Scientist",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_079",
+  "kind": "title",
+  "title": "Principal Data Analyst",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_080",
+  "kind": "title",
+  "title": "Principal Machine Learning Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_081",
+  "kind": "title",
+  "title": "Principal DevOps Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_082",
+  "kind": "title",
+  "title": "Principal QA Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_083",
+  "kind": "title",
+  "title": "Principal Mobile Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_084",
+  "kind": "title",
+  "title": "Principal Android Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_085",
+  "kind": "title",
+  "title": "Principal Cloud Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_086",
+  "kind": "title",
+  "title": "Principal Platform Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_087",
+  "kind": "title",
+  "title": "Principal Security Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_088",
+  "kind": "title",
+  "title": "Principal Web Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_089",
+  "kind": "title",
+  "title": "Principal API Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_090",
+  "kind": "title",
+  "title": "Staff Software Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_091",
+  "kind": "title",
+  "title": "Staff Backend Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_092",
+  "kind": "title",
+  "title": "Staff Frontend Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_093",
+  "kind": "title",
+  "title": "Staff Full Stack Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_094",
+  "kind": "title",
+  "title": "Staff Python Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_095",
+  "kind": "title",
+  "title": "Staff Java Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_096",
+  "kind": "title",
+  "title": "Staff Data Scientist",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_097",
+  "kind": "title",
+  "title": "Staff Data Analyst",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_098",
+  "kind": "title",
+  "title": "Staff Machine Learning Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_099",
+  "kind": "title",
+  "title": "Staff DevOps Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_100",
+  "kind": "title",
+  "title": "Staff QA Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_101",
+  "kind": "title",
+  "title": "Staff Mobile Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_102",
+  "kind": "title",
+  "title": "Staff Android Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_103",
+  "kind": "title",
+  "title": "Staff Cloud Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_104",
+  "kind": "title",
+  "title": "Staff Platform Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_105",
+  "kind": "title",
+  "title": "Staff Security Engineer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_106",
+  "kind": "title",
+  "title": "Staff Web Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_107",
+  "kind": "title",
+  "title": "Staff API Developer",
+  "expected_seniority": "principal"
+ },
+ {
+  "id": "title_108",
+  "kind": "title",
+  "title": "Junior Software Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_109",
+  "kind": "title",
+  "title": "Junior Backend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_110",
+  "kind": "title",
+  "title": "Junior Frontend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_111",
+  "kind": "title",
+  "title": "Junior Full Stack Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_112",
+  "kind": "title",
+  "title": "Junior Python Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_113",
+  "kind": "title",
+  "title": "Junior Java Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_114",
+  "kind": "title",
+  "title": "Junior Data Scientist",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_115",
+  "kind": "title",
+  "title": "Junior Data Analyst",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_116",
+  "kind": "title",
+  "title": "Junior Machine Learning Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_117",
+  "kind": "title",
+  "title": "Junior DevOps Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_118",
+  "kind": "title",
+  "title": "Junior QA Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_119",
+  "kind": "title",
+  "title": "Junior Mobile Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_120",
+  "kind": "title",
+  "title": "Junior Android Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_121",
+  "kind": "title",
+  "title": "Junior Cloud Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_122",
+  "kind": "title",
+  "title": "Junior Platform Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_123",
+  "kind": "title",
+  "title": "Junior Security Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_124",
+  "kind": "title",
+  "title": "Junior Web Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_125",
+  "kind": "title",
+  "title": "Junior API Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_126",
+  "kind": "title",
+  "title": "Jr. Software Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_127",
+  "kind": "title",
+  "title": "Jr. Backend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_128",
+  "kind": "title",
+  "title": "Jr. Frontend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_129",
+  "kind": "title",
+  "title": "Jr. Full Stack Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_130",
+  "kind": "title",
+  "title": "Jr. Python Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_131",
+  "kind": "title",
+  "title": "Jr. Java Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_132",
+  "kind": "title",
+  "title": "Jr. Data Scientist",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_133",
+  "kind": "title",
+  "title": "Jr. Data Analyst",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_134",
+  "kind": "title",
+  "title": "Jr. Machine Learning Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_135",
+  "kind": "title",
+  "title": "Jr. DevOps Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_136",
+  "kind": "title",
+  "title": "Jr. QA Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_137",
+  "kind": "title",
+  "title": "Jr. Mobile Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_138",
+  "kind": "title",
+  "title": "Jr. Android Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_139",
+  "kind": "title",
+  "title": "Jr. Cloud Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_140",
+  "kind": "title",
+  "title": "Jr. Platform Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_141",
+  "kind": "title",
+  "title": "Jr. Security Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_142",
+  "kind": "title",
+  "title": "Jr. Web Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_143",
+  "kind": "title",
+  "title": "Jr. API Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_144",
+  "kind": "title",
+  "title": "Jr Software Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_145",
+  "kind": "title",
+  "title": "Jr Backend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_146",
+  "kind": "title",
+  "title": "Jr Frontend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_147",
+  "kind": "title",
+  "title": "Jr Full Stack Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_148",
+  "kind": "title",
+  "title": "Jr Python Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_149",
+  "kind": "title",
+  "title": "Jr Java Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_150",
+  "kind": "title",
+  "title": "Jr Data Scientist",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_151",
+  "kind": "title",
+  "title": "Jr Data Analyst",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_152",
+  "kind": "title",
+  "title": "Jr Machine Learning Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_153",
+  "kind": "title",
+  "title": "Jr DevOps Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_154",
+  "kind": "title",
+  "title": "Jr QA Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_155",
+  "kind": "title",
+  "title": "Jr Mobile Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_156",
+  "kind": "title",
+  "title": "Jr Android Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_157",
+  "kind": "title",
+  "title": "Jr Cloud Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_158",
+  "kind": "title",
+  "title": "Jr Platform Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_159",
+  "kind": "title",
+  "title": "Jr Security Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_160",
+  "kind": "title",
+  "title": "Jr Web Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_161",
+  "kind": "title",
+  "title": "Jr API Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_162",
+  "kind": "title",
+  "title": "Entry Level Software Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_163",
+  "kind": "title",
+  "title": "Entry Level Backend Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_164",
+  "kind": "title",
+  "title": "Entry Level Frontend Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_165",
+  "kind": "title",
+  "title": "Entry Level Full Stack Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_166",
+  "kind": "title",
+  "title": "Entry Level Python Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_167",
+  "kind": "title",
+  "title": "Entry Level Java Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_168",
+  "kind": "title",
+  "title": "Entry Level Data Scientist",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_169",
+  "kind": "title",
+  "title": "Entry Level Data Analyst",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_170",
+  "kind": "title",
+  "title": "Entry Level Machine Learning Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_171",
+  "kind": "title",
+  "title": "Entry Level DevOps Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_172",
+  "kind": "title",
+  "title": "Entry Level QA Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_173",
+  "kind": "title",
+  "title": "Entry Level Mobile Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_174",
+  "kind": "title",
+  "title": "Entry Level Android Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_175",
+  "kind": "title",
+  "title": "Entry Level Cloud Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_176",
+  "kind": "title",
+  "title": "Entry Level Platform Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_177",
+  "kind": "title",
+  "title": "Entry Level Security Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_178",
+  "kind": "title",
+  "title": "Entry Level Web Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_179",
+  "kind": "title",
+  "title": "Entry Level API Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_180",
+  "kind": "title",
+  "title": "Graduate Software Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_181",
+  "kind": "title",
+  "title": "Graduate Backend Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_182",
+  "kind": "title",
+  "title": "Graduate Frontend Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_183",
+  "kind": "title",
+  "title": "Graduate Full Stack Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_184",
+  "kind": "title",
+  "title": "Graduate Python Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_185",
+  "kind": "title",
+  "title": "Graduate Java Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_186",
+  "kind": "title",
+  "title": "Graduate Data Scientist",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_187",
+  "kind": "title",
+  "title": "Graduate Data Analyst",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_188",
+  "kind": "title",
+  "title": "Graduate Machine Learning Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_189",
+  "kind": "title",
+  "title": "Graduate DevOps Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_190",
+  "kind": "title",
+  "title": "Graduate QA Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_191",
+  "kind": "title",
+  "title": "Graduate Mobile Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_192",
+  "kind": "title",
+  "title": "Graduate Android Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_193",
+  "kind": "title",
+  "title": "Graduate Cloud Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_194",
+  "kind": "title",
+  "title": "Graduate Platform Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_195",
+  "kind": "title",
+  "title": "Graduate Security Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_196",
+  "kind": "title",
+  "title": "Graduate Web Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_197",
+  "kind": "title",
+  "title": "Graduate API Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_198",
+  "kind": "title",
+  "title": "Trainee Software Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_199",
+  "kind": "title",
+  "title": "Trainee Backend Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_200",
+  "kind": "title",
+  "title": "Trainee Frontend Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_201",
+  "kind": "title",
+  "title": "Trainee Full Stack Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_202",
+  "kind": "title",
+  "title": "Trainee Python Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_203",
+  "kind": "title",
+  "title": "Trainee Java Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_204",
+  "kind": "title",
+  "title": "Trainee Data Scientist",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_205",
+  "kind": "title",
+  "title": "Trainee Data Analyst",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_206",
+  "kind": "title",
+  "title": "Trainee Machine Learning Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_207",
+  "kind": "title",
+  "title": "Trainee DevOps Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_208",
+  "kind": "title",
+  "title": "Trainee QA Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_209",
+  "kind": "title",
+  "title": "Trainee Mobile Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_210",
+  "kind": "title",
+  "title": "Trainee Android Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_211",
+  "kind": "title",
+  "title": "Trainee Cloud Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_212",
+  "kind": "title",
+  "title": "Trainee Platform Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_213",
+  "kind": "title",
+  "title": "Trainee Security Engineer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_214",
+  "kind": "title",
+  "title": "Trainee Web Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_215",
+  "kind": "title",
+  "title": "Trainee API Developer",
+  "expected_seniority": "entry"
+ },
+ {
+  "id": "title_216",
+  "kind": "title",
+  "title": "Intern Software Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_217",
+  "kind": "title",
+  "title": "Intern Backend Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_218",
+  "kind": "title",
+  "title": "Intern Frontend Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_219",
+  "kind": "title",
+  "title": "Intern Full Stack Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_220",
+  "kind": "title",
+  "title": "Intern Python Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_221",
+  "kind": "title",
+  "title": "Intern Java Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_222",
+  "kind": "title",
+  "title": "Intern Data Scientist",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_223",
+  "kind": "title",
+  "title": "Intern Data Analyst",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_224",
+  "kind": "title",
+  "title": "Intern Machine Learning Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_225",
+  "kind": "title",
+  "title": "Intern DevOps Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_226",
+  "kind": "title",
+  "title": "Intern QA Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_227",
+  "kind": "title",
+  "title": "Intern Mobile Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_228",
+  "kind": "title",
+  "title": "Intern Android Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_229",
+  "kind": "title",
+  "title": "Intern Cloud Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_230",
+  "kind": "title",
+  "title": "Intern Platform Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_231",
+  "kind": "title",
+  "title": "Intern Security Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_232",
+  "kind": "title",
+  "title": "Intern Web Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_233",
+  "kind": "title",
+  "title": "Intern API Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_234",
+  "kind": "title",
+  "title": "Internship Software Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_235",
+  "kind": "title",
+  "title": "Internship Backend Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_236",
+  "kind": "title",
+  "title": "Internship Frontend Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_237",
+  "kind": "title",
+  "title": "Internship Full Stack Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_238",
+  "kind": "title",
+  "title": "Internship Python Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_239",
+  "kind": "title",
+  "title": "Internship Java Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_240",
+  "kind": "title",
+  "title": "Internship Data Scientist",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_241",
+  "kind": "title",
+  "title": "Internship Data Analyst",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_242",
+  "kind": "title",
+  "title": "Internship Machine Learning Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_243",
+  "kind": "title",
+  "title": "Internship DevOps Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_244",
+  "kind": "title",
+  "title": "Internship QA Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_245",
+  "kind": "title",
+  "title": "Internship Mobile Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_246",
+  "kind": "title",
+  "title": "Internship Android Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_247",
+  "kind": "title",
+  "title": "Internship Cloud Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_248",
+  "kind": "title",
+  "title": "Internship Platform Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_249",
+  "kind": "title",
+  "title": "Internship Security Engineer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_250",
+  "kind": "title",
+  "title": "Internship Web Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_251",
+  "kind": "title",
+  "title": "Internship API Developer",
+  "expected_seniority": "intern"
+ },
+ {
+  "id": "title_252",
+  "kind": "title",
+  "title": "Associate Software Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_253",
+  "kind": "title",
+  "title": "Associate Backend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_254",
+  "kind": "title",
+  "title": "Associate Frontend Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_255",
+  "kind": "title",
+  "title": "Associate Full Stack Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_256",
+  "kind": "title",
+  "title": "Associate Python Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_257",
+  "kind": "title",
+  "title": "Associate Java Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_258",
+  "kind": "title",
+  "title": "Associate Data Scientist",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_259",
+  "kind": "title",
+  "title": "Associate Data Analyst",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_260",
+  "kind": "title",
+  "title": "Associate Machine Learning Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_261",
+  "kind": "title",
+  "title": "Associate DevOps Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_262",
+  "kind": "title",
+  "title": "Associate QA Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_263",
+  "kind": "title",
+  "title": "Associate Mobile Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_264",
+  "kind": "title",
+  "title": "Associate Android Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_265",
+  "kind": "title",
+  "title": "Associate Cloud Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_266",
+  "kind": "title",
+  "title": "Associate Platform Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_267",
+  "kind": "title",
+  "title": "Associate Security Engineer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_268",
+  "kind": "title",
+  "title": "Associate Web Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_269",
+  "kind": "title",
+  "title": "Associate API Developer",
+  "expected_seniority": "junior"
+ },
+ {
+  "id": "title_270",
+  "kind": "title",
+  "title": "Engineering Manager",
+  "expected_seniority": "manager"
+ },
+ {
+  "id": "title_271",
+  "kind": "title",
+  "title": "Manager, Backend Engineering",
+  "expected_seniority": "manager"
+ },
+ {
+  "id": "title_272",
+  "kind": "title",
+  "title": "Director of Engineering",
+  "expected_seniority": "manager"
+ },
+ {
+  "id": "title_273",
+  "kind": "title",
+  "title": "Head of Platform",
+  "expected_seniority": "manager"
+ },
+ {
+  "id": "title_274",
+  "kind": "title",
+  "title": "VP of Engineering",
+  "expected_seniority": "manager"
+ },
+ {
+  "id": "title_275",
+  "kind": "title",
+  "title": "Vice President, Data",
+  "expected_seniority": "manager"
+ },
+ {
+  "id": "title_276",
+  "kind": "title",
+  "title": "Architect, Cloud Platform",
+  "expected_seniority": "architect"
+ },
+ {
+  "id": "title_277",
+  "kind": "title",
+  "title": "Principal Architect",
+  "expected_seniority": "architect"
+ },
+ {
+  "id": "title_278",
+  "kind": "title",
+  "title": "Software Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_279",
+  "kind": "title",
+  "title": "Backend Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_280",
+  "kind": "title",
+  "title": "Frontend Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_281",
+  "kind": "title",
+  "title": "Full Stack Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_282",
+  "kind": "title",
+  "title": "Python Developer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_283",
+  "kind": "title",
+  "title": "Java Developer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_284",
+  "kind": "title",
+  "title": "Data Scientist",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_285",
+  "kind": "title",
+  "title": "Data Analyst",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_286",
+  "kind": "title",
+  "title": "Machine Learning Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_287",
+  "kind": "title",
+  "title": "DevOps Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_288",
+  "kind": "title",
+  "title": "QA Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_289",
+  "kind": "title",
+  "title": "Mobile Developer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_290",
+  "kind": "title",
+  "title": "Android Developer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_291",
+  "kind": "title",
+  "title": "Cloud Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_292",
+  "kind": "title",
+  "title": "Platform Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_293",
+  "kind": "title",
+  "title": "Security Engineer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_294",
+  "kind": "title",
+  "title": "Web Developer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "title_295",
+  "kind": "title",
+  "title": "API Developer",
+  "expected_seniority": "unknown"
+ },
+ {
+  "id": "years_000",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "0-1 years of experience",
+  "expected_min_years": 0,
+  "expected_reject": false
+ },
+ {
+  "id": "years_001",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "fresher, no experience required",
+  "expected_min_years": 0,
+  "expected_reject": false
+ },
+ {
+  "id": "years_002",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "1+ years of experience",
+  "expected_min_years": 1,
+  "expected_reject": false
+ },
+ {
+  "id": "years_003",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "minimum of 1 year",
+  "expected_min_years": 1,
+  "expected_reject": false
+ },
+ {
+  "id": "years_004",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "at least 1 year",
+  "expected_min_years": 1,
+  "expected_reject": false
+ },
+ {
+  "id": "years_005",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "1-2 years of experience",
+  "expected_min_years": 1,
+  "expected_reject": false
+ },
+ {
+  "id": "years_006",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "2+ years of experience",
+  "expected_min_years": 2,
+  "expected_reject": true
+ },
+ {
+  "id": "years_007",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "2-4 years of experience",
+  "expected_min_years": 2,
+  "expected_reject": true
+ },
+ {
+  "id": "years_008",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "3+ years",
+  "expected_min_years": 3,
+  "expected_reject": true
+ },
+ {
+  "id": "years_009",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "3 years of experience",
+  "expected_min_years": 3,
+  "expected_reject": true
+ },
+ {
+  "id": "years_010",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "4 years of experience",
+  "expected_min_years": 4,
+  "expected_reject": true
+ },
+ {
+  "id": "years_011",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "5+ years",
+  "expected_min_years": 5,
+  "expected_reject": true
+ },
+ {
+  "id": "years_012",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "minimum of 5 years",
+  "expected_min_years": 5,
+  "expected_reject": true
+ },
+ {
+  "id": "years_013",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "6 years",
+  "expected_min_years": 6,
+  "expected_reject": true
+ },
+ {
+  "id": "years_014",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "7+ years of experience",
+  "expected_min_years": 7,
+  "expected_reject": true
+ },
+ {
+  "id": "years_015",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "8 years of experience",
+  "expected_min_years": 8,
+  "expected_reject": true
+ },
+ {
+  "id": "years_016",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "10+ years of experience",
+  "expected_min_years": 10,
+  "expected_reject": true
+ },
+ {
+  "id": "years_017",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "2 years of experience required",
+  "expected_min_years": 2,
+  "expected_reject": true
+ },
+ {
+  "id": "years_018",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "4+ years building backends",
+  "expected_min_years": 4,
+  "expected_reject": true
+ },
+ {
+  "id": "years_019",
+  "kind": "years",
+  "title": "Backend Engineer",
+  "description": "3 yrs experience",
+  "expected_min_years": 3,
+  "expected_reject": true
+ }
+]
