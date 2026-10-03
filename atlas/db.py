@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     urls_json       TEXT,
     description_raw TEXT,
     posted_at       TEXT,
-    fetched_at      TEXT
+    fetched_at      TEXT,
+    emailed_at      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS parsed_jds (
@@ -113,6 +114,7 @@ CREATE TABLE IF NOT EXISTS digests (
     created_at TEXT NOT NULL,
     top_k      INTEGER,
     html       TEXT,
+    text       TEXT,
     sent_at    TEXT
 );
 
@@ -145,7 +147,18 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first released schema (idempotent)."""
+    job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "emailed_at" not in job_cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN emailed_at TEXT")
+    digest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(digests)")}
+    if "text" not in digest_cols:
+        conn.execute("ALTER TABLE digests ADD COLUMN text TEXT")
 
 
 # --------------------------------------------------------------------------- #
@@ -256,6 +269,47 @@ def upsert_job(conn: sqlite3.Connection, run_id: int, job: Job) -> tuple[int, bo
 def job_seen(conn: sqlite3.Connection, dedupe_key: str) -> bool:
     row = conn.execute("SELECT 1 FROM jobs WHERE dedupe_key = ? LIMIT 1", (dedupe_key,)).fetchone()
     return row is not None
+
+
+# --------------------------------------------------------------------------- #
+# Digests + email idempotency
+# --------------------------------------------------------------------------- #
+
+
+def emailed_job_ids(conn: sqlite3.Connection) -> set[int]:
+    rows = conn.execute("SELECT id FROM jobs WHERE emailed_at IS NOT NULL").fetchall()
+    return {int(row["id"]) for row in rows}
+
+
+def mark_jobs_emailed(conn: sqlite3.Connection, job_ids: list[int]) -> None:
+    if not job_ids:
+        return
+    placeholders = ",".join("?" * len(job_ids))
+    conn.execute(
+        f"UPDATE jobs SET emailed_at = ? WHERE id IN ({placeholders})",
+        (_now(), *job_ids),
+    )
+    conn.commit()
+
+
+def save_digest(
+    conn: sqlite3.Connection,
+    run_id: int | None,
+    top_k: int,
+    html: str,
+    text: str | None = None,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO digests (run_id, created_at, top_k, html, text) VALUES (?, ?, ?, ?, ?)",
+        (run_id, _now(), top_k, html, text),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
+    conn.execute("UPDATE digests SET sent_at = ? WHERE id = ?", (_now(), digest_id))
+    conn.commit()
 
 
 # --------------------------------------------------------------------------- #
