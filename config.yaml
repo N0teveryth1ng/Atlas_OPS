@@ -38,6 +38,18 @@ models:
   verifier: "qwen/qwen3.8-27b"
   temperature: 0.0
 
+sources:
+  # Query/search based feeds.
+  remoteok: true
+  remotive: true
+  adzuna: true          # needs ADZUNA_APP_ID / ADZUNA_APP_KEY in .env
+  # Target-company ATS boards (tokens live in companies.yaml).
+  greenhouse: true
+  lever: true
+  ashby: true
+  adzuna_country: "in"
+  results_per_page: 50
+
 ranking:
   weights:
     fit_score: 0.50

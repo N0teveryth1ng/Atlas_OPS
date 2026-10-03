@@ -45,8 +45,8 @@ Design rules:
 - **Phase 0** — audit + repo hygiene + config/logging skeleton. *(done)*
 - **Phase 1** — Pydantic schemas, LLM client, config, SQLite, input modes. *(done)*
 - **Phase 2** — structured JD parsing + hard filters + golden set. *(done)*
-- **Phase 3** — skill ontology / alias map + weighted matching. *(current)*
-- **Phase 4** — collectors, query planner, normalize, dedupe.
+- **Phase 3** — skill ontology / alias map + weighted matching. *(done)*
+- **Phase 4** — collectors, query planner, normalize, dedupe. *(current)*
 - **Phase 5** — evaluator + adversarial verifier.
 - **Phase 6** — ranker, digest, email, scheduling.
 - **Phase 7** — feedback loop + tuning.
@@ -79,9 +79,9 @@ all keys.
 ## Project layout
 
 ```
-atlas/            # pipeline package
+atlas/            # pipeline package (incl. atlas/collectors/)
 config.yaml       # user preferences
-companies.yaml    # target company list (planned)
+companies.yaml    # target company ATS board tokens
 skills.yaml       # skill ontology / alias map
 prompts/          # versioned prompt files
 eval/             # golden set + eval harness
@@ -89,13 +89,32 @@ tests/            # unit tests
 auto_applications/# legacy Playwright bots, retained for Phase 8 (disabled)
 ```
 
+## Sources (Phase 4)
+
+Collectors are pluggable (`atlas/collectors/`) and enabled per-source in
+`config.yaml` under `sources:`. Failures in one source never abort the run.
+
+| Source | Type | Needs |
+|---|---|---|
+| RemoteOK | feed | — |
+| Remotive | feed | — |
+| Adzuna | API | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
+| Greenhouse | ATS board | token in `companies.yaml` |
+| Lever | ATS board | token in `companies.yaml` |
+| Ashby | ATS board | token in `companies.yaml` |
+
+Jobs are stripped of HTML/boilerplate, given a stable dedupe key, merged across
+boards, freshness-filtered, and stored in SQLite. Per-source and per-query yield
+is printed (and recorded in the `runs` summary).
+
 ## CLI
 
 ```bash
 python -m atlas.cli profile --resume resume.pdf --describe "target roles..." --out profile.json
 python -m atlas.cli review profile.json     # review + approve
 python -m atlas.cli status
-python -m atlas.cli eval                     # golden-set evaluation (Phase 2 gate)
+python -m atlas.cli collect                   # fetch + normalize + dedupe (Phase 4)
+python -m atlas.cli eval                     # golden-set evaluation
 ```
 
 ## Testing
