@@ -17,11 +17,13 @@ def render_profile(profile: CandidateProfile) -> str:
         lines.append(
             "Skills: " + ", ".join(f"{s.name} ({s.proficiency.value})" for s in profile.skills)
         )
-    if profile.projects:
-        lines.append(
-            "Projects: "
-            + "; ".join(f"{p.title or '-'} [{', '.join(p.tech)}]" for p in profile.projects)
-        )
+    for project in profile.projects:
+        detail = f"Project: {project.title or '-'} [{', '.join(project.tech)}]"
+        if project.summary:
+            detail += f" - {project.summary}"
+        if project.outcomes:
+            detail += f" (outcomes: {project.outcomes})"
+        lines.append(detail)
     experiences = [
         f"{e.role or '-'} @ {e.company or '-'}" for e in (*profile.internships, *profile.work)
     ]

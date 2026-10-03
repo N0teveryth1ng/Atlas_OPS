@@ -45,6 +45,7 @@ COVERAGE_FLOORS: dict[str, int] = {
     "atlas/emailer.py": 90,
     "atlas/feedback.py": 90,
     "atlas/llm.py": 90,
+    "atlas/decision.py": 90,
 }
 
 SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -639,6 +640,10 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
             if name == "Verdict":
                 return schema(
                     fit_score=85,
+                    seniority_fit=90,
+                    role_fit=85,
+                    growth_fit=75,
+                    company_signal=60,
                     recommendation=Recommendation.apply,
                     reasons_for=[
                         Evidence(quote="Junior Python Developer", source=EvidenceSource.jd)
@@ -686,6 +691,325 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
     )
 
 
+def _dec_base_inputs(settings=None):
+    from .config import get_settings
+    from .schemas import (
+        CandidateProfile,
+        Evidence,
+        EvidenceSource,
+        Recommendation,
+        Verdict,
+        VerifierVerdict,
+    )
+    from .skills import SkillMatch
+
+    settings = settings or get_settings()
+    verdict = Verdict(
+        fit_score=80,
+        seniority_fit=90,
+        role_fit=80,
+        growth_fit=75,
+        company_signal=60,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="backend services in Python", source=EvidenceSource.jd)],
+    )
+    verifier = VerifierVerdict(veto=False)
+    profile = CandidateProfile(
+        total_experience_months=24,
+        skills=[],
+        target_roles=["Backend"],
+    )
+    skill_match = SkillMatch(must_have_coverage=0.9, nice_to_have_coverage=0.6)
+    return settings, verdict, verifier, profile, skill_match
+
+
+def _dec_parsed(settings, *, min_years=None, red_flags=None, remote="remote", confidence=0.95):
+    from .schemas import ParsedJD, RemoteType
+
+    return ParsedJD(
+        title="Backend Engineer",
+        title_seniority="junior",
+        min_years_experience=min_years,
+        max_years_experience=None,
+        must_have_skills=["Python"],
+        nice_to_have_skills=[],
+        education_required=None,
+        employment_type="full-time",
+        location="Earth",
+        remote_type=RemoteType(remote),
+        visa_relocation=None,
+        salary=None,
+        responsibilities_summary=None,
+        red_flags=red_flags or [],
+        confidence=confidence,
+        ambiguities=[],
+    )
+
+
+_OUTCOME_RANK = {"skip": 0, "review": 1, "apply": 2}
+
+
+_APPLY_DIMS = {
+    "skills_core": 90,
+    "seniority_fit": 90,
+    "role_fit": 80,
+    "project_relevance": 70,
+    "skills_secondary": 60,
+    "education_fit": 100,
+    "growth_fit": 75,
+    "logistics_fit": 100,
+}
+
+
+def check_dec1_self_consistency(_: dict) -> CheckResult:
+    """DEC1: the deterministic rule must never change its outcome on identical inputs."""
+    from .decision import decide
+
+    settings, verdict, verifier, profile, skill_match = _dec_base_inputs()
+    flips = 0
+    cases = 20
+    for seed in range(cases):
+        dims = {k: (v + seed * 1.1) % 100 for k, v in _APPLY_DIMS.items()}
+        outcomes = [
+            decide(
+                parsed=_dec_parsed(settings),
+                profile=profile,
+                verdict=verdict,
+                verifier=verifier,
+                skill_match=skill_match,
+                dimensions=dims,
+                settings=settings,
+            ).outcome.value
+            for _ in range(3)
+        ]
+        flips += len(set(outcomes)) - 1
+    if flips:
+        return _bad(
+            "DEC1", "decision rule is self-consistent", f"{flips} outcome flip(s)", mode="fast"
+        )
+    return _ok(
+        "DEC1", "decision rule is self-consistent", f"0 flips across {cases} cases x3", mode="fast"
+    )
+
+
+def check_dec2_seniority_audit(_: dict) -> CheckResult:
+    """DEC2: any stated years-of-experience requirement must block an under-qualified candidate."""
+    from .decision import decide
+
+    settings, verdict, verifier, profile, skill_match = _dec_base_inputs()
+    too_junior = decide(
+        parsed=_dec_parsed(settings, min_years=8),
+        profile=profile,
+        verdict=verdict,
+        verifier=verifier,
+        skill_match=skill_match,
+        dimensions=_APPLY_DIMS,
+        settings=settings,
+    )
+    if too_junior.outcome.value != "skip":
+        return _bad(
+            "DEC2",
+            "seniority vetoes match stated year requirements",
+            "8y requirement not blocked by seniority_years",
+            mode="fast",
+        )
+    ok = decide(
+        parsed=_dec_parsed(settings, min_years=1),
+        profile=profile,
+        verdict=verdict,
+        verifier=verifier,
+        skill_match=skill_match,
+        dimensions=_APPLY_DIMS,
+        settings=settings,
+    )
+    if not any(v.rule_id == "seniority_years" for v in ok.vetoes):
+        return _ok(
+            "DEC2",
+            "seniority vetoes match stated year requirements",
+            "min_years gates applied correctly",
+            mode="fast",
+        )
+    return _bad(
+        "DEC2",
+        "seniority vetoes match stated year requirements",
+        "1y requirement wrongly flagged as seniority mismatch",
+        mode="fast",
+    )
+
+
+def check_dec3_evidence_audit(_: dict) -> CheckResult:
+    """DEC3: decision dimensions (project_relevance, critic) cite verbatim evidence."""
+    from .evidence import validate_critic, validate_project_relevance
+    from .schemas import (
+        DecisionCritic,
+        Evidence,
+        EvidenceSource,
+        ProjectRelevance,
+        ProjectRelevanceItem,
+    )
+
+    jd_text = "We need a Senior Python developer with 3+ years and AWS."
+    profile_text = "Project: web app built in Python and AWS."
+    item = ProjectRelevanceItem(
+        project="web app",
+        score=90,
+        jd_evidence=[
+            Evidence(quote="Senior Python developer with 3+ years", source=EvidenceSource.jd)
+        ],
+        profile_evidence=[Evidence(quote="built in Python and AWS", source=EvidenceSource.profile)],
+    )
+    rel = ProjectRelevance(per_project=[item], overall=90)
+    if validate_project_relevance(rel, jd_text, profile_text):
+        return _bad(
+            "DEC3",
+            "decision dimensions cite verbatim evidence",
+            "valid quotes rejected",
+            mode="fast",
+        )
+    bad_rel = ProjectRelevance(
+        per_project=[
+            item.model_copy(
+                update={
+                    "jd_evidence": [
+                        Evidence(quote="totally fabricated claim", source=EvidenceSource.jd)
+                    ]
+                }
+            )
+        ],
+        overall=90,
+    )
+    if not validate_project_relevance(bad_rel, jd_text, profile_text):
+        return _bad(
+            "DEC3",
+            "decision dimensions cite verbatim evidence",
+            "fabricated quote accepted",
+            mode="fast",
+        )
+    critic = DecisionCritic(
+        propose_veto=True,
+        strongest_reason=Evidence(quote="Senior Python developer", source=EvidenceSource.jd),
+        reasons_against=[Evidence(quote="3+ years", source=EvidenceSource.jd)],
+    )
+    if validate_critic(critic, jd_text, profile_text):
+        return _bad("DEC3", "critic cites verbatim evidence", "valid critic rejected", mode="fast")
+    critic.strongest_reason = Evidence(quote="nope not real anywhere", source=EvidenceSource.jd)
+    if not validate_critic(critic, jd_text, profile_text):
+        return _bad(
+            "DEC3", "critic cites verbatim evidence", "invalid critic accepted", mode="fast"
+        )
+    return _ok(
+        "DEC3",
+        "decision dimensions cite verbatim evidence",
+        "relevance + critic validated",
+        mode="fast",
+    )
+
+
+def check_dec4_counterfactual(_: dict) -> CheckResult:
+    """DEC4: adding a disqualifier never yields a more permissive outcome."""
+    from .decision import decide
+    from .schemas import DecisionCritic, Evidence, EvidenceSource
+
+    settings, verdict, verifier, profile, skill_match = _dec_base_inputs()
+    base = decide(
+        parsed=_dec_parsed(settings),
+        profile=profile,
+        verdict=verdict,
+        verifier=verifier,
+        skill_match=skill_match,
+        dimensions=_APPLY_DIMS,
+        settings=settings,
+    )
+    base_rank = _OUTCOME_RANK[base.outcome.value]
+    if base_rank < _OUTCOME_RANK["apply"]:
+        return _bad(
+            "DEC4",
+            "counteractual outcomes are monotonic",
+            f"base not apply ({base.outcome.value})",
+            mode="fast",
+        )
+    critic = DecisionCritic(
+        propose_veto=True, strongest_reason=Evidence(quote="years", source=EvidenceSource.jd)
+    )
+    perturbations = [
+        ("seniority_years", _dec_parsed(settings, min_years=8), None),
+        ("coverage_floor", _dec_parsed(settings), {**_APPLY_DIMS, "skills_core": 0}),
+        ("critic_veto", _dec_parsed(settings), None),
+    ]
+    for name, parsed, dims in perturbations:
+        result = decide(
+            parsed=parsed,
+            profile=profile,
+            verdict=verdict,
+            verifier=verifier,
+            skill_match=skill_match,
+            dimensions=dims or _APPLY_DIMS,
+            critic=critic,
+            settings=settings,
+        )
+        if _OUTCOME_RANK[result.outcome.value] > base_rank:
+            return _bad(
+                "DEC4",
+                "counterfactual outcomes are monotonic",
+                f"{name} more permissive",
+                mode="fast",
+            )
+    return _ok(
+        "DEC4", "counterfactual outcomes are monotonic", "disqualifiers never promote", mode="fast"
+    )
+
+
+def check_dec5_sensitivity(_: dict) -> CheckResult:
+    """DEC5: adding a risk flag never raises a decision outcome."""
+    from .decision import decide
+
+    settings, verdict, verifier, profile, skill_match = _dec_base_inputs()
+    high = decide(
+        parsed=_dec_parsed(settings),
+        profile=profile,
+        verdict=verdict,
+        verifier=verifier,
+        skill_match=skill_match,
+        dimensions=_APPLY_DIMS,
+        settings=settings,
+    )
+    penalized = decide(
+        parsed=_dec_parsed(settings, red_flags=["contract-to-hire", "on-call rotation"]),
+        profile=profile,
+        verdict=verdict,
+        verifier=verifier,
+        skill_match=skill_match,
+        dimensions=_APPLY_DIMS,
+        settings=settings,
+    )
+    if penalized.match_score > high.match_score:
+        return _bad(
+            "DEC5",
+            "score is monotonic under added red flags",
+            f"{penalized.match_score} > {high.match_score}",
+            mode="fast",
+        )
+    if _OUTCOME_RANK[penalized.outcome.value] > _OUTCOME_RANK[high.outcome.value]:
+        return _bad(
+            "DEC5",
+            "outcome is monotonic under added red flags",
+            f"{penalized.outcome.value} > {high.outcome.value}",
+            mode="fast",
+        )
+    return _ok(
+        "DEC5", "score is monotonic under added red flags", "flags only lower score", mode="fast"
+    )
+
+
+def check_dec6_human_labels(_: dict) -> CheckResult:
+    return _blocked(
+        "DEC6",
+        "decision outcomes have human-labelled ground truth",
+        "no human-labelled decision labels",
+        mode="fast",
+    )
+
+
 FAST_CHECKS: list[Callable[[dict], CheckResult]] = [
     check_h1_working_tree,
     check_h2_tree_secrets,
@@ -700,6 +1024,12 @@ FAST_CHECKS: list[Callable[[dict], CheckResult]] = [
     check_g5_golden_provenance,
     check_g3_seniority_matrix,
     check_l5_verifier_invariant,
+    check_dec1_self_consistency,
+    check_dec2_seniority_audit,
+    check_dec3_evidence_audit,
+    check_dec4_counterfactual,
+    check_dec5_sensitivity,
+    check_dec6_human_labels,
     check_d3_quote_validation,
     check_d4_status_machine,
     check_d1_email_idempotency,

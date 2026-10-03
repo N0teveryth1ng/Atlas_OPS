@@ -2,8 +2,8 @@
 
 - **Auditor role:** hostile auditor (not author).
 - **Scope:** everything in `Atlas_OPS_preflight_prompt.md` §§0–13.
-- **Branch audited:** `remediate/preflight-phase8` (base `main` @ `21fb374`).
-- **Self-check SHA:** `cd9c2f7` (see `selfcheck_report.json:git_sha`).
+- **Branch audited:** `decision-engine` (base `main` @ `f4bb4a0`).
+- **Self-check SHA:** `f4bb4a0` (see `selfcheck_report.json:git_sha`).
 - **Toolchain:** Python 3.11.9, pytest 9.1.1, ruff 0.16.10, black 26.5.1, mypy 2.4.0.
   Models (config): extractor/evaluator `openai/gpt-oss-120b`, verifier
   `qwen/qwen3.8-27b`. Prompt versions: extractor `v1`, evaluator `v2`, verifier `v2`.
@@ -31,7 +31,7 @@ BLOCKED**), and the owner's key-rotation/sign-off confirmations (**G1/G11**).
 | Gate | Status | Evidence command | Notes |
 |---|---|---|---|
 | G1 | **FAIL** | `python -m atlas.cli selfcheck --full` | H1 FAIL only because this is a remediation branch (not `main`); H2–H7 PASS, H3 history scan PASS. Owner must confirm key rotation, then merge to `main` and re-run. |
-| G2 | **PASS/BLOCKED** | `python -m atlas.cli selfcheck --full` | T1 PASS (493), T2 PASS (floors met), T3 PASS (ruff+black+mypy clean), T4 PASS (4 stable runs), T6 PASS, T7 PASS; T5 BLOCKED (mutmut needs WSL/Linux). |
+| G2 | **PASS/BLOCKED** | `python -m atlas.cli selfcheck --full` | T1 PASS (517), T2 PASS (floors met), T3 PASS (ruff+black+mypy clean), T4 PASS (4 stable runs), T6 PASS, T7 PASS; T5 BLOCKED (mutmut needs WSL/Linux). |
 | G3 | **BLOCKED** | `python -m atlas.cli selfcheck --full`; `python -m pytest tests/test_seniority_matrix.py` | Matrix 100% on 316 cases; 0 pass-throughs on the synthetic set. Real-set verification awaits G5. |
 | G4 | **BLOCKED** | `python -m atlas.cli eval` | 100% year extraction, but on **synthetic** cases; no real set. |
 | G5 | **BLOCKED** | `python -m atlas.cli selfcheck --fast` | `20 cases; count 20 < 40; missing provenance`. Owner must supply real labelled JDs. |
@@ -41,6 +41,8 @@ BLOCKED**), and the owner's key-rotation/sign-off confirmations (**G1/G11**).
 | G9 | **PASS** | `python -m atlas.cli selfcheck --fast` | D1 idempotency PASS; D4 status-machine bypass test PASS; E2E dry run PASS; `sent ⊆ passed` hypothesis invariant PASS. |
 | G10 | **PASS** | `python -m atlas.cli selfcheck --fast` | D3 evidence-substring validation PASS (present accepted, fabricated rejected); D4 state machine PASS. |
 | G11 | **BLOCKED** | `review_sample.md` | Owner sign-off is a human action; not performed. |
+| DEC1–DEC5 | **PASS** | `python -m atlas.cli selfcheck --fast` | Decision rule self-consistent (0 flips); seniority-year vetoes correct; `project_relevance`+`critic` cite verbatim evidence; counterfactuals monotonic (disqualifiers never promote); score monotonic under added red flags. |
+| DEC6 | **BLOCKED** | `python -m atlas.cli selfcheck --fast` | Decision outcomes have no human-labelled ground truth yet; use the feedback loop (`atlas feedback`) to grow labelled decision cases. |
 
 ---
 
@@ -99,16 +101,17 @@ Command: `python -m atlas.cli eval`.
 
 ### Coverage (T2, `--cov --cov-branch`)
 All floors (≥90%) met: `filters` 98%, `jd_parser` 99%, `skills` 100%,
-`ranker` 100%, `digest` 92%, `emailer` 93%, `feedback` 96%, `llm` 98%.
+`ranker` 100%, `digest` 92%, `emailer` 93%, `feedback` 96%, `llm` 98%,
+`decision` 100%.
 
 ### Tests
-- `493 passed`, 0 skipped, 0 xfail.
+- `517 passed`, 0 skipped, 0 xfail.
 - T4 stable across 3 fixed-order runs + 1 random-order run.
 
 ### Lint / format / types (T3)
 - `ruff check atlas tests` — clean.
 - `black --check atlas tests` — clean.
-- `mypy atlas` — clean (37 source files).
+- `mypy atlas` — clean (38 source files).
 - `vulture atlas --min-confidence 80` — clean.
 
 ---

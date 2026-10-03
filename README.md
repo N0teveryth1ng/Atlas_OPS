@@ -27,7 +27,7 @@ Resume/description -> Profile Agent -> profile.json (human-approved once)
                     -> Query Planner -> Collectors -> Normalize + Dedupe (SQLite)
                     -> JD Parser (regex + LLM) -> Hard Filter (code)
                     -> Skill Match -> Evaluator (LLM) -> Verifier (adversarial)
-                    -> Ranker -> Digest + Email -> Feedback
+                    -> Decision Engine -> Ranker -> Digest + Email -> Feedback
 ```
 
 Design rules:
@@ -50,6 +50,8 @@ Design rules:
 - **Phase 5** — evaluator + adversarial verifier. *(done)*
 - **Phase 6** — ranker, digest, email, scheduling. *(done)*
 - **Phase 7** — feedback loop + tuning. *(done)*
+- **Decision Engine** — explicit `apply`/`review`/`skip` with vetoes, confidence,
+  and a full audit trail (`atlas/decision.py`, `atlas.cli decide/explain`). *(done)*
 - **Phase 8 (deferred)** — tailoring / assisted applying. Blocked until the
   pre-Phase-8 audit gates pass (`python -m atlas.cli selfcheck --full`).
 
@@ -134,6 +136,36 @@ parse (regex + LLM) -> hard filter (code) -> skill match -> evaluator (LLM)
 Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
 `filter_results`, `evaluations`, `verifications`), so any decision is traceable.
 
+## Decision engine
+
+`atlas/decision.py` turns a verified evaluation into an explicit
+**`apply` / `review` / `skip`** outcome with a fully auditable record. It reuses
+the evaluator `Verdict` (role/growth/seniority fit) and the adversarial verifier
+veto/downgrade, and adds only two LLM judgements: **`project_relevance`**
+(are the candidate's projects relevant to this JD?) and an adversarial
+**`decision_critic`** (argue against applying).
+
+- **Pure dimensions** — `skills_core`, `skills_secondary`, `education_fit`,
+  `logistics_fit`, `project_relevance`, `role_fit`, `growth_fit`,
+  `seniority_fit` — weighted per `config.yaml: decision.weights` (must sum to
+  1.0), with a bounded red-flag penalty.
+- **Hard vetoes** (force `skip`): must-have coverage below
+  `decision.coverage_floor`, insufficient years (with `EXPERIENCE_TOLERANCE_YEARS`
+  = 1y), `seniority_fit` below `decision.seniority_floor`, a verifier veto, or a
+  critic veto. Soft vetoes (e.g. a verifier downgrade) force `review` instead.
+- **Deterministic rule** — `hard veto -> skip`; `soft veto or confidence <
+  decision.c_min -> review`; `score >= decision.apply and confidence >=
+  decision.c_apply -> apply`; `score >= decision.review -> review`; else `skip`.
+  Confidence blends parse quality, sample spread, evaluator/verifier agreement,
+  evidence validity, and margin over the apply threshold.
+- **Audit trail** — each `Decision` stores dimension scores, weights, spreads,
+  vetoes with verbatim evidence, `config_hash`, prompt versions, and model
+  names; it is persisted in the `decisions` table. All LLM evidence quotes are
+  validated verbatim against the JD/profile (see `atlas/evidence.py`).
+
+Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
+`filter_results`, `evaluations`, `verifications`, `decisions`).
+
 ## Digest, email, scheduling (Phase 6)
 
 - **Digest** (`atlas/digest.py`) — one digest per run, grouped into **Strong
@@ -180,6 +212,9 @@ python -m atlas.cli collect                   # fetch + normalize + dedupe (Phas
 python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank -> email
 python -m atlas.cli run --collect --limit 50  # fetch first, then process
 python -m atlas.cli run --no-email            # build + print the digest only
+python -m atlas.cli decide                    # default: decision engine dry-run (no email)
+python -m atlas.cli decide --limit 25         # dry-run decision engine over <=25 jobs
+python -m atlas.cli explain <job_id>          # show the latest stored decision for a job
 python -m atlas.cli schedule --hour 9         # run now, then daily at 09:00
 python -m atlas.cli eval                     # golden-set evaluation (deterministic)
 python -m atlas.cli eval --with-llm          # + live LLM precision@10 gate

@@ -59,5 +59,33 @@ ranking:
     seniority_fit: 0.15
     preference_bonus: 0.05
 
+decision:
+  # Whole-profile vs whole-job decision engine. Weights MUST sum to 1.0.
+  weights:
+    skills_core: 0.30
+    seniority_fit: 0.20
+    role_fit: 0.15
+    project_relevance: 0.15
+    skills_secondary: 0.05
+    education_fit: 0.05
+    growth_fit: 0.05
+    logistics_fit: 0.05
+  # Conservative by default: a missed job is cheaper than a wrong application.
+  apply_threshold: 80
+  review_threshold: 65
+  # Confidence gates: below c_min -> review; apply also needs >= c_apply.
+  c_min: 0.5
+  c_apply: 0.75
+  # Veto floors.
+  seniority_floor: 50
+  coverage_floor: 0.6
+  # Each JD red flag subtracts this many points, capped by max_risk_penalty.
+  risk_penalty_per_flag: 10
+  max_risk_penalty: 40
+  # LLM-scored dimensions are sampled N times; spread above the limit lowers confidence.
+  samples: 3
+  spread_limit: 15
+  margin_scale: 20
+
 schedule:
   daily_hour: 9

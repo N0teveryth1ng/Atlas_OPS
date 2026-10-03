@@ -9,13 +9,14 @@ Import ``get_settings()`` anywhere; the file is read once and cached.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from functools import lru_cache
 from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "config.yaml"
@@ -79,6 +80,46 @@ class RankingConfig(BaseModel):
     weights: RankingWeights = Field(default_factory=RankingWeights)
 
 
+class DecisionWeights(BaseModel):
+    """Weights for the decision-engine dimensions. Must sum to 1.0."""
+
+    skills_core: float = 0.30
+    seniority_fit: float = 0.20
+    role_fit: float = 0.15
+    project_relevance: float = 0.15
+    skills_secondary: float = 0.05
+    education_fit: float = 0.05
+    growth_fit: float = 0.05
+    logistics_fit: float = 0.05
+
+    @model_validator(mode="after")
+    def _weights_sum_to_one(self) -> DecisionWeights:
+        total = sum(self.model_dump().values())
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"decision weights must sum to 1.0 (got {total:.4f})")
+        return self
+
+
+class DecisionConfig(BaseModel):
+    """Thresholds and floors for the deterministic decision rule (section 4)."""
+
+    weights: DecisionWeights = Field(default_factory=DecisionWeights)
+    apply_threshold: float = 80.0
+    review_threshold: float = 65.0
+    c_min: float = 0.5
+    c_apply: float = 0.75
+    seniority_floor: float = 50.0
+    coverage_floor: float = 0.6
+    # Risk flags each subtract this many points, capped at ``max_risk_penalty``.
+    risk_penalty_per_flag: float = 10.0
+    max_risk_penalty: float = 40.0
+    # LLM-scored dimensions are sampled this many times; spread above
+    # ``spread_limit`` lowers confidence.
+    samples: int = 3
+    spread_limit: float = 15.0
+    margin_scale: float = 20.0
+
+
 class ScheduleConfig(BaseModel):
     daily_hour: int = 9
 
@@ -102,6 +143,7 @@ class Settings(BaseModel):
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     ranking: RankingConfig = Field(default_factory=RankingConfig)
+    decision: DecisionConfig = Field(default_factory=DecisionConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     secrets: Secrets = Field(default_factory=Secrets)
 
@@ -134,3 +176,13 @@ def load_settings(config_path: Path | str = CONFIG_PATH) -> Settings:
 def get_settings() -> Settings:
     """Cached accessor used everywhere in the pipeline."""
     return load_settings()
+
+
+def config_hash() -> str:
+    """Short fingerprint of the behaviour-defining config files."""
+    digest = hashlib.sha256()
+    for name in ("config.yaml", "skills.yaml"):
+        path = REPO_ROOT / name
+        if path.exists():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]

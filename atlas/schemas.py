@@ -284,6 +284,80 @@ class VerifierVerdict(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Decision engine (apply / skip / review)
+# --------------------------------------------------------------------------- #
+
+
+class DecisionOutcome(str, Enum):
+    apply = "apply"
+    review = "review"
+    skip = "skip"
+
+
+class ProjectRelevanceItem(BaseModel):
+    """One profile project scored against the job's responsibilities."""
+
+    project: str = ""
+    score: float = Field(default=0, ge=0, le=100)
+    jd_evidence: list[Evidence] = Field(default_factory=list)
+    profile_evidence: list[Evidence] = Field(default_factory=list)
+    rationale: str = ""
+
+
+class ProjectRelevance(BaseModel):
+    """LLM output for the ``project_relevance`` decision dimension."""
+
+    per_project: list[ProjectRelevanceItem] = Field(default_factory=list)
+    overall: float = Field(default=0, ge=0, le=100)
+
+
+class DecisionCritic(BaseModel):
+    """Adversarial final critic; may propose a veto with evidence."""
+
+    propose_veto: bool = False
+    strongest_reason: Evidence | None = None
+    reasons_against: list[Evidence] = Field(default_factory=list)
+
+
+class DimensionScore(BaseModel):
+    """One scored decision dimension and where its value came from."""
+
+    name: str
+    score: float = Field(ge=0, le=100)
+    spread: float = 0.0
+    source: str = "code"
+
+
+class Veto(BaseModel):
+    """A rule that overrides the aggregate score."""
+
+    rule_id: str
+    reason: str
+    hard: bool = True
+    evidence: Evidence | None = None
+
+
+class Decision(BaseModel):
+    """The full, auditable decision record for one job."""
+
+    outcome: DecisionOutcome
+    match_score: float = 0.0
+    confidence: float = 0.0
+    dimensions: dict[str, float] = Field(default_factory=dict)
+    spreads: dict[str, float] = Field(default_factory=dict)
+    weights: dict[str, float] = Field(default_factory=dict)
+    risk_penalty: float = 0.0
+    vetoes: list[Veto] = Field(default_factory=list)
+    reasons_for: list[Evidence] = Field(default_factory=list)
+    reasons_against: list[Evidence] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    prompt_versions: dict[str, str] = Field(default_factory=dict)
+    model_names: dict[str, str] = Field(default_factory=dict)
+    config_hash: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
 # Hard filter
 # --------------------------------------------------------------------------- #
 

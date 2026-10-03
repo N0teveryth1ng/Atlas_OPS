@@ -6,6 +6,9 @@ import json
 
 from atlas.llm import LLMClient
 
+_BENIGN_PROJECT_RELEVANCE = {"per_project": [], "overall": 50}
+_BENIGN_CRITIC = {"propose_veto": False, "strongest_reason": None, "reasons_against": []}
+
 
 class _Msg:
     def __init__(self, content):
@@ -42,8 +45,22 @@ class FakeClient:
         self.chat = _Chat(handler)
 
 
-def make_client(*, parsed=None, verdict=None, verifier=None):
-    """Route canned payloads by inspecting the system prompt."""
+def make_client(
+    *,
+    parsed=None,
+    verdict=None,
+    verifier=None,
+    project_relevance=None,
+    critic=None,
+):
+    """Route canned payloads by inspecting the system prompt.
+
+    Missing LLM dimensions default to benign values so existing tests that only
+    exercise parse/evaluate/verify keep working without opting in.
+    """
+
+    project = project_relevance if project_relevance is not None else _BENIGN_PROJECT_RELEVANCE
+    critic_payload = critic if critic is not None else _BENIGN_CRITIC
 
     def handler(kwargs):
         system = kwargs["messages"][0]["content"]
@@ -51,6 +68,10 @@ def make_client(*, parsed=None, verdict=None, verifier=None):
             payload = verifier
         elif "structured requirements" in system:
             payload = parsed
+        elif "project-to-role relevance analyst" in system:
+            payload = project
+        elif "adversarial final decision critic" in system:
+            payload = critic_payload
         else:
             payload = verdict
         if payload is None:

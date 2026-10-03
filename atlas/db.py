@@ -110,6 +110,15 @@ CREATE TABLE IF NOT EXISTS verifications (
     data_json      TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS decisions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id         INTEGER REFERENCES jobs(id),
+    model          TEXT,
+    prompt_version TEXT,
+    created_at     TEXT NOT NULL,
+    data_json      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS digests (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id     INTEGER REFERENCES runs(id),
@@ -300,6 +309,13 @@ def set_job_status(conn: sqlite3.Connection, job_id: int, new_status: JobStatus)
 # --------------------------------------------------------------------------- #
 # Digests + email idempotency
 # --------------------------------------------------------------------------- #
+
+
+def get_latest_decision(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT data_json FROM decisions WHERE job_id = ? ORDER BY id DESC LIMIT 1", (job_id,)
+    ).fetchone()
+    return json.loads(row["data_json"]) if row is not None else None
 
 
 def emailed_job_ids(conn: sqlite3.Connection) -> set[int]:
