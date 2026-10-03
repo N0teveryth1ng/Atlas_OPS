@@ -21,10 +21,11 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, cast
 
 from .config import REPO_ROOT, get_settings
 from .prompt_store import load_prompt
@@ -58,7 +59,7 @@ SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 PII_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("phone_in", re.compile(r"\+91[\s-]?\d{10}")),
     ("windows_user_path", re.compile(r"C:\\Users\\[^\"'\s]+")),
-    ("resume_path", re.compile(r"Soham[_\s]Das", re.I)),
+    ("resume_path", re.compile(r"Soham[_\s]Das", re.IGNORECASE)),
 ]
 
 REQUIRED_IGNORES = [
@@ -75,7 +76,7 @@ REQUIRED_IGNORES = [
 
 SENSITIVE_TRACKED = re.compile(
     r"(^|/)(\.env$|.*\.(pem|key|p12|pfx)$|profile\.json$|.*\.db$|.*\.sqlite3?$)",
-    re.I,
+    re.IGNORECASE,
 )
 
 
@@ -124,7 +125,12 @@ class SelfCheckReport:
 def _git_sha() -> str:
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=20
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
         )
         return out.stdout.strip() if out.returncode == 0 else "unknown"
     except Exception:  # noqa: BLE001
@@ -153,7 +159,12 @@ def _prompt_versions() -> dict[str, str]:
 
 def _tracked_files() -> list[str]:
     out = subprocess.run(
-        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, timeout=30
+        ["git", "ls-files"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     if out.returncode != 0:
         return []
@@ -170,7 +181,12 @@ def _read_text(path: Path) -> str:
 def _run(cmd: list[str], timeout: int = 600) -> tuple[int, str]:
     try:
         out = subprocess.run(
-            cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout
+            cmd,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
         )
         combined = (out.stdout or "") + (out.stderr or "")
         return out.returncode, combined
@@ -181,9 +197,12 @@ def _run(cmd: list[str], timeout: int = 600) -> tuple[int, str]:
 
 
 def _module_available(name: str) -> bool:
-    return subprocess.run(
-        [sys.executable, "-c", f"import {name}"], capture_output=True
-    ).returncode == 0
+    return (
+        subprocess.run(
+            [sys.executable, "-c", f"import {name}"], capture_output=True, check=False
+        ).returncode
+        == 0
+    )
 
 
 def _ok(cid: str, name: str, evidence: str, detail: list[str] | None = None, mode: str = "fast"):
@@ -217,7 +236,7 @@ def check_h1_working_tree(_: dict) -> CheckResult:
     if not problems:
         behind_rc, behind = _run(["git", "rev-list", "--left-right", "--count", "HEAD...origin/main"])
         if behind_rc == 0 and behind.strip():
-            left, _, right = behind.strip().partition("\t")
+            _left, _sep, right = behind.strip().partition("\t")
             if right.strip() and right.strip() != "0":
                 problems.append(f"{right.strip()} commit(s) behind origin/main")
     if problems:
@@ -433,6 +452,7 @@ def check_l5_verifier_invariant(_: dict) -> CheckResult:
 
 
 def check_d1_email_idempotency(_: dict) -> CheckResult:
+    from .config import Settings
     from .db import (
         connect,
         emailed_job_ids,
@@ -443,7 +463,6 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
     )
     from .digest import build_digest
     from .emailer import ResendEmailer, send_digest
-    from .config import Settings
     from .job_status import JobStatus
     from .pipeline import ProcessedJob
     from .schemas import (
@@ -467,7 +486,7 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
         url="https://x/1",
         dedupe_key="selfcheck-d1",
     )
-    job_id, _ = upsert_job(conn, run_id, job)
+    job_id, _created = upsert_job(conn, run_id, job)
     result = ProcessedJob(
         job_id=job_id,
         job=job,
@@ -510,7 +529,14 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
 
 def check_e2e_dryrun(_: dict) -> CheckResult:
     from .config import Settings
-    from .db import connect, get_latest_profile, init_db, save_profile, start_run, upsert_job
+    from .db import (
+        connect,
+        get_latest_profile,
+        init_db,
+        save_profile,
+        start_run,
+        upsert_job,
+    )
     from .digest import build_digest
     from .pipeline import run_pipeline
     from .schemas import (
@@ -564,7 +590,10 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
         ),
     )
     stored = get_latest_profile(conn)
-    results = run_pipeline(conn, run_id, stored, settings, FakeLLM())
+    if stored is None:
+        conn.close()
+        return _bad("E2E", "end-to-end dry run (fake LLM, no network)", "no stored profile")
+    results = run_pipeline(conn, run_id, stored, settings, cast(Any, FakeLLM()))
     digest = build_digest(results, settings, run_id=run_id)
     conn.close()
     if not results or digest.is_empty():
@@ -608,6 +637,7 @@ def check_h3_history_secrets(_: dict) -> CheckResult:
             capture_output=True,
             text=True,
             timeout=180,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return _blocked("H3", "no secrets in git history", "history scan timed out")
@@ -628,7 +658,7 @@ def check_t1_tests(_: dict) -> CheckResult:
 
 
 def check_t2_coverage(_: dict) -> CheckResult:
-    rc, output = _run(
+    rc, _output = _run(
         [
             sys.executable,
             "-m",
@@ -667,19 +697,19 @@ def check_t3_lint_format_types(_: dict) -> CheckResult:
     black = _module_available("black")
     mypy = _module_available("mypy")
     if ruff:
-        rc, _ = _run([sys.executable, "-m", "ruff", "check", "atlas", "tests"], timeout=300)
+        rc, _out = _run([sys.executable, "-m", "ruff", "check", "atlas", "tests"], timeout=300)
         if rc != 0:
             problems.append("ruff")
     else:
         problems.append("ruff:unavailable")
     if black:
-        rc, _ = _run([sys.executable, "-m", "black", "--check", "atlas", "tests"], timeout=300)
+        rc, _out = _run([sys.executable, "-m", "black", "--check", "atlas", "tests"], timeout=300)
         if rc != 0:
             problems.append("black")
     else:
         problems.append("black:unavailable")
     if mypy:
-        rc, _ = _run([sys.executable, "-m", "mypy", "atlas"], timeout=300)
+        rc, _out = _run([sys.executable, "-m", "mypy", "atlas"], timeout=300)
         if rc != 0:
             problems.append("mypy")
     else:
@@ -696,7 +726,7 @@ def _pytest_signature(output: str) -> str:
 
 def check_t4_flaky(_: dict) -> CheckResult:
     signatures: list[str] = []
-    for _ in range(3):
+    for _run_index in range(3):
         rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly"], timeout=600)
         if rc != 0:
             return _bad("T4", "suite is not order/run dependent", f"run rc={rc}", [output[-400:]], mode="full")
@@ -795,8 +825,10 @@ def run_checks(
 
 def format_report(report: SelfCheckReport) -> str:
     lines = [
-        f"Atlas self-check ({report.mode})  sha={report.git_sha[:12]}  "
-        f"config={report.config_hash}",
+        (
+            f"Atlas self-check ({report.mode})  sha={report.git_sha[:12]}  "
+            f"config={report.config_hash}"
+        ),
     ]
     for check in report.checks:
         lines.append(f"{check.id:>4} | {check.name:<44} | {check.status:<7} | {check.evidence}")

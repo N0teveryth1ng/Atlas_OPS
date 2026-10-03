@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 
 from atlas.normalize import (
     dedupe_jobs,
@@ -12,7 +11,7 @@ from atlas.schemas import Job, RemoteType
 
 
 def _job(**kwargs) -> Job:
-    base = dict(source="test", title="Backend Engineer", company="Acme", location="Pune", url="http://a")
+    base = {"source": "test", "title": "Backend Engineer", "company": "Acme", "location": "Pune", "url": "http://a"}
     base.update(kwargs)
     return Job(**base)
 

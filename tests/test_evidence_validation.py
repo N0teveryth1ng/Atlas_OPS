@@ -13,12 +13,12 @@ import pytest
 
 from atlas.config import get_settings
 from atlas.db import connect, init_db, save_profile, start_run, upsert_job
+from atlas.evaluator import evaluate_job
 from atlas.evidence import (
     EvidenceValidationError,
     validate_verdict_evidence,
     validate_verifier_evidence,
 )
-from atlas.evaluator import evaluate_job
 from atlas.llm import LLMClient
 from atlas.pipeline import process_job
 from atlas.schemas import (

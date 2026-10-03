@@ -118,10 +118,14 @@ def evaluate(cases: list[EvalCase] | None = None, *, settings: Settings | None =
 def format_report(report: EvalReport) -> str:
     lines = [
         f"Golden set cases:            {report.total}",
-        f"Year-extraction accuracy:    {report.year_accuracy:.1%} "
-        f"({report.year_correct}/{report.year_checked}) target >= {YEAR_ACCURACY_TARGET:.0%}",
-        f"Experience pass-throughs:    {len(report.experience_pass_through)} (must be 0) "
-        f"{report.experience_pass_through}",
+        (
+            f"Year-extraction accuracy:    {report.year_accuracy:.1%} "
+            f"({report.year_correct}/{report.year_checked}) target >= {YEAR_ACCURACY_TARGET:.0%}"
+        ),
+        (
+            f"Experience pass-throughs:    {len(report.experience_pass_through)} (must be 0) "
+            f"{report.experience_pass_through}"
+        ),
         f"False rejects (apply->skip): {report.false_rejects}",
         f"Label inconsistencies:       {report.label_inconsistencies}",
         f"RESULT:                      {'PASS' if report.accepted else 'FAIL'}",
@@ -209,8 +213,10 @@ def format_skill_report(report: SkillEvalReport) -> str:
         [
             f"Skill cases:                 {report.total}",
             f"Baseline (set-overlap):      {report.baseline_accuracy:.1%} ({report.baseline_correct}/{report.total})",
-            f"Ontology matcher:            {report.new_accuracy:.1%} ({report.new_correct}/{report.total}) "
-            f"target >= {SKILL_ACCURACY_TARGET:.0%}",
+            (
+                f"Ontology matcher:            {report.new_accuracy:.1%} "
+                f"({report.new_correct}/{report.total}) target >= {SKILL_ACCURACY_TARGET:.0%}"
+            ),
             f"Matcher failures:            {report.failures}",
             f"RESULT:                      {'PASS' if report.accepted else 'FAIL'}",
         ]

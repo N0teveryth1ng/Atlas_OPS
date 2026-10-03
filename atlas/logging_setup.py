@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from pathlib import Path
 
 from .config import REPO_ROOT
 
@@ -22,7 +21,7 @@ _run_id: str = "-"
 
 
 class _RunIdFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D102
+    def filter(self, record: logging.LogRecord) -> bool:
         record.run_id = _run_id
         return True
 

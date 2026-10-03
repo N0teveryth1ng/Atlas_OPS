@@ -1,3 +1,5 @@
+from fake_llm import make_client
+
 from atlas.config import get_settings
 from atlas.evaluator import evaluate_job
 from atlas.ranker import final_score, preference_bonus, rank
@@ -12,7 +14,6 @@ from atlas.schemas import (
 )
 from atlas.skills import SkillMatch
 from atlas.verifier import resolve_recommendation, verify_job
-from fake_llm import make_client
 
 EVAL_PAYLOAD = {
     "fit_score": 82,

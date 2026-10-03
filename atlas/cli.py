@@ -13,18 +13,24 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
 
 from . import __version__
 from .config import REPO_ROOT, get_settings
-from .db import connect, finish_run, get_latest_profile, init_db, save_profile, start_run
+from .db import (
+    connect,
+    finish_run,
+    get_latest_profile,
+    init_db,
+    save_profile,
+    start_run,
+)
 from .llm import LLMClient
 from .logging_setup import setup_logging
 from .profile_agent import build_profile, render_profile_summary
-from .schemas import CandidateProfile, ExperienceLevel
+from .schemas import CandidateProfile
 
 logger = logging.getLogger(__name__)
 
@@ -449,10 +455,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")  # never crash on odd job titles
-        except (AttributeError, ValueError):
-            pass
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")  # never crash on odd job titles
+            except (AttributeError, ValueError):
+                pass
     args = build_parser().parse_args(argv)
     setup_logging()
     return args.func(args)

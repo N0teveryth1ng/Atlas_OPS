@@ -103,7 +103,9 @@ def resolve_recommendation(verdict: Verdict, verifier: VerifierVerdict) -> Recom
     if verifier.veto:
         return Recommendation.skip
     final = verdict.recommendation
-    if verifier.downgrade_to is not None:
-        if _RECOMMENDATION_RANK[verifier.downgrade_to] < _RECOMMENDATION_RANK[final]:
-            final = verifier.downgrade_to
+    if (
+        verifier.downgrade_to is not None
+        and _RECOMMENDATION_RANK[verifier.downgrade_to] < _RECOMMENDATION_RANK[final]
+    ):
+        final = verifier.downgrade_to
     return final

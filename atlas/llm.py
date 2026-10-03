@@ -17,7 +17,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -84,6 +84,7 @@ class LLMClient:
         self.max_validation_retries = max_validation_retries
         self.max_api_retries = max_api_retries
 
+        self._client: _GroqLike
         if client is not None:
             self._client = client
         else:
@@ -93,7 +94,7 @@ class LLMClient:
                 raise LLMError(
                     "GROQ_API_KEY is not set. Add it to .env before running LLM calls."
                 )
-            self._client = Groq(api_key=api_key)
+            self._client = cast(_GroqLike, Groq(api_key=api_key))
 
     # -- transport -------------------------------------------------------- #
 

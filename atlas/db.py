@@ -184,7 +184,7 @@ def start_run(conn: sqlite3.Connection, kind: str) -> int:
         (kind, _now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def finish_run(
@@ -214,7 +214,7 @@ def save_profile(conn: sqlite3.Connection, profile: CandidateProfile) -> int:
         ),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def get_latest_profile(conn: sqlite3.Connection) -> CandidateProfile | None:
@@ -275,7 +275,7 @@ def upsert_job(conn: sqlite3.Connection, run_id: int, job: Job) -> tuple[int, bo
         ),
     )
     conn.commit()
-    return int(cur.lastrowid), True
+    return int(cur.lastrowid or 0), True
 
 
 def job_seen(conn: sqlite3.Connection, dedupe_key: str) -> bool:
@@ -332,7 +332,7 @@ def save_digest(
         (run_id, _now(), top_k, html, text),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
@@ -358,7 +358,7 @@ def record_feedback(
         (job_id, verdict, reason_code, note, _now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def load_feedback(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -382,7 +382,7 @@ def record_eval_history(
         (_now(), name, int(bool(passed)), json.dumps(metrics or {})),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
 def latest_eval_history(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
@@ -423,4 +423,4 @@ def log_stage(
             (job_id, model, prompt_version, _now(), json.dumps(data or {})),
         )
     conn.commit()
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)

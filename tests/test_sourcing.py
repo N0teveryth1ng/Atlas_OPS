@@ -20,7 +20,7 @@ class FakeCollector(Collector):
 
 
 def _job(**kwargs) -> Job:
-    base = dict(source="fake", title="Backend Engineer", company="Acme", location="Pune", url="http://a")
+    base = {"source": "fake", "title": "Backend Engineer", "company": "Acme", "location": "Pune", "url": "http://a"}
     base.update(kwargs)
     return Job(**base)
 

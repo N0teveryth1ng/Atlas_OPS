@@ -20,8 +20,8 @@ from .schemas import (
     CandidateProfile,
     ExperienceLevel,
     InputMode,
-    ProfileExtraction,
     Proficiency,
+    ProfileExtraction,
     Skill,
 )
 
@@ -162,14 +162,14 @@ def build_profile(
     if has_resume and has_description:
         resume_profile = _extraction_to_profile(extract_from_resume(client, resume_source), InputMode.resume)
         description_profile = _extraction_to_profile(
-            extract_from_description(client, description), InputMode.description, cap_proficiency=True
+            extract_from_description(client, description or ""), InputMode.description, cap_proficiency=True
         )
         return merge_profiles(resume_profile, description_profile)
     if has_resume:
         return _extraction_to_profile(extract_from_resume(client, resume_source), InputMode.resume)
     if has_description:
         return _extraction_to_profile(
-            extract_from_description(client, description), InputMode.description, cap_proficiency=True
+            extract_from_description(client, description or ""), InputMode.description, cap_proficiency=True
         )
     raise ValueError("Provide a resume, a description, or both.")
 
@@ -183,7 +183,7 @@ def render_profile_summary(profile: CandidateProfile) -> str:
         f"Target roles: {', '.join(profile.target_roles) or '-'}",
         f"Skills ({len(profile.skills)}): "
         + ", ".join(f"{s.name}[{s.proficiency.value}]" for s in profile.skills),
-        f"Education: "
+        "Education: "
         + "; ".join(
             " ".join(filter(None, [e.degree, e.field, e.institution])) or "-"
             for e in profile.education

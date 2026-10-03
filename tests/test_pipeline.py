@@ -1,10 +1,11 @@
 import json
 
+from fake_llm import make_client
+
 from atlas.config import get_settings
 from atlas.db import connect, init_db, save_profile, start_run, upsert_job
 from atlas.pipeline import process_job
 from atlas.schemas import CandidateProfile, Job, Proficiency, Recommendation, Skill
-from fake_llm import make_client
 
 PARSED = {
     "title": "Junior Python Developer",

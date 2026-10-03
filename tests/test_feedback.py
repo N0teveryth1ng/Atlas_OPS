@@ -4,9 +4,11 @@ from atlas.config import get_settings
 from atlas.db import (
     connect,
     init_db,
-    record_feedback as db_record_feedback,
     start_run,
     upsert_job,
+)
+from atlas.db import (
+    record_feedback as db_record_feedback,
 )
 from atlas.feedback import (
     FeedbackTuning,

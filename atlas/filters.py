@@ -33,7 +33,7 @@ DISALLOWED_SENIORITY = {
     Seniority.manager,
 }
 
-_SALARY_RE = re.compile(r"(\d[\d,\.]*)\s*(k|m|lpa|lakh|lakhs|per annum|/yr|/year)?", re.I)
+_SALARY_RE = re.compile(r"(\d[\d,\.]*)\s*(k|m|lpa|lakh|lakhs|per annum|/yr|/year)?", re.IGNORECASE)
 
 
 def _parse_salary(text: str) -> float | None:

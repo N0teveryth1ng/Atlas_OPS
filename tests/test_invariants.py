@@ -11,7 +11,14 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from atlas.config import get_settings
-from atlas.db import connect, get_job_status, init_db, save_profile, start_run, upsert_job
+from atlas.db import (
+    connect,
+    get_job_status,
+    init_db,
+    save_profile,
+    start_run,
+    upsert_job,
+)
 from atlas.digest import Digest, DigestItem, DigestSection, build_digest
 from atlas.emailer import ResendEmailer, send_digest
 from atlas.job_status import (

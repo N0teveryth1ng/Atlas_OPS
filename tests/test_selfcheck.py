@@ -90,7 +90,11 @@ def test_readme_check_passes_on_this_repo():
 
 
 def test_apply_isolation_checks_pass_on_this_repo():
-    from atlas.selfcheck import PASS, check_a1_autoapply_isolation, check_a2_no_application_posts
+    from atlas.selfcheck import (
+        PASS,
+        check_a1_autoapply_isolation,
+        check_a2_no_application_posts,
+    )
 
     assert check_a1_autoapply_isolation({}).status == PASS
     assert check_a2_no_application_posts({}).status == PASS
