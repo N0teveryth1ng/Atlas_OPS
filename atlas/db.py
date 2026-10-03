@@ -126,6 +126,14 @@ CREATE TABLE IF NOT EXISTS feedback (
     note        TEXT,
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS eval_history (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT NOT NULL,
+    name         TEXT,
+    passed       INTEGER,
+    metrics_json TEXT
+);
 """
 
 
@@ -310,6 +318,58 @@ def save_digest(
 def mark_digest_sent(conn: sqlite3.Connection, digest_id: int) -> None:
     conn.execute("UPDATE digests SET sent_at = ? WHERE id = ?", (_now(), digest_id))
     conn.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Feedback + eval history
+# --------------------------------------------------------------------------- #
+
+
+def record_feedback(
+    conn: sqlite3.Connection,
+    job_id: int,
+    verdict: str,
+    reason_code: str | None = None,
+    note: str | None = None,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO feedback (job_id, verdict, reason_code, note, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (job_id, verdict, reason_code, note, _now()),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def load_feedback(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT f.id, f.job_id, f.verdict, f.reason_code, f.note, f.created_at,
+               j.company, j.title, j.url, j.dedupe_key, j.description_raw
+        FROM feedback f
+        LEFT JOIN jobs j ON j.id = f.job_id
+        ORDER BY f.id
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def record_eval_history(
+    conn: sqlite3.Connection, name: str, passed: bool, metrics: dict[str, Any] | None = None
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO eval_history (created_at, name, passed, metrics_json) VALUES (?, ?, ?, ?)",
+        (_now(), name, int(bool(passed)), json.dumps(metrics or {})),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def latest_eval_history(conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM eval_history WHERE name = ? ORDER BY id DESC LIMIT 1", (name,)
+    ).fetchone()
+    return dict(row) if row else None
 
 
 # --------------------------------------------------------------------------- #

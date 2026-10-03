@@ -20,6 +20,7 @@ uploads/
 *.sqlite3
 profile.json
 logs/
+eval/feedback.jsonl
 
 # --- os / editor ---
 .DS_Store

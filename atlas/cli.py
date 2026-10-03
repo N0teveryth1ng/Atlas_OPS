@@ -4,9 +4,10 @@ Usage::
 
     python -m atlas.cli profile --resume resume.pdf --describe "..." --out profile.json
     python -m atlas.cli review profile.json
-    python -m atlas.cli run        # later phases
-    python -m atlas.cli eval       # later phases
-    python -m atlas.cli feedback   # later phases
+    python -m atlas.cli run            # full pipeline + digest + email
+    python -m atlas.cli schedule       # run now, then daily
+    python -m atlas.cli eval           # golden-set evaluation
+    python -m atlas.cli feedback <job_id> good|bad --reason <code>
 """
 
 from __future__ import annotations
@@ -170,6 +171,7 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     from .db import emailed_job_ids, mark_digest_sent, mark_jobs_emailed, save_digest
     from .digest import build_digest, render_html, render_text
     from .emailer import EmailError, send_digest
+    from .feedback import load_and_apply
     from .pipeline import run_pipeline
 
     settings = get_settings()
@@ -180,6 +182,10 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
         print("No saved profile. Run `profile` first.", file=sys.stderr)
         conn.close()
         return 2
+
+    settings, tuning = load_and_apply(conn, settings)
+    if tuning.feedback_count:
+        print(f"Tuning: {tuning.summary()}")
 
     client = _make_client()
     run_id = start_run(conn, run_kind)
@@ -271,21 +277,65 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
+    from .db import record_eval_history
     from .evaluation import run_eval, run_llm_eval, run_skill_eval
 
     print("== JD parse + hard filter ==")
-    ok = run_eval(Path(args.golden)) if args.golden else run_eval()
+    golden_ok = run_eval(Path(args.golden)) if args.golden else run_eval()
     print("\n== Skill matching ==")
-    ok = run_skill_eval() and ok
+    skill_ok = run_skill_eval()
+    ok = golden_ok and skill_ok
+
+    llm_ok: bool | None = None
     if args.with_llm:
         print("\n== LLM precision@10 (live model) ==")
-        ok = run_llm_eval() and ok
+        llm_ok = run_llm_eval()
+        ok = ok and llm_ok
+
+    conn = connect()
+    init_db(conn)
+    record_eval_history(conn, "golden", golden_ok, {})
+    record_eval_history(conn, "skill", skill_ok, {})
+    if llm_ok is not None:
+        record_eval_history(conn, "llm_precision_at_10", llm_ok, {})
+    conn.close()
     return 0 if ok else 1
 
 
 def cmd_feedback(args: argparse.Namespace) -> int:
-    print("`feedback` is implemented in Phase 7. Not available yet.", file=sys.stderr)
-    return 1
+    from .db import load_feedback
+    from .feedback import export_golden, record_feedback
+
+    conn = connect()
+    init_db(conn)
+
+    if args.export:
+        count = export_golden(conn)
+        print(f"Exported {count} new feedback case(s) to eval/feedback.jsonl.")
+        conn.close()
+        return 0
+
+    if args.job_id is None or args.verdict is None:
+        print(
+            "Usage: atlas feedback <job_id> good|bad [--reason <code>] [--note ...]",
+            file=sys.stderr,
+        )
+        conn.close()
+        return 2
+
+    try:
+        feedback_id = record_feedback(
+            conn, args.job_id, args.verdict, reason_code=args.reason, note=args.note
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        conn.close()
+        return 2
+
+    total = len(load_feedback(conn))
+    print(f"Recorded feedback #{feedback_id} for job {args.job_id} ({args.verdict}). ({total} total)")
+    conn.close()
+    return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -307,6 +357,8 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from .feedback import REASON_CODES
+
     parser = argparse.ArgumentParser(prog="atlas", description="Atlas_OPS job-matching pipeline")
     parser.add_argument("--version", action="version", version=f"atlas {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -349,7 +401,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument("--with-llm", action="store_true", help="Also run the live LLM precision@10 gate")
     p_eval.set_defaults(func=cmd_eval)
 
-    p_fb = sub.add_parser("feedback", help="Record feedback (later phases)")
+    p_fb = sub.add_parser("feedback", help="Record feedback and tune future runs")
+    p_fb.add_argument("job_id", nargs="?", type=int, help="Job id from the digest/DB")
+    p_fb.add_argument("verdict", nargs="?", choices=["good", "bad"], help="Your judgement")
+    p_fb.add_argument("--reason", choices=REASON_CODES, help="Reason code (for 'bad', etc.)")
+    p_fb.add_argument("--note", help="Optional free-text note")
+    p_fb.add_argument("--export", action="store_true", help="Append feedback to eval/feedback.jsonl")
     p_fb.set_defaults(func=cmd_feedback)
 
     return parser
