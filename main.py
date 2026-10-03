@@ -407,8 +407,20 @@ from auto_applications.apply_workable import apply_to_workable
 from auto_applications.apply_generic_ats import apply_to_generic_ats
 
 
+# Auto-apply is deferred to Phase 8 of the rework plan. While the accuracy
+# pipeline is being built, the system only recommends jobs — it never submits.
+AUTO_APPLY_ENABLED = False
+
+
 # auto apply to job
 def apply_to_job(job_url, resume_text, client, email_sender, resume_path=None, resolved=False):
+    if not AUTO_APPLY_ENABLED:
+        return {
+            "url": job_url,
+            "status": "skipped",
+            "error": "Auto-apply disabled during rework (recommend-only mode)",
+        }
+
     if "ashbyhq.com" in job_url:
         return apply_to_ashby(job_url, resume_text, client, email_sender, resume_path)
 
