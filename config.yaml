@@ -26,6 +26,8 @@ filters:
   max_job_age_days: 14
   # Reject jobs whose must-have skill coverage is below this fraction.
   must_have_coverage_floor: 0.6
+  # Parses below this confidence are flagged for human review.
+  min_parse_confidence: 0.5
   # Do not email jobs scoring below this.
   min_score_to_send: 60
   # At most this many jobs per digest.

@@ -46,8 +46,8 @@ Design rules:
 - **Phase 1** — Pydantic schemas, LLM client, config, SQLite, input modes. *(done)*
 - **Phase 2** — structured JD parsing + hard filters + golden set. *(done)*
 - **Phase 3** — skill ontology / alias map + weighted matching. *(done)*
-- **Phase 4** — collectors, query planner, normalize, dedupe. *(current)*
-- **Phase 5** — evaluator + adversarial verifier.
+- **Phase 4** — collectors, query planner, normalize, dedupe. *(done)*
+- **Phase 5** — evaluator + adversarial verifier. *(current)*
 - **Phase 6** — ranker, digest, email, scheduling.
 - **Phase 7** — feedback loop + tuning.
 - **Phase 8 (deferred)** — tailoring / assisted applying.
@@ -107,6 +107,31 @@ Jobs are stripped of HTML/boilerplate, given a stable dedupe key, merged across
 boards, freshness-filtered, and stored in SQLite. Per-source and per-query yield
 is printed (and recorded in the `runs` summary).
 
+## Pipeline (Phase 5)
+
+`atlas/pipeline.py` is an explicit state machine — not a free-roaming agent loop:
+
+```
+parse (regex + LLM) -> hard filter (code) -> skill match -> evaluator (LLM)
+   -> verifier (adversarial, different model) -> ranker (weighted score)
+```
+
+- **Evaluator** (`atlas/evaluator.py`, `prompts/evaluator.md`) scores each
+  surviving job against the profile, cites evidence, and recommends
+  `strong_apply|apply|maybe|skip`. Results are hash-cached so a job never costs
+  a second call.
+- **Verifier** (`atlas/verifier.py`, `prompts/verifier.md`) argues *against*
+  applying and can **veto** or **downgrade** (never raise). It runs on a
+  different model from the evaluator for independence.
+- **Ranker** (`atlas/ranker.py`) computes a weighted final score from
+  `config.yaml: ranking.weights` (fit, must-have coverage, seniority fit,
+  preference bonus).
+- Low-confidence parses are flagged for human review; jobs whose must-have
+  coverage is below `filters.must_have_coverage_floor` cannot exceed `maybe`.
+
+Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
+`filter_results`, `evaluations`, `verifications`), so any decision is traceable.
+
 ## CLI
 
 ```bash
@@ -114,7 +139,10 @@ python -m atlas.cli profile --resume resume.pdf --describe "target roles..." --o
 python -m atlas.cli review profile.json     # review + approve
 python -m atlas.cli status
 python -m atlas.cli collect                   # fetch + normalize + dedupe (Phase 4)
-python -m atlas.cli eval                     # golden-set evaluation
+python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank
+python -m atlas.cli run --collect --limit 50  # fetch first, then process
+python -m atlas.cli eval                     # golden-set evaluation (deterministic)
+python -m atlas.cli eval --with-llm          # + live LLM precision@10 gate
 ```
 
 ## Testing

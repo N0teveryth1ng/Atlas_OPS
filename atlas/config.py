@@ -44,6 +44,7 @@ class FiltersConfig(BaseModel):
     deal_breaker_skills: list[str] = Field(default_factory=list)
     max_job_age_days: int = 14
     must_have_coverage_floor: float = 0.6
+    min_parse_confidence: float = 0.5
     min_score_to_send: float = 60
     top_k: int = 10
 

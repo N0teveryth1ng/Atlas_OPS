@@ -163,8 +163,39 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    print("`run` is implemented in Phase 5+. Not available yet.", file=sys.stderr)
-    return 1
+    from .pipeline import run_pipeline
+    from .ranker import rank
+
+    settings = get_settings()
+    conn = connect()
+    init_db(conn)
+    profile = get_latest_profile(conn)
+    if profile is None:
+        print("No saved profile. Run `profile` first.", file=sys.stderr)
+        conn.close()
+        return 2
+
+    client = _make_client()
+    run_id = start_run(conn, "run")
+    if args.collect:
+        from .sourcing import run_sourcing
+
+        run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
+
+    results = run_pipeline(conn, run_id, profile, settings, client, limit=args.limit)
+    ranked = rank(results)
+    finish_run(
+        conn, run_id, "ok", summary={"processed": len(results), "ranked": len(ranked)}
+    )
+    conn.close()
+
+    print(f"Processed {len(results)} job(s); {len(ranked)} above skip.")
+    for item in ranked[: settings.filters.top_k]:
+        print(
+            f"  [{item.score:5.1f}] {item.final_recommendation.value:<12} "
+            f"{(item.job.title or '?')} @ {item.job.company or '?'}"
+        )
+    return 0
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
@@ -202,12 +233,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    from .evaluation import run_eval, run_skill_eval
+    from .evaluation import run_eval, run_llm_eval, run_skill_eval
 
     print("== JD parse + hard filter ==")
     ok = run_eval(Path(args.golden)) if args.golden else run_eval()
     print("\n== Skill matching ==")
     ok = run_skill_eval() and ok
+    if args.with_llm:
+        print("\n== LLM precision@10 (live model) ==")
+        ok = run_llm_eval() and ok
     return 0 if ok else 1
 
 
@@ -254,7 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Show the latest saved profile").set_defaults(func=cmd_status)
 
-    p_run = sub.add_parser("run", help="Run the pipeline (later phases)")
+    p_run = sub.add_parser("run", help="Run the pipeline (Phase 5)")
+    p_run.add_argument("--collect", action="store_true", help="Fetch new jobs first (Phase 4)")
+    p_run.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
     p_run.set_defaults(func=cmd_run)
 
     sub.add_parser("collect", help="Fetch + normalize + dedupe jobs (Phase 4)").set_defaults(
@@ -263,6 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_eval = sub.add_parser("eval", help="Run the golden-set evaluation (Phase 2)")
     p_eval.add_argument("--golden", help="Path to a golden-set .jsonl (default: eval/golden_set.jsonl)")
+    p_eval.add_argument("--with-llm", action="store_true", help="Also run the live LLM precision@10 gate")
     p_eval.set_defaults(func=cmd_eval)
 
     p_fb = sub.add_parser("feedback", help="Record feedback (later phases)")

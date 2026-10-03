@@ -221,3 +221,115 @@ def run_skill_eval(path: Path | str = SKILL_CASES_PATH) -> bool:
     report = evaluate_skill_matching(load_skill_cases(path))
     print(format_skill_report(report))
     return report.accepted
+
+
+# --------------------------------------------------------------------------- #
+# LLM precision@K (Phase 5 gate) — opt-in, needs a live model
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class PrecisionCaseResult:
+    id: str
+    label: str
+    predicted_apply: bool
+    score: float
+
+
+@dataclass
+class PrecisionReport:
+    results: list[PrecisionCaseResult] = field(default_factory=list)
+    k: int = 10
+
+    @property
+    def candidates(self) -> list[PrecisionCaseResult]:
+        return [r for r in self.results if r.predicted_apply]
+
+    @property
+    def top_k(self) -> list[PrecisionCaseResult]:
+        ranked = sorted(self.candidates, key=lambda r: r.score, reverse=True)
+        return ranked[: self.k]
+
+    @property
+    def precision_at_k(self) -> float:
+        top = self.top_k
+        if not top:
+            return 0.0
+        return sum(1 for r in top if r.label == "apply") / len(top)
+
+    @property
+    def accepted(self) -> bool:
+        return self.precision_at_k >= 0.8
+
+
+def precision_at_k(results: list[PrecisionCaseResult], k: int = 10) -> float:
+    candidates = sorted((r for r in results if r.predicted_apply), key=lambda r: r.score, reverse=True)
+    top = candidates[:k]
+    if not top:
+        return 0.0
+    return sum(1 for r in top if r.label == "apply") / len(top)
+
+
+def evaluate_with_llm(cases, client, settings: Settings) -> PrecisionReport:
+    """Run the full parse -> filter -> evaluate -> verify chain over the golden set."""
+    from .evaluator import evaluate_job
+    from .jd_parser import parse_jd
+    from .ranker import final_score
+    from .schemas import ExperienceLevel, Recommendation
+    from .verifier import resolve_recommendation, verify_job
+
+    profile = CandidateProfile(
+        total_experience_months=int(settings.candidate.my_years_experience * 12),
+        experience_level=ExperienceLevel.fresher,
+    )
+    cache: dict = {}
+    report = PrecisionReport(k=10)
+    for case in cases:
+        job = Job(
+            source="golden",
+            title=case.title,
+            company=case.company,
+            location=case.location,
+            url=f"golden://{case.id}",
+            description_raw=case.description,
+        )
+        parsed = parse_jd(client, title=case.title, description=case.description)
+        filter_result = apply_hard_filters(job, parsed, profile, settings)
+        if not filter_result.passed:
+            report.results.append(PrecisionCaseResult(case.id, case.label, False, 0.0))
+            continue
+        match = match_skills(parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills)
+        verdict = evaluate_job(
+            client, profile=profile, job=job, parsed_jd=parsed, skill_match=match, settings=settings, cache=cache
+        )
+        verifier = verify_job(
+            client, profile=profile, job=job, parsed_jd=parsed, verdict=verdict, skill_match=match, settings=settings, cache=cache
+        )
+        final = resolve_recommendation(verdict, verifier)
+        predicted = final in {Recommendation.apply, Recommendation.strong_apply}
+        report.results.append(
+            PrecisionCaseResult(case.id, case.label, predicted, final_score(verdict, match, job, settings))
+        )
+    return report
+
+
+def run_llm_eval(client=None) -> bool:
+    from .config import get_settings
+    from .llm import LLMClient
+
+    settings = get_settings()
+    if client is None:
+        client = LLMClient(
+            api_key=settings.secrets.groq_api_key,
+            default_model=settings.models.extractor,
+            temperature=settings.models.temperature,
+        )
+    report = evaluate_with_llm(load_golden_set(), client, settings)
+    print(f"Golden set cases:            {len(report.results)}")
+    print(f"Predicted-apply candidates:  {len(report.candidates)}")
+    print(f"Precision@10:                {report.precision_at_k:.1%} (target >= 80%)")
+    for item in report.top_k:
+        mark = "apply" if item.label == "apply" else "skip"
+        print(f"  [{item.score:5.1f}] pred_apply={item.predicted_apply} label={mark}  {item.id}")
+    print(f"RESULT:                      {'PASS' if report.accepted else 'FAIL'}")
+    return report.accepted
