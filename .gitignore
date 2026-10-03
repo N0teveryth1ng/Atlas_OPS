@@ -12,6 +12,9 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # --- app data / personal (never commit) ---
 uploads/
@@ -21,6 +24,7 @@ uploads/
 profile.json
 logs/
 eval/feedback.jsonl
+selfcheck_report.json
 
 # --- os / editor ---
 .DS_Store
