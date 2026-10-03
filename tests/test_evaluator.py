@@ -46,7 +46,9 @@ def _job():
 
 
 def _parsed():
-    return ParsedJD(title="Junior Python Dev", title_seniority=Seniority.junior, min_years_experience=0)
+    return ParsedJD(
+        title="Junior Python Dev", title_seniority=Seniority.junior, min_years_experience=0
+    )
 
 
 def _match():
@@ -57,10 +59,20 @@ def test_evaluate_job_returns_verdict_and_caches():
     client = make_client(verdict=EVAL_PAYLOAD)
     cache: dict = {}
     first = evaluate_job(
-        client, profile=_profile(), job=_job(), parsed_jd=_parsed(), skill_match=_match(), cache=cache
+        client,
+        profile=_profile(),
+        job=_job(),
+        parsed_jd=_parsed(),
+        skill_match=_match(),
+        cache=cache,
     )
     second = evaluate_job(
-        client, profile=_profile(), job=_job(), parsed_jd=_parsed(), skill_match=_match(), cache=cache
+        client,
+        profile=_profile(),
+        job=_job(),
+        parsed_jd=_parsed(),
+        skill_match=_match(),
+        cache=cache,
     )
 
     assert first.recommendation == Recommendation.apply
@@ -73,7 +85,12 @@ def test_verify_job_returns_verifier_verdict():
     client = make_client(parsed=None, verdict=EVAL_PAYLOAD, verifier=VERIFY_PAYLOAD)
     verdict = Verdict(**EVAL_PAYLOAD)
     result = verify_job(
-        client, profile=_profile(), job=_job(), parsed_jd=_parsed(), verdict=verdict, skill_match=_match()
+        client,
+        profile=_profile(),
+        job=_job(),
+        parsed_jd=_parsed(),
+        verdict=verdict,
+        skill_match=_match(),
     )
     assert isinstance(result, VerifierVerdict)
     assert result.veto is False

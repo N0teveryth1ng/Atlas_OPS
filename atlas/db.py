@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS eval_history (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def db_path() -> Path:
@@ -218,9 +218,7 @@ def save_profile(conn: sqlite3.Connection, profile: CandidateProfile) -> int:
 
 
 def get_latest_profile(conn: sqlite3.Connection) -> CandidateProfile | None:
-    row = conn.execute(
-        "SELECT data_json FROM profiles ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    row = conn.execute("SELECT data_json FROM profiles ORDER BY id DESC LIMIT 1").fetchone()
     if row is None:
         return None
     return CandidateProfile.model_validate_json(row["data_json"])
@@ -362,15 +360,13 @@ def record_feedback(
 
 
 def load_feedback(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         SELECT f.id, f.job_id, f.verdict, f.reason_code, f.note, f.created_at,
                j.company, j.title, j.url, j.dedupe_key, j.description_raw
         FROM feedback f
         LEFT JOIN jobs j ON j.id = f.job_id
         ORDER BY f.id
-        """
-    ).fetchall()
+        """).fetchall()
     return [dict(row) for row in rows]
 
 

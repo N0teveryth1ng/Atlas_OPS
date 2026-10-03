@@ -160,16 +160,22 @@ def build_profile(
     has_description = bool(description and description.strip())
 
     if has_resume and has_description:
-        resume_profile = _extraction_to_profile(extract_from_resume(client, resume_source), InputMode.resume)
+        resume_profile = _extraction_to_profile(
+            extract_from_resume(client, resume_source), InputMode.resume
+        )
         description_profile = _extraction_to_profile(
-            extract_from_description(client, description or ""), InputMode.description, cap_proficiency=True
+            extract_from_description(client, description or ""),
+            InputMode.description,
+            cap_proficiency=True,
         )
         return merge_profiles(resume_profile, description_profile)
     if has_resume:
         return _extraction_to_profile(extract_from_resume(client, resume_source), InputMode.resume)
     if has_description:
         return _extraction_to_profile(
-            extract_from_description(client, description or ""), InputMode.description, cap_proficiency=True
+            extract_from_description(client, description or ""),
+            InputMode.description,
+            cap_proficiency=True,
         )
     raise ValueError("Provide a resume, a description, or both.")
 

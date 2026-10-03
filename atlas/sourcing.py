@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .collectors import Collector, build_collectors
 from .config import Settings, get_settings
@@ -43,7 +43,7 @@ def is_fresh(job: Job, max_age_days: int, now: datetime) -> bool:
         return True
     posted = job.posted_at
     if posted.tzinfo is None:
-        posted = posted.replace(tzinfo=timezone.utc)
+        posted = posted.replace(tzinfo=UTC)
     return (now - posted).days <= max_age_days
 
 
@@ -57,7 +57,7 @@ def collect(
     now: datetime | None = None,
 ) -> SourcingResult:
     settings = settings or get_settings()
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     result = SourcingResult(queries=list(queries))
     yields: dict[str, SourceYield] = {}
     pooled: list[Job] = []

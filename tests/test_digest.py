@@ -44,7 +44,9 @@ def _result(i, rec, score=80.0, needs_review=False, status=JobStatus.ranked):
         job_id=i,
         job=_job(i),
         filter_result=FilterResult(passed=True),
-        skill_match=SkillMatch(must_have_coverage=0.8, nice_to_have_coverage=0.0, missing_must_haves=["Docker"]),
+        skill_match=SkillMatch(
+            must_have_coverage=0.8, nice_to_have_coverage=0.0, missing_must_haves=["Docker"]
+        ),
         verdict=verdict,
         verifier=VerifierVerdict(),
         final_recommendation=rec,
@@ -68,7 +70,9 @@ def test_build_digest_sections():
 
 
 def test_build_digest_raises_on_needs_review():
-    results = [_result(3, Recommendation.maybe, 50, needs_review=True, status=JobStatus.needs_review)]
+    results = [
+        _result(3, Recommendation.maybe, 50, needs_review=True, status=JobStatus.needs_review)
+    ]
     with pytest.raises(InvariantViolation):
         build_digest(results, get_settings())
 

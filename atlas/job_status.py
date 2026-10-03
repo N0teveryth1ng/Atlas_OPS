@@ -74,4 +74,6 @@ def assert_sent_subset(passed_job_ids: set[int | None], sent_job_ids: set[int | 
     """Enforce ``sent ⊆ passed`` (pipeline-end invariant)."""
     leaked = sent_job_ids - passed_job_ids
     if leaked:
-        raise InvariantViolation(f"jobs shipped without passing filters: {sorted(map(str, leaked))}")
+        raise InvariantViolation(
+            f"jobs shipped without passing filters: {sorted(map(str, leaked))}"
+        )

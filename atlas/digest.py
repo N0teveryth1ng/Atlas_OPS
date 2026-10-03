@@ -7,7 +7,7 @@ HTML email and a plain-text fallback. Also carries the per-run funnel summary
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import escape
 
 from pydantic import BaseModel, Field
@@ -52,7 +52,7 @@ class RunSummary(BaseModel):
 
 class Digest(BaseModel):
     run_id: int | None = None
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     subject: str = ""
     summary: RunSummary = Field(default_factory=RunSummary)
     sections: list[DigestSection] = Field(default_factory=list)
@@ -100,7 +100,9 @@ def _item_from_result(result) -> DigestItem:
         main_risk=risks[0] if risks else None,
         missing_skills=list(match.missing_must_haves) if match is not None else [],
         seniority_assessment=(
-            verdict.seniority_assessment.quote if verdict is not None and verdict.seniority_assessment else None
+            verdict.seniority_assessment.quote
+            if verdict is not None and verdict.seniority_assessment
+            else None
         ),
         needs_review=result.needs_review,
         status=result.status.value,
@@ -229,9 +231,12 @@ def render_html(digest: Digest) -> str:
     rows.append(f"<p style='color:#666;margin:0 0 16px'>{esc(_summary_line(digest.summary))}</p>")
     if digest.summary.rejection_counts:
         counts = ", ".join(
-            f"{esc(rule)}: {count}" for rule, count in sorted(digest.summary.rejection_counts.items())
+            f"{esc(rule)}: {count}"
+            for rule, count in sorted(digest.summary.rejection_counts.items())
         )
-        rows.append(f"<p style='color:#999;font-size:12px;margin:0 0 16px'>rejections: {counts}</p>")
+        rows.append(
+            f"<p style='color:#999;font-size:12px;margin:0 0 16px'>rejections: {counts}</p>"
+        )
 
     if digest.is_empty():
         rows.append("<p>No matches met the bar today. Sending nothing is a valid result.</p>")

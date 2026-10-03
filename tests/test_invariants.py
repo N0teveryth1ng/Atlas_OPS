@@ -58,7 +58,9 @@ def _verdict(score: float = 90.0) -> Verdict:
     )
 
 
-def _passed_result(i: int, score: float = 85.0, status: JobStatus = JobStatus.ranked) -> ProcessedJob:
+def _passed_result(
+    i: int, score: float = 85.0, status: JobStatus = JobStatus.ranked
+) -> ProcessedJob:
     return ProcessedJob(
         job_id=i,
         job=_job(i),

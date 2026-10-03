@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .config import Settings, get_settings
 from .db import log_stage, set_job_status
@@ -67,7 +67,7 @@ def _parse_dt(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def load_jobs(
@@ -194,10 +194,10 @@ def process_job(
         return result
 
     final = resolve_recommendation(verdict, verifier)
-    if (
-        skill_match.must_have_coverage < settings.filters.must_have_coverage_floor
-        and final in {Recommendation.apply, Recommendation.strong_apply}
-    ):
+    if skill_match.must_have_coverage < settings.filters.must_have_coverage_floor and final in {
+        Recommendation.apply,
+        Recommendation.strong_apply,
+    }:
         final = Recommendation.maybe
     result.final_recommendation = final
     result.score = final_score(verdict, skill_match, job, settings)
@@ -248,7 +248,9 @@ def run_pipeline(
     logger.info("Pipeline: processing %d job(s)", len(jobs))
     for job_id, job in jobs:
         try:
-            processed.append(process_job(client, job_id, job, profile, settings, cache=cache, conn=conn))
+            processed.append(
+                process_job(client, job_id, job, profile, settings, cache=cache, conn=conn)
+            )
         except Exception as exc:  # noqa: BLE001 - one bad job must not kill the run
             logger.warning("job %s failed: %s", job_id, exc)
     return processed

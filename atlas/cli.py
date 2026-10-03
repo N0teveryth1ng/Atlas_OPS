@@ -237,7 +237,9 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
             except EmailError as exc:
                 print(f"Email not sent: {exc}", file=sys.stderr)
 
-    digest_id = save_digest(conn, run_id, settings.filters.top_k, render_html(digest), render_text(digest))
+    digest_id = save_digest(
+        conn, run_id, settings.filters.top_k, render_html(digest), render_text(digest)
+    )
     if sent:
         mark_digest_sent(conn, digest_id)
     finish_run(conn, run_id, "ok", summary=digest.summary.model_dump())
@@ -292,8 +294,10 @@ def cmd_collect(args: argparse.Namespace) -> int:
     )
     conn.close()
 
-    print(f"Queries: {len(result.queries)}   Collected: {len(result.jobs)}   "
-          f"New: {result.new_jobs}   Stale dropped: {result.dropped_stale}")
+    print(
+        f"Queries: {len(result.queries)}   Collected: {len(result.jobs)}   "
+        f"New: {result.new_jobs}   Stale dropped: {result.dropped_stale}"
+    )
     for item in result.source_yields:
         print(f"  {item.source:<12} fetched={item.fetched:<5} kept={item.kept}")
     return 0
@@ -356,7 +360,9 @@ def cmd_feedback(args: argparse.Namespace) -> int:
         return 2
 
     total = len(load_feedback(conn))
-    print(f"Recorded feedback #{feedback_id} for job {args.job_id} ({args.verdict}). ({total} total)")
+    print(
+        f"Recorded feedback #{feedback_id} for job {args.job_id} ({args.verdict}). ({total} total)"
+    )
     conn.close()
     return 0
 
@@ -381,8 +387,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     if profile is None:
         print("No saved profile.")
         return 0
-    print(f"Latest profile: {profile.experience_level.value}, "
-          f"{len(profile.skills)} skills, approved={profile.approved}")
+    print(
+        f"Latest profile: {profile.experience_level.value}, "
+        f"{len(profile.skills)} skills, approved={profile.approved}"
+    )
     return 0
 
 
@@ -402,8 +410,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_profile.add_argument("--resume", help="Path to a resume PDF")
     p_profile.add_argument("--describe", help="Free-text self-description")
     p_profile.add_argument("--describe-file", help="Path to a text file with the description")
-    p_profile.add_argument("--out", default=str(DEFAULT_PROFILE_PATH), help="Output profile.json path")
-    p_profile.add_argument("--yes", action="store_true", help="Skip interactive review (auto-approve)")
+    p_profile.add_argument(
+        "--out", default=str(DEFAULT_PROFILE_PATH), help="Output profile.json path"
+    )
+    p_profile.add_argument(
+        "--yes", action="store_true", help="Skip interactive review (auto-approve)"
+    )
     p_profile.set_defaults(func=cmd_profile)
 
     p_review = sub.add_parser("review", help="Review and approve an existing profile.json")
@@ -416,7 +428,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Run the pipeline")
     p_run.add_argument("--collect", action="store_true", help="Fetch new jobs first (Phase 4)")
     p_run.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
-    p_run.add_argument("--no-email", dest="email", action="store_false", help="Do not email the digest")
+    p_run.add_argument(
+        "--no-email", dest="email", action="store_false", help="Do not email the digest"
+    )
     p_run.set_defaults(func=cmd_run, email=True)
 
     p_sched = sub.add_parser("schedule", help="Run once now, then daily at the configured hour")
@@ -424,7 +438,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sched.add_argument("--no-collect", action="store_true", help="Do not fetch new jobs")
     p_sched.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
     p_sched.add_argument("--no-email", dest="email", action="store_false", help="Do not email")
-    p_sched.add_argument("--no-immediate", dest="immediate", action="store_false", help="Wait until the next hour")
+    p_sched.add_argument(
+        "--no-immediate", dest="immediate", action="store_false", help="Wait until the next hour"
+    )
     p_sched.set_defaults(func=cmd_schedule, email=True, immediate=True)
 
     sub.add_parser("collect", help="Fetch + normalize + dedupe jobs (Phase 4)").set_defaults(
@@ -432,13 +448,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p_eval = sub.add_parser("eval", help="Run the golden-set evaluation (Phase 2)")
-    p_eval.add_argument("--golden", help="Path to a golden-set .jsonl (default: eval/golden_set.jsonl)")
-    p_eval.add_argument("--with-llm", action="store_true", help="Also run the live LLM precision@10 gate")
+    p_eval.add_argument(
+        "--golden", help="Path to a golden-set .jsonl (default: eval/golden_set.jsonl)"
+    )
+    p_eval.add_argument(
+        "--with-llm", action="store_true", help="Also run the live LLM precision@10 gate"
+    )
     p_eval.set_defaults(func=cmd_eval)
 
     p_self = sub.add_parser("selfcheck", help="Run the pre-Phase-8 audit checks")
     p_self.add_argument("--fast", action="store_true", help="In-process checks only")
-    p_self.add_argument("--full", action="store_true", help="Also run the external toolchain checks")
+    p_self.add_argument(
+        "--full", action="store_true", help="Also run the external toolchain checks"
+    )
     p_self.add_argument("--report", default="selfcheck_report.json", help="JSON report output path")
     p_self.set_defaults(func=cmd_selfcheck, full=False)
 
@@ -447,7 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_fb.add_argument("verdict", nargs="?", choices=["good", "bad"], help="Your judgement")
     p_fb.add_argument("--reason", choices=REASON_CODES, help="Reason code (for 'bad', etc.)")
     p_fb.add_argument("--note", help="Optional free-text note")
-    p_fb.add_argument("--export", action="store_true", help="Append feedback to eval/feedback.jsonl")
+    p_fb.add_argument(
+        "--export", action="store_true", help="Append feedback to eval/feedback.jsonl"
+    )
     p_fb.set_defaults(func=cmd_feedback)
 
     return parser

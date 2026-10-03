@@ -10,7 +10,7 @@ import hashlib
 import html
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .schemas import Job, RemoteType
 
@@ -77,7 +77,7 @@ def normalize_job(job: Job, *, now: datetime | None = None) -> Job:
             job.remote_type = RemoteType.remote
 
     job.dedupe_key = make_dedupe_key(job.company, job.title, job.location)
-    job.fetched_at = now or datetime.now(timezone.utc)
+    job.fetched_at = now or datetime.now(UTC)
     if not job.urls:
         job.urls = [job.url]
     return job

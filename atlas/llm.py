@@ -91,9 +91,7 @@ class LLMClient:
             from groq import Groq  # imported lazily so tests need no dependency
 
             if not api_key:
-                raise LLMError(
-                    "GROQ_API_KEY is not set. Add it to .env before running LLM calls."
-                )
+                raise LLMError("GROQ_API_KEY is not set. Add it to .env before running LLM calls.")
             self._client = cast(_GroqLike, Groq(api_key=api_key))
 
     # -- transport -------------------------------------------------------- #

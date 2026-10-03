@@ -52,7 +52,9 @@ def _profile() -> CandidateProfile:
 
 
 def _parsed() -> ParsedJD:
-    return ParsedJD(title="Junior Python Developer", title_seniority=Seniority.junior, min_years_experience=0)
+    return ParsedJD(
+        title="Junior Python Developer", title_seniority=Seniority.junior, min_years_experience=0
+    )
 
 
 def _match() -> SkillMatch:
@@ -193,7 +195,11 @@ def test_fabricated_quote_raises_after_retries():
 
     with pytest.raises(EvidenceValidationError):
         evaluate_job(
-            _client(handler), profile=_profile(), job=_job(), parsed_jd=_parsed(), skill_match=_match()
+            _client(handler),
+            profile=_profile(),
+            job=_job(),
+            parsed_jd=_parsed(),
+            skill_match=_match(),
         )
     assert calls["n"] == 3
 

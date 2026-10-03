@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from atlas.config import Settings
 from atlas.filters import _parse_salary, apply_hard_filters
@@ -12,8 +12,12 @@ def _settings() -> Settings:
     return settings
 
 
-def _job(title: str = "Software Engineer", company: str = "Acme", location: str = "Remote", **kwargs) -> Job:
-    return Job(source="test", title=title, company=company, location=location, url="test://1", **kwargs)
+def _job(
+    title: str = "Software Engineer", company: str = "Acme", location: str = "Remote", **kwargs
+) -> Job:
+    return Job(
+        source="test", title=title, company=company, location=location, url="test://1", **kwargs
+    )
 
 
 def _profile() -> CandidateProfile:
@@ -62,7 +66,9 @@ def test_blacklisted_company_rejected():
 def test_remote_not_allowed_rejected():
     settings = _settings()
     settings.targets.remote_ok = False
-    result = apply_hard_filters(_job(), ParsedJD(remote_type=RemoteType.remote), _profile(), settings)
+    result = apply_hard_filters(
+        _job(), ParsedJD(remote_type=RemoteType.remote), _profile(), settings
+    )
     assert any(r.rule_id == "location_mismatch" for r in result.rejections)
 
 
@@ -138,7 +144,7 @@ def test_employment_type_mismatch_rejected():
 def test_stale_job_rejected():
     settings = _settings()
     settings.filters.max_job_age_days = 30
-    old = datetime.now(timezone.utc) - timedelta(days=90)
+    old = datetime.now(UTC) - timedelta(days=90)
     result = apply_hard_filters(_job(posted_at=old), ParsedJD(), _profile(), settings)
     assert any(r.rule_id == "stale_job" for r in result.rejections)
 
@@ -146,6 +152,6 @@ def test_stale_job_rejected():
 def test_fresh_naive_job_passes_once_timestamped():
     settings = _settings()
     settings.filters.max_job_age_days = 30
-    naive_recent = datetime.now(timezone.utc).replace(tzinfo=None)
+    naive_recent = datetime.now(UTC).replace(tzinfo=None)
     result = apply_hard_filters(_job(posted_at=naive_recent), ParsedJD(), _profile(), settings)
     assert result.passed

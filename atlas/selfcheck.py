@@ -23,7 +23,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -234,7 +234,9 @@ def check_h1_working_tree(_: dict) -> CheckResult:
     if branch != "main":
         problems.append(f"on branch '{branch}', not 'main'")
     if not problems:
-        behind_rc, behind = _run(["git", "rev-list", "--left-right", "--count", "HEAD...origin/main"])
+        behind_rc, behind = _run(
+            ["git", "rev-list", "--left-right", "--count", "HEAD...origin/main"]
+        )
         if behind_rc == 0 and behind.strip():
             _left, _sep, right = behind.strip().partition("\t")
             if right.strip() and right.strip() != "0":
@@ -265,7 +267,11 @@ def check_h4_gitignore(_: dict) -> CheckResult:
     missing = [p for p in REQUIRED_IGNORES if p not in text]
     if missing:
         return _bad("H4", "gitignore covers sensitive/generated paths", f"missing: {missing}")
-    return _ok("H4", "gitignore covers sensitive/generated paths", f"{len(REQUIRED_IGNORES)} entries present")
+    return _ok(
+        "H4",
+        "gitignore covers sensitive/generated paths",
+        f"{len(REQUIRED_IGNORES)} entries present",
+    )
 
 
 def check_h5_env_connascence(_: dict) -> CheckResult:
@@ -303,7 +309,9 @@ def check_h6_requirements_pinned(_: dict) -> CheckResult:
 def check_h7_readme(_: dict) -> CheckResult:
     text = _read_text(REPO_ROOT / "README.md")
     if not text:
-        return _bad("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", "README.md missing")
+        return _bad(
+            "H7", "README documents setup/config/CLI/eval/selfcheck/schedule", "README.md missing"
+        )
     required = [
         "pip install",
         "python -m atlas.cli profile",
@@ -319,8 +327,14 @@ def check_h7_readme(_: dict) -> CheckResult:
     ]
     missing = [term for term in required if term not in text]
     if missing:
-        return _bad("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"missing: {missing}")
-    return _ok("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"{len(required)} terms present")
+        return _bad(
+            "H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"missing: {missing}"
+        )
+    return _ok(
+        "H7",
+        "README documents setup/config/CLI/eval/selfcheck/schedule",
+        f"{len(required)} terms present",
+    )
 
 
 def check_a1_autoapply_isolation(_: dict) -> CheckResult:
@@ -342,7 +356,9 @@ def check_a1_autoapply_isolation(_: dict) -> CheckResult:
                     offenders.append(f"{path.relative_to(REPO_ROOT)} imports {name}")
     if offenders:
         return _bad("A1", "auto-apply code not imported by pipeline", f"imports: {offenders}")
-    return _ok("A1", "auto-apply code not imported by pipeline", "no pipeline imports of legacy bots")
+    return _ok(
+        "A1", "auto-apply code not imported by pipeline", "no pipeline imports of legacy bots"
+    )
 
 
 def check_a2_no_application_posts(_: dict) -> CheckResult:
@@ -357,7 +373,9 @@ def check_a2_no_application_posts(_: dict) -> CheckResult:
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{token}")
     if offenders:
         return _bad("A2", "pipeline cannot POST to application endpoints", f"tokens: {offenders}")
-    return _ok("A2", "pipeline cannot POST to application endpoints", "no browser/apply tokens in atlas/")
+    return _ok(
+        "A2", "pipeline cannot POST to application endpoints", "no browser/apply tokens in atlas/"
+    )
 
 
 def check_a3_no_submit_flag(_: dict) -> CheckResult:
@@ -388,8 +406,12 @@ def check_a4_tracked_pii(_: dict) -> CheckResult:
 def check_g5_golden_provenance(_: dict) -> CheckResult:
     path = REPO_ROOT / "eval" / "golden_set.jsonl"
     if not path.exists():
-        return _blocked("G5", "golden set is real + human-labelled", "eval/golden_set.jsonl missing")
-    cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return _blocked(
+            "G5", "golden set is real + human-labelled", "eval/golden_set.jsonl missing"
+        )
+    cases = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
     problems: list[str] = []
     if len(cases) < 40:
         problems.append(f"count {len(cases)} < 40")
@@ -444,7 +466,12 @@ def check_l5_verifier_invariant(_: dict) -> CheckResult:
                     problems.append(f"veto ignored for {rec}")
                 if not veto and rank[final] > rank[rec]:
                     problems.append(f"upgraded {rec}->{final}")
-                if down is not None and not veto and rank[final] > rank[down] and rank[down] < rank[rec]:
+                if (
+                    down is not None
+                    and not veto
+                    and rank[final] > rank[down]
+                    and rank[down] < rank[rec]
+                ):
                     problems.append(f"downgrade_to not applied {rec}->{final}")
     if problems:
         return _bad("L5", "verifier can only downgrade/veto", "; ".join(sorted(set(problems))[:4]))
@@ -523,7 +550,9 @@ def check_d1_email_idempotency(_: dict) -> CheckResult:
     again = build_digest([result], settings, run_id=run_id, already_sent=emailed_job_ids(conn))
     conn.close()
     if not again.is_empty() or len(sent_payloads) != 1:
-        return _bad("D1", "email idempotency", f"resent={not again.is_empty()} sends={len(sent_payloads)}")
+        return _bad(
+            "D1", "email idempotency", f"resent={not again.is_empty()} sends={len(sent_payloads)}"
+        )
     return _ok("D1", "email idempotency", "second pass sends nothing")
 
 
@@ -674,7 +703,9 @@ def check_t2_coverage(_: dict) -> CheckResult:
     )
     cov_path = REPO_ROOT / "coverage.json"
     if not cov_path.exists():
-        return _blocked("T2", "coverage floors (>=90% high-risk modules)", f"coverage report missing (rc={rc})")
+        return _blocked(
+            "T2", "coverage floors (>=90% high-risk modules)", f"coverage report missing (rc={rc})"
+        )
     data = json.loads(cov_path.read_text(encoding="utf-8"))
     files = data.get("files", {})
     below: list[str] = []
@@ -687,7 +718,9 @@ def check_t2_coverage(_: dict) -> CheckResult:
         if pct < floor:
             below.append(f"{rel}={pct:.0f}%<{floor}%")
     if below:
-        return _bad("T2", "coverage floors (>=90% high-risk modules)", "; ".join(below), below, mode="full")
+        return _bad(
+            "T2", "coverage floors (>=90% high-risk modules)", "; ".join(below), below, mode="full"
+        )
     return _ok("T2", "coverage floors (>=90% high-risk modules)", "all floors met", mode="full")
 
 
@@ -715,7 +748,9 @@ def check_t3_lint_format_types(_: dict) -> CheckResult:
     else:
         problems.append("mypy:unavailable")
     if problems:
-        return _bad("T3", "ruff + black + mypy clean", f"failing: {problems}", problems, mode="full")
+        return _bad(
+            "T3", "ruff + black + mypy clean", f"failing: {problems}", problems, mode="full"
+        )
     return _ok("T3", "ruff + black + mypy clean", "all three clean", mode="full")
 
 
@@ -729,15 +764,31 @@ def check_t4_flaky(_: dict) -> CheckResult:
     for _run_index in range(3):
         rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly"], timeout=600)
         if rc != 0:
-            return _bad("T4", "suite is not order/run dependent", f"run rc={rc}", [output[-400:]], mode="full")
+            return _bad(
+                "T4",
+                "suite is not order/run dependent",
+                f"run rc={rc}",
+                [output[-400:]],
+                mode="full",
+            )
         signatures.append(_pytest_signature(output))
     rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "randomly"], timeout=600)
     if rc != 0:
-        return _bad("T4", "suite is not order/run dependent", f"random-order rc={rc}", [output[-400:]], mode="full")
+        return _bad(
+            "T4",
+            "suite is not order/run dependent",
+            f"random-order rc={rc}",
+            [output[-400:]],
+            mode="full",
+        )
     signatures.append(_pytest_signature(output))
     if len(set(signatures)) != 1:
-        return _bad("T4", "suite is not order/run dependent", f"varying results: {signatures}", mode="full")
-    return _ok("T4", "suite is not order/run dependent", f"4 runs stable: {signatures[0]}", mode="full")
+        return _bad(
+            "T4", "suite is not order/run dependent", f"varying results: {signatures}", mode="full"
+        )
+    return _ok(
+        "T4", "suite is not order/run dependent", f"4 runs stable: {signatures[0]}", mode="full"
+    )
 
 
 def check_t7_no_network(_: dict) -> CheckResult:
@@ -764,10 +815,18 @@ def check_t5_mutation(_: dict) -> CheckResult:
 def check_t6_vulture(_: dict) -> CheckResult:
     if not _module_available("vulture"):
         return _blocked("T6", "no unexplained dead code (vulture)", "vulture not installed")
-    rc, output = _run([sys.executable, "-m", "vulture", "atlas", "--min-confidence", "80"], timeout=300)
+    rc, output = _run(
+        [sys.executable, "-m", "vulture", "atlas", "--min-confidence", "80"], timeout=300
+    )
     findings = [line for line in output.splitlines() if line.strip()]
     if rc != 0 and findings:
-        return _bad("T6", "no unexplained dead code (vulture)", f"{len(findings)} findings", findings, mode="full")
+        return _bad(
+            "T6",
+            "no unexplained dead code (vulture)",
+            f"{len(findings)} findings",
+            findings,
+            mode="full",
+        )
     return _ok("T6", "no unexplained dead code (vulture)", "no findings", mode="full")
 
 
@@ -809,7 +868,7 @@ def run_checks(
                 CheckResult(check.__name__, check.__name__, FAIL, f"check raised: {exc!r}", mode)
             )
     return SelfCheckReport(
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         mode=mode,
         git_sha=git_sha or _git_sha(),
         config_hash=_config_hash(),

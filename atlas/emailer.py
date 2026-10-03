@@ -90,7 +90,9 @@ def _assert_digest_shippable(digest) -> None:
                 )
 
 
-def send_digest(digest, settings: Settings | None = None, *, emailer: ResendEmailer | None = None) -> bool:
+def send_digest(
+    digest, settings: Settings | None = None, *, emailer: ResendEmailer | None = None
+) -> bool:
     from .digest import render_html, render_text
 
     _assert_digest_shippable(digest)
