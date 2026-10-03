@@ -6,19 +6,19 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from resend_mail import email_sender
 
 
-# ---- your fixed profile info, edit once here ----
+# ---- applicant details come from the environment; never commit real PII ----
 PROFILE = {
-    "First Name": "Soham",
-    "Last Name": "Das",
+    "First Name": os.environ.get("APPLICANT_FIRST_NAME", ""),
+    "Last Name": os.environ.get("APPLICANT_LAST_NAME", ""),
     "Email": os.environ.get("APPLICANT_EMAIL", ""),
-    "Phone": "+917044855404",
-    "LinkedIn": "https://www.linkedin.com/in/sohamdas2071/",
-    "GitHub": "https://github.com/N0teveryth1ng",
-    "City": "Kolkata",
-    "Location": "Kolkata, India",
+    "Phone": os.environ.get("APPLICANT_PHONE", ""),
+    "LinkedIn": os.environ.get("APPLICANT_LINKEDIN", ""),
+    "GitHub": os.environ.get("APPLICANT_GITHUB", ""),
+    "City": os.environ.get("APPLICANT_CITY", ""),
+    "Location": os.environ.get("APPLICANT_LOCATION", ""),
 }
 
-RESUME_PATH = r"C:\Users\S Das\Downloads\Soham_Das_Resume [MXT].pdf"
+RESUME_PATH = os.environ.get("APPLICANT_RESUME_PATH", "")
 
 
 def safe_fill(page, label, value, timeout=2000):
