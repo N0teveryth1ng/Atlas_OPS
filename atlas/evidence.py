@@ -8,7 +8,14 @@ matching, no stemming — and quotes shorter than ``MIN_QUOTE_LEN`` are rejected
 
 from __future__ import annotations
 
-from .schemas import Evidence, EvidenceSource, Verdict, VerifierVerdict
+from .schemas import (
+    DecisionCritic,
+    Evidence,
+    EvidenceSource,
+    ProjectRelevance,
+    Verdict,
+    VerifierVerdict,
+)
 
 MIN_QUOTE_LEN = 8
 
@@ -62,6 +69,32 @@ def validate_verifier_evidence(
     verifier: VerifierVerdict, jd_text: str, profile_text: str
 ) -> list[str]:
     return _check_items(verifier.reasons_against, "reasons_against", jd_text, profile_text)
+
+
+def validate_project_relevance(
+    relevance: ProjectRelevance, jd_text: str, profile_text: str
+) -> list[str]:
+    errors: list[str] = []
+    for index, item in enumerate(relevance.per_project):
+        errors += _check_items(
+            item.jd_evidence, f"per_project[{index}].jd_evidence", jd_text, profile_text
+        )
+        errors += _check_items(
+            item.profile_evidence, f"per_project[{index}].profile_evidence", jd_text, profile_text
+        )
+    return errors
+
+
+def validate_critic(critic: DecisionCritic, jd_text: str, profile_text: str) -> list[str]:
+    errors = _check_items(critic.reasons_against, "reasons_against", jd_text, profile_text)
+    if critic.strongest_reason is not None and not _is_valid(
+        critic.strongest_reason, jd_text, profile_text
+    ):
+        errors.append(
+            "strongest_reason quote not found in "
+            f"{critic.strongest_reason.source.value}: {critic.strongest_reason.quote!r}"
+        )
+    return errors
 
 
 def validation_retry_message(errors: list[str]) -> str:

@@ -15,15 +15,17 @@ from datetime import UTC, datetime
 
 from .config import Settings, get_settings
 from .db import log_stage, set_job_status
+from .decision import evaluate_decision
 from .evaluator import evaluate_job
 from .evidence import EvidenceValidationError
 from .filters import apply_hard_filters
 from .jd_parser import parse_jd
 from .job_status import JobStatus, transition
 from .llm import LLMClient
-from .ranker import final_score
 from .schemas import (
     CandidateProfile,
+    Decision,
+    DecisionOutcome,
     FilterResult,
     Job,
     ParsedJD,
@@ -33,7 +35,7 @@ from .schemas import (
     VerifierVerdict,
 )
 from .skills import SkillMatch, match_skills
-from .verifier import resolve_recommendation, verify_job
+from .verifier import verify_job
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,7 @@ class ProcessedJob:
     skill_match: SkillMatch | None = None
     verdict: Verdict | None = None
     verifier: VerifierVerdict | None = None
+    decision: Decision | None = None
     final_recommendation: Recommendation = Recommendation.skip
     score: float = 0.0
     needs_review: bool = False
@@ -58,6 +61,15 @@ class ProcessedJob:
         self.status = transition(self.status, new_status)
         if conn is not None and self.job_id is not None:
             set_job_status(conn, self.job_id, new_status)
+
+
+def _recommendation_for(decision: Decision) -> Recommendation:
+    """Map a DecisionOutcome onto the Recommendation enum the digest expects."""
+    if decision.outcome == DecisionOutcome.apply:
+        return Recommendation.strong_apply if decision.match_score >= 90.0 else Recommendation.apply
+    if decision.outcome == DecisionOutcome.review:
+        return Recommendation.maybe
+    return Recommendation.skip
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -193,15 +205,34 @@ def process_job(
         result.final_recommendation = Recommendation.maybe
         return result
 
-    final = resolve_recommendation(verdict, verifier)
-    if skill_match.must_have_coverage < settings.filters.must_have_coverage_floor and final in {
-        Recommendation.apply,
-        Recommendation.strong_apply,
-    }:
-        final = Recommendation.maybe
-    result.final_recommendation = final
-    result.score = final_score(verdict, skill_match, job, settings)
-    result.advance(JobStatus.ranked, conn)
+    try:
+        decision = evaluate_decision(
+            client,
+            profile=profile,
+            job=job,
+            parsed=parsed,
+            verdict=verdict,
+            verifier=verifier,
+            skill_match=skill_match,
+            settings=settings,
+            cache=cache,
+        )
+    except EvidenceValidationError as exc:
+        logger.warning("job %s: decision evidence failed: %s", job_id, exc)
+        result.evidence_failed = True
+        result.needs_review = True
+        result.advance(JobStatus.needs_review, conn)
+        result.final_recommendation = Recommendation.maybe
+        return result
+
+    result.decision = decision
+    result.score = decision.match_score
+    result.final_recommendation = _recommendation_for(decision)
+    if decision.outcome == DecisionOutcome.review:
+        result.needs_review = True
+        result.advance(JobStatus.needs_review, conn)
+    else:
+        result.advance(JobStatus.ranked, conn)
 
     if conn is not None:
         log_stage(
@@ -227,6 +258,14 @@ def process_job(
             model=settings.models.verifier,
             prompt_version="verifier",
             data=verifier.model_dump(),
+        )
+        log_stage(
+            conn,
+            "decisions",
+            job_id=job_id,
+            model=settings.models.evaluator,
+            prompt_version="decision",
+            data=decision.model_dump(),
         )
     return result
 

@@ -6,13 +6,18 @@ Usage::
     python -m atlas.cli review profile.json
     python -m atlas.cli run            # full pipeline + digest + email
     python -m atlas.cli schedule       # run now, then daily
-    python -m atlas.cli eval           # golden-set evaluation
+    python -m atlas.cli decide       # run the decision engine over stored jobs
+    python -m atlas.cli explain <job_id>
+    python -m atlas.cli decide           # run the decision engine over stored jobs
+    python -m atlas.cli explain <job_id>  # print the latest decision for a job
+    python -m atlas.cli eval             # golden-set evaluation
     python -m atlas.cli feedback <job_id> good|bad --reason <code>
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -247,6 +252,58 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     return 0
 
 
+def cmd_decide(args: argparse.Namespace) -> int:
+    """Run the decision engine over stored jobs (dry-run; no email)."""
+    from .pipeline import run_pipeline
+
+    settings = get_settings()
+    conn = connect()
+    init_db(conn)
+    profile = get_latest_profile(conn)
+    if profile is None:
+        print("No saved profile. Run `profile` first.", file=sys.stderr)
+        conn.close()
+        return 2
+
+    client = _make_client()
+    run_id = start_run(conn, "decide")
+    results = run_pipeline(
+        conn, run_id, profile, settings, client, limit=getattr(args, "limit", None)
+    )
+
+    for result in results:
+        if result.decision is None:
+            continue
+        print(
+            f"- [{result.decision.outcome.value.upper()}] "
+            f"score={result.decision.match_score:.0f} "
+            f"conf={result.decision.confidence:.2f} "
+            f"{(result.job.title or '')} @ {result.job.company or ''}"
+        )
+        for veto in result.decision.vetoes:
+            tag = "HARD" if veto.hard else "SOFT"
+            print(f"    ! {tag} {veto.rule_id}: {veto.reason}")
+
+    finish_run(conn, run_id, "ok", {})
+    conn.close()
+    return 0
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    """Print the latest decision record for a single job."""
+    from .db import get_latest_decision
+
+    conn = connect()
+    init_db(conn)
+    decision = get_latest_decision(conn, args.job_id)
+    conn.close()
+    if decision is None:
+        print(f"No decision recorded for job {args.job_id}.")
+        return 0
+    print(json.dumps(decision, indent=2))
+    return 0
+
+
 def cmd_schedule(args: argparse.Namespace) -> int:
     from .scheduler import serve
 
@@ -432,6 +489,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-email", dest="email", action="store_false", help="Do not email the digest"
     )
     p_run.set_defaults(func=cmd_run, email=True)
+
+    p_decide = sub.add_parser(
+        "decide", help="Run the decision engine over stored jobs (dry-run, no email)"
+    )
+    p_decide.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
+    p_decide.set_defaults(func=cmd_decide)
+
+    p_explain = sub.add_parser("explain", help="Print the latest decision for a job")
+    p_explain.add_argument("job_id", type=int, help="Job id from the digest/DB")
+    p_explain.set_defaults(func=cmd_explain)
 
     p_sched = sub.add_parser("schedule", help="Run once now, then daily at the configured hour")
     p_sched.add_argument("--hour", type=int, default=None, help="Local hour 0-23 (default: config)")
