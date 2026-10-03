@@ -126,18 +126,3 @@ def run_sourcing(
     collectors = collectors if collectors is not None else build_collectors(settings)
     queries = plan_queries(profile, settings)
     return collect(collectors, queries, settings=settings, conn=conn, run_id=run_id, now=now)
-
-
-def run_sourcing(
-    profile: CandidateProfile,
-    *,
-    settings: Settings | None = None,
-    conn: sqlite3.Connection | None = None,
-    run_id: int | None = None,
-    collectors: list[Collector] | None = None,
-    now: datetime | None = None,
-) -> SourcingResult:
-    settings = settings or get_settings()
-    collectors = collectors if collectors is not None else build_collectors(settings)
-    queries = plan_queries(profile, settings)
-    return collect(collectors, queries, settings=settings, conn=conn, run_id=run_id, now=now)

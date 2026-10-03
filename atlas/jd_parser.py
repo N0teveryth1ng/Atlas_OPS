@@ -29,6 +29,21 @@ _YEARS_OF_RE = re.compile(
     rf"({_NUM})\s*(?:years?|yrs?)\s+of\s+(?:relevant\s+|professional\s+|industry\s+)?experience",
     re.I,
 )
+# A bare "N years" / "N yrs" (optionally "N years experience"). Many postings
+# state the requirement without "of experience"; missing these let an
+# over-qualified role slip through the hard filter.
+_BARE_YEARS_RE = re.compile(rf"({_NUM})\s*\+?\s*(?:years?|yrs?)\b", re.I)
+# Reject "N years" when it clearly is not a requirement ("over the last 3 years",
+# "founded 5 years ago").
+_NON_REQ_BEFORE_RE = re.compile(
+    r"(?:last|past|next|previous|over|nearly|almost|after|before|every|per|around|about|"
+    r"for\s+the|since)\s+(?:the\s+)?$",
+    re.I,
+)
+_NON_REQ_AFTER_RE = re.compile(
+    r"^\s*(?:ago|old|of\s+age|in\s+business|running|strong|now)\b",
+    re.I,
+)
 _FRESHER_RE = re.compile(
     r"\b(fresher|fresh(?:er)?\s+graduate|entry[\s-]?level|no\s+(?:prior\s+)?experience|"
     r"recent\s+graduate|graduate\s+trainee|trainee|internship|0\s*[-–]\s*1\s*years?)\b",
@@ -101,6 +116,12 @@ def extract_years(text: str) -> tuple[float | None, float | None, str | None]:
     for match in _MIN_RE.finditer(text):
         candidates.append((match.start(), match.end(), float(match.group(1)), None, match.group(0), False))
     for match in _YEARS_OF_RE.finditer(text):
+        candidates.append((match.start(), match.end(), float(match.group(1)), None, match.group(0), False))
+    for match in _BARE_YEARS_RE.finditer(text):
+        before = text[max(0, match.start() - 24) : match.start()]
+        after = text[match.end() : match.end() + 16]
+        if _NON_REQ_BEFORE_RE.search(before) or _NON_REQ_AFTER_RE.search(after):
+            continue
         candidates.append((match.start(), match.end(), float(match.group(1)), None, match.group(0), False))
 
     if not candidates:

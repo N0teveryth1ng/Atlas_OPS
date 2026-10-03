@@ -4,17 +4,18 @@ import re
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 
+# ---- applicant details come from the environment; never commit real PII ----
 PROFILE = {
-    "First Name": "Soham",
-    "Last Name": "Das",
+    "First Name": os.environ.get("APPLICANT_FIRST_NAME", ""),
+    "Last Name": os.environ.get("APPLICANT_LAST_NAME", ""),
     "Email": os.environ.get("APPLICANT_EMAIL", ""),
-    "Phone": "+917044855404",
-    "Location": "Kolkata, India",
-    "LinkedIn": "https://www.linkedin.com/in/sohamdas2071/",
-    "GitHub": "https://github.com/N0teveryth1ng",
+    "Phone": os.environ.get("APPLICANT_PHONE", ""),
+    "Location": os.environ.get("APPLICANT_LOCATION", ""),
+    "LinkedIn": os.environ.get("APPLICANT_LINKEDIN", ""),
+    "GitHub": os.environ.get("APPLICANT_GITHUB", ""),
 }
 
-RESUME_PATH = r"C:\Users\S Das\Downloads\Soham_Das_Resume [MXT].pdf"
+RESUME_PATH = os.environ.get("APPLICANT_RESUME_PATH", "")
 
 
 def safe_fill(page, labels, value, timeout=2500):

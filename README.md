@@ -49,10 +49,9 @@ Design rules:
 - **Phase 4** — collectors, query planner, normalize, dedupe. *(done)*
 - **Phase 5** — evaluator + adversarial verifier. *(done)*
 - **Phase 6** — ranker, digest, email, scheduling. *(done)*
-- **Phase 7** — feedback loop + tuning. *(current)*
-- **Phase 6** — ranker, digest, email, scheduling.
-- **Phase 7** — feedback loop + tuning.
-- **Phase 8 (deferred)** — tailoring / assisted applying.
+- **Phase 7** — feedback loop + tuning. *(done)*
+- **Phase 8 (deferred)** — tailoring / assisted applying. Blocked until the
+  pre-Phase-8 audit gates pass (`python -m atlas.cli selfcheck --full`).
 
 ## Setup
 
@@ -72,6 +71,7 @@ cp .env.example .env              # fill in real values, never commit .env
 | `RESEND_API_KEY` | Resend email API key |
 | `RESEND_FROM_EMAIL` | From address for digests |
 | `RESEND_TO_EMAIL` | Digest recipient |
+| `ATLAS_DB` | Optional path to the SQLite DB (default `atlas.sqlite3`) |
 
 ### Configuration
 
@@ -184,6 +184,8 @@ python -m atlas.cli schedule --hour 9         # run now, then daily at 09:00
 python -m atlas.cli eval                     # golden-set evaluation (deterministic)
 python -m atlas.cli eval --with-llm          # + live LLM precision@10 gate
 python -m atlas.cli feedback <job_id> good|bad --reason <code>
+python -m atlas.cli selfcheck --fast          # deterministic pre-flight checks
+python -m atlas.cli selfcheck --full          # + coverage/lint/type/mutation
 ```
 
 ## Testing
@@ -191,8 +193,16 @@ python -m atlas.cli feedback <job_id> good|bad --reason <code>
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest                             # unit tests (year regex, filters, parser, LLM, DB)
+python -m atlas.cli selfcheck --fast         # repo/pipeline pre-flight checks
 python eval/eval.py                          # standalone golden-set eval
 ```
+
+`selfcheck` runs the pre-Phase-8 audit checks (hygiene, secrets, gitignore,
+pinned deps, README, tests, coverage, lint/format/types, dead code, network
+isolation, pipeline invariants) and exits non-zero if any check is FAIL or
+BLOCKED. `--full` adds coverage/lint/type/mutation checks. `--report out.json`
+writes the machine-readable result (timestamp, git SHA, config hash, prompt
+versions, models).
 
 The golden set lives in `eval/golden_set.jsonl` (one JSON object per line:
 `id, title, description, company, location, label, reason, expected_min_years,
