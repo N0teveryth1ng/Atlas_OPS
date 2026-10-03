@@ -338,6 +338,18 @@ def cmd_feedback(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_selfcheck(args: argparse.Namespace) -> int:
+    from .selfcheck import main as selfcheck_main
+
+    argv: list[str] = []
+    if args.full:
+        argv.append("--full")
+    else:
+        argv.append("--fast")
+    argv += ["--report", args.report]
+    return selfcheck_main(argv)
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     conn = connect()
     init_db(conn)
@@ -400,6 +412,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument("--golden", help="Path to a golden-set .jsonl (default: eval/golden_set.jsonl)")
     p_eval.add_argument("--with-llm", action="store_true", help="Also run the live LLM precision@10 gate")
     p_eval.set_defaults(func=cmd_eval)
+
+    p_self = sub.add_parser("selfcheck", help="Run the pre-Phase-8 audit checks")
+    p_self.add_argument("--fast", action="store_true", help="In-process checks only")
+    p_self.add_argument("--full", action="store_true", help="Also run the external toolchain checks")
+    p_self.add_argument("--report", default="selfcheck_report.json", help="JSON report output path")
+    p_self.set_defaults(func=cmd_selfcheck, full=False)
 
     p_fb = sub.add_parser("feedback", help="Record feedback and tune future runs")
     p_fb.add_argument("job_id", nargs="?", type=int, help="Job id from the digest/DB")
