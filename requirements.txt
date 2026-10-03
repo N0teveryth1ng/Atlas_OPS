@@ -3,10 +3,10 @@ pydantic==2.12.5
 PyYAML==6.0.3
 python-dotenv==1.2.2
 httpx==0.28.1
-tenacity
-groq
-pypdf
+tenacity==8.5.0
+groq==1.6.0
+pypdf==4.3.1
 
 # --- deferred: browser automation for Phase 8 auto-apply ---
 # Kept because auto_applications/ is retained for later; not used by the pipeline.
-playwright
+playwright==1.62.0
