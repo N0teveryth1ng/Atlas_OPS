@@ -14,7 +14,9 @@ venv/
 .ruff_cache/
 .coverage
 .coverage.*
+coverage.json
 htmlcov/
+*.log
 
 # --- app data / personal (never commit) ---
 uploads/
