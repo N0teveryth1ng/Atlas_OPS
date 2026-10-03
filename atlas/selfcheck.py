@@ -670,17 +670,22 @@ def check_t3_lint_format_types(_: dict) -> CheckResult:
     return _ok("T3", "ruff + black + mypy clean", "all three clean", mode="full")
 
 
+def _pytest_signature(output: str) -> str:
+    last = [line for line in output.splitlines() if line.strip()][-1:][0]
+    return re.sub(r"\s+in\s+[\d.]+s", "", last).strip()
+
+
 def check_t4_flaky(_: dict) -> CheckResult:
     signatures: list[str] = []
     for _ in range(3):
         rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly"], timeout=600)
         if rc != 0:
             return _bad("T4", "suite is not order/run dependent", f"run rc={rc}", [output[-400:]], mode="full")
-        signatures.append([line for line in output.splitlines() if line.strip()][-1:][0])
+        signatures.append(_pytest_signature(output))
     rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "randomly"], timeout=600)
     if rc != 0:
         return _bad("T4", "suite is not order/run dependent", f"random-order rc={rc}", [output[-400:]], mode="full")
-    signatures.append([line for line in output.splitlines() if line.strip()][-1:][0])
+    signatures.append(_pytest_signature(output))
     if len(set(signatures)) != 1:
         return _bad("T4", "suite is not order/run dependent", f"varying results: {signatures}", mode="full")
     return _ok("T4", "suite is not order/run dependent", f"4 runs stable: {signatures[0]}", mode="full")

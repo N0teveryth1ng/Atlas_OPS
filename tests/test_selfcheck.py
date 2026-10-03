@@ -73,3 +73,40 @@ def test_cli_registers_selfcheck():
     args = build_parser().parse_args(["selfcheck", "--fast"])
     assert args.func.__name__ == "cmd_selfcheck"
     assert args.full is False
+
+
+def test_pytest_signature_strips_timing():
+    from atlas.selfcheck import _pytest_signature
+
+    assert _pytest_signature("1 passed, 2 warnings in 3.14s") == "1 passed, 2 warnings"
+    assert _pytest_signature("439 passed in 4.40s") == "439 passed"
+
+
+def test_readme_check_passes_on_this_repo():
+    from atlas.selfcheck import PASS, check_h7_readme
+
+    result = check_h7_readme({})
+    assert result.status == PASS, result.evidence
+
+
+def test_apply_isolation_checks_pass_on_this_repo():
+    from atlas.selfcheck import PASS, check_a1_autoapply_isolation, check_a2_no_application_posts
+
+    assert check_a1_autoapply_isolation({}).status == PASS
+    assert check_a2_no_application_posts({}).status == PASS
+
+
+def test_working_tree_check_flags_branch(monkeypatch):
+    from atlas import selfcheck
+
+    def fake_run(cmd, timeout=600):
+        if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+            return 0, "feature/x\n"
+        if cmd[:3] == ["git", "status", "--porcelain"]:
+            return 0, ""
+        return 0, ""
+
+    monkeypatch.setattr(selfcheck, "_run", fake_run)
+    result = selfcheck.check_h1_working_tree({})
+    assert result.status == FAIL
+    assert "not 'main'" in result.evidence
