@@ -478,6 +478,52 @@ def check_l5_verifier_invariant(_: dict) -> CheckResult:
     return _ok("L5", "verifier can only downgrade/veto", "all 4x2x5 combinations bounded")
 
 
+def check_d3_quote_validation(_: dict) -> CheckResult:
+    from .evidence import validate_verdict_evidence
+    from .schemas import Evidence, EvidenceSource, Recommendation, Verdict
+
+    jd_text = "We build backend services in Python and ship to production."
+    good = Verdict(
+        fit_score=70,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="backend services in Python", source=EvidenceSource.jd)],
+    )
+    if validate_verdict_evidence(good, jd_text, ""):
+        return _bad("D3", "quotes must appear in source", "verbatim quote rejected")
+    bad = Verdict(
+        fit_score=70,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="fabricated claim never written", source=EvidenceSource.jd)],
+    )
+    if not validate_verdict_evidence(bad, jd_text, ""):
+        return _bad("D3", "quotes must appear in source", "fabricated quote accepted")
+    return _ok(
+        "D3", "quotes must appear in source", "present quote accepted, absent quote rejected"
+    )
+
+
+def check_d4_status_machine(_: dict) -> CheckResult:
+    from .job_status import SHIPPABLE, IllegalTransition, JobStatus, transition
+
+    problems: list[str] = []
+    for bad_status in (JobStatus.rejected, JobStatus.needs_review, JobStatus.new):
+        if bad_status in SHIPPABLE:
+            problems.append(f"{bad_status.value} shippable")
+    if not {JobStatus.verified, JobStatus.ranked} <= SHIPPABLE:
+        problems.append("verified/ranked not shippable")
+    try:
+        transition(JobStatus.new, JobStatus.ranked)
+    except IllegalTransition:
+        pass
+    else:
+        problems.append("new->ranked allowed")
+    if transition(JobStatus.new, JobStatus.parsed) != JobStatus.parsed:
+        problems.append("new->parsed blocked")
+    if problems:
+        return _bad("D4", "job status machine guards shipping", "; ".join(problems))
+    return _ok("D4", "job status machine guards shipping", "illegal transitions blocked")
+
+
 def check_d1_email_idempotency(_: dict) -> CheckResult:
     from .config import Settings
     from .db import (
@@ -648,6 +694,8 @@ FAST_CHECKS: list[Callable[[dict], CheckResult]] = [
     check_g5_golden_provenance,
     check_g3_seniority_matrix,
     check_l5_verifier_invariant,
+    check_d3_quote_validation,
+    check_d4_status_machine,
     check_d1_email_idempotency,
     check_e2e_dryrun,
 ]
