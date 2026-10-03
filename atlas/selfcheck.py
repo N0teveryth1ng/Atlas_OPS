@@ -203,25 +203,32 @@ def _blocked(cid: str, name: str, evidence: str, mode: str = "fast"):
 # --------------------------------------------------------------------------- #
 
 
-def check_h1_gitignore(_: dict) -> CheckResult:
-    text = _read_text(REPO_ROOT / ".gitignore")
-    missing = [p for p in REQUIRED_IGNORES if p not in text]
-    if missing:
-        return _bad("H1", "gitignore covers sensitive/generated paths", f"missing: {missing}")
-    return _ok("H1", "gitignore covers sensitive/generated paths", f"{len(REQUIRED_IGNORES)} entries present")
+def check_h1_working_tree(_: dict) -> CheckResult:
+    branch_rc, branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    status_rc, status = _run(["git", "status", "--porcelain"])
+    if branch_rc != 0 or status_rc != 0:
+        return _blocked("H1", "working tree clean, on main, current", "git unavailable")
+    branch = branch.strip()
+    problems: list[str] = []
+    if status.strip():
+        problems.append(f"dirty ({len(status.splitlines())} path(s))")
+    if branch != "main":
+        problems.append(f"on branch '{branch}', not 'main'")
+    if not problems:
+        behind_rc, behind = _run(["git", "rev-list", "--left-right", "--count", "HEAD...origin/main"])
+        if behind_rc == 0 and behind.strip():
+            left, _, right = behind.strip().partition("\t")
+            if right.strip() and right.strip() != "0":
+                problems.append(f"{right.strip()} commit(s) behind origin/main")
+    if problems:
+        return _bad("H1", "working tree clean, on main, current", "; ".join(problems), problems[:5])
+    return _ok("H1", "working tree clean, on main, current", f"clean, main @ {_git_sha()[:12]}")
 
 
-def check_h2_tracked_sensitive(_: dict) -> CheckResult:
+def check_h2_tree_secrets(_: dict) -> CheckResult:
     tracked = _tracked_files()
-    hits = [f for f in tracked if SENSITIVE_TRACKED.search(f)]
-    if hits:
-        return _bad("H2", "no sensitive files tracked", f"tracked: {hits}", hits)
-    return _ok("H2", "no sensitive files tracked", f"scanned {len(tracked)} tracked paths")
-
-
-def check_h3_working_tree_secrets(_: dict) -> CheckResult:
-    hits: list[str] = []
-    for rel in _tracked_files():
+    hits = [f"tracked:{f}" for f in tracked if SENSITIVE_TRACKED.search(f)]
+    for rel in tracked:
         path = REPO_ROOT / rel
         if not path.is_file() or path.stat().st_size > 2_000_000:
             continue
@@ -230,8 +237,16 @@ def check_h3_working_tree_secrets(_: dict) -> CheckResult:
             if pattern.search(text):
                 hits.append(f"{rel}:{label}")
     if hits:
-        return _bad("H3", "no secrets in tracked files", f"hits: {hits}", hits)
-    return _ok("H3", "no secrets in tracked files", "no secret patterns matched")
+        return _bad("H2", "no secrets in the working tree", f"hits: {hits}", hits)
+    return _ok("H2", "no secrets in the working tree", f"scanned {len(tracked)} tracked paths")
+
+
+def check_h4_gitignore(_: dict) -> CheckResult:
+    text = _read_text(REPO_ROOT / ".gitignore")
+    missing = [p for p in REQUIRED_IGNORES if p not in text]
+    if missing:
+        return _bad("H4", "gitignore covers sensitive/generated paths", f"missing: {missing}")
+    return _ok("H4", "gitignore covers sensitive/generated paths", f"{len(REQUIRED_IGNORES)} entries present")
 
 
 def check_h5_env_connascence(_: dict) -> CheckResult:
@@ -266,22 +281,30 @@ def check_h6_requirements_pinned(_: dict) -> CheckResult:
     return _ok("H6", "requirements are pinned", "all dependencies pinned")
 
 
-def check_h7_tracked_pii(_: dict) -> CheckResult:
-    hits: list[str] = []
-    for rel in _tracked_files():
-        path = REPO_ROOT / rel
-        if not path.is_file() or path.stat().st_size > 2_000_000:
-            continue
-        text = _read_text(path)
-        for label, pattern in PII_PATTERNS:
-            if pattern.search(text):
-                hits.append(f"{rel}:{label}")
-    if hits:
-        return _bad("H7", "no PII in tracked files", f"hits: {hits}", hits)
-    return _ok("H7", "no PII in tracked files", "no PII patterns matched")
+def check_h7_readme(_: dict) -> CheckResult:
+    text = _read_text(REPO_ROOT / "README.md")
+    if not text:
+        return _bad("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", "README.md missing")
+    required = [
+        "pip install",
+        "python -m atlas.cli profile",
+        "python -m atlas.cli review",
+        "python -m atlas.cli status",
+        "python -m atlas.cli collect",
+        "python -m atlas.cli run",
+        "python -m atlas.cli schedule",
+        "python -m atlas.cli eval",
+        "python -m atlas.cli feedback",
+        "selfcheck",
+        "config.yaml",
+    ]
+    missing = [term for term in required if term not in text]
+    if missing:
+        return _bad("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"missing: {missing}")
+    return _ok("H7", "README documents setup/config/CLI/eval/selfcheck/schedule", f"{len(required)} terms present")
 
 
-def check_h8_autoapply_isolation(_: dict) -> CheckResult:
+def check_a1_autoapply_isolation(_: dict) -> CheckResult:
     forbidden = ("auto_applications", "resend_mail")
     offenders: list[str] = []
     for path in (REPO_ROOT / "atlas").rglob("*.py"):
@@ -299,8 +322,48 @@ def check_h8_autoapply_isolation(_: dict) -> CheckResult:
                 if name.split(".")[0] in forbidden:
                     offenders.append(f"{path.relative_to(REPO_ROOT)} imports {name}")
     if offenders:
-        return _bad("H8", "auto-apply code not imported by pipeline", f"imports: {offenders}")
-    return _ok("H8", "auto-apply code not imported by pipeline", "no pipeline imports of legacy bots")
+        return _bad("A1", "auto-apply code not imported by pipeline", f"imports: {offenders}")
+    return _ok("A1", "auto-apply code not imported by pipeline", "no pipeline imports of legacy bots")
+
+
+def check_a2_no_application_posts(_: dict) -> CheckResult:
+    forbidden = ("playwright", "selenium", "auto_apply", "apply_now", "submit_application")
+    offenders: list[str] = []
+    for path in (REPO_ROOT / "atlas").rglob("*.py"):
+        if path.name == "selfcheck.py":
+            continue  # this scanner mentions the tokens by design
+        text = _read_text(path)
+        for token in forbidden:
+            if token in text:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{token}")
+    if offenders:
+        return _bad("A2", "pipeline cannot POST to application endpoints", f"tokens: {offenders}")
+    return _ok("A2", "pipeline cannot POST to application endpoints", "no browser/apply tokens in atlas/")
+
+
+def check_a3_no_submit_flag(_: dict) -> CheckResult:
+    rc, output = _run([sys.executable, "-m", "atlas.cli", "run", "--help"], timeout=60)
+    if rc != 0:
+        return _blocked("A3", "atlas run has no submit/apply flag", f"--help rc={rc}")
+    offenders = [t for t in ("--submit", "--apply", "--auto-apply", "--auto_apply") if t in output]
+    if offenders:
+        return _bad("A3", "atlas run has no submit/apply flag", f"flags: {offenders}")
+    return _ok("A3", "atlas run has no submit/apply flag", "no submit/apply option exposed")
+
+
+def check_a4_tracked_pii(_: dict) -> CheckResult:
+    hits: list[str] = []
+    for rel in _tracked_files():
+        path = REPO_ROOT / rel
+        if not path.is_file() or path.stat().st_size > 2_000_000:
+            continue
+        text = _read_text(path)
+        for label, pattern in PII_PATTERNS:
+            if pattern.search(text):
+                hits.append(f"{rel}:{label}")
+    if hits:
+        return _bad("A4", "no hard-coded PII in tracked files", f"hits: {hits}", hits)
+    return _ok("A4", "no hard-coded PII in tracked files", "no PII patterns matched")
 
 
 def check_g5_golden_provenance(_: dict) -> CheckResult:
@@ -328,17 +391,17 @@ def check_g5_golden_provenance(_: dict) -> CheckResult:
     return _ok("G5", "golden set is real + human-labelled", f"{len(cases)} human-labelled cases")
 
 
-def check_t7_seniority_matrix(_: dict) -> CheckResult:
+def check_g3_seniority_matrix(_: dict) -> CheckResult:
     path = REPO_ROOT / "tests" / "seniority_matrix_cases.json"
     if not path.exists():
-        return _bad("T7", "seniority/year matrix >=150 cases", "fixture missing")
+        return _bad("G3", "seniority/year matrix >=150 cases", "fixture missing")
     cases = json.loads(path.read_text(encoding="utf-8"))
     if len(cases) < 150:
-        return _bad("T7", "seniority/year matrix >=150 cases", f"only {len(cases)} cases")
+        return _bad("G3", "seniority/year matrix >=150 cases", f"only {len(cases)} cases")
     rc, output = _run([sys.executable, "-m", "pytest", "tests/test_seniority_matrix.py", "-q"])
     if rc != 0:
-        return _bad("T7", "seniority/year matrix >=150 cases", f"pytest rc={rc}", [output[-500:]])
-    return _ok("T7", "seniority/year matrix >=150 cases", f"{len(cases)} cases pass")
+        return _bad("G3", "seniority/year matrix >=150 cases", f"pytest rc={rc}", [output[-500:]])
+    return _ok("G3", "seniority/year matrix >=150 cases", f"{len(cases)} cases pass")
 
 
 def check_l5_verifier_invariant(_: dict) -> CheckResult:
@@ -495,15 +558,18 @@ def check_e2e_dryrun(_: dict) -> CheckResult:
 
 
 FAST_CHECKS: list[Callable[[dict], CheckResult]] = [
-    check_h1_gitignore,
-    check_h2_tracked_sensitive,
-    check_h3_working_tree_secrets,
+    check_h1_working_tree,
+    check_h2_tree_secrets,
+    check_h4_gitignore,
     check_h5_env_connascence,
     check_h6_requirements_pinned,
-    check_h7_tracked_pii,
-    check_h8_autoapply_isolation,
+    check_h7_readme,
+    check_a1_autoapply_isolation,
+    check_a2_no_application_posts,
+    check_a3_no_submit_flag,
+    check_a4_tracked_pii,
     check_g5_golden_provenance,
-    check_t7_seniority_matrix,
+    check_g3_seniority_matrix,
     check_l5_verifier_invariant,
     check_d1_email_idempotency,
     check_e2e_dryrun,
@@ -515,7 +581,7 @@ FAST_CHECKS: list[Callable[[dict], CheckResult]] = [
 # --------------------------------------------------------------------------- #
 
 
-def check_h4_history_secrets(_: dict) -> CheckResult:
+def check_h3_history_secrets(_: dict) -> CheckResult:
     try:
         out = subprocess.run(
             ["git", "log", "--all", "-p"],
@@ -525,13 +591,13 @@ def check_h4_history_secrets(_: dict) -> CheckResult:
             timeout=180,
         )
     except subprocess.TimeoutExpired:
-        return _blocked("H4", "no secrets in git history", "history scan timed out")
+        return _blocked("H3", "no secrets in git history", "history scan timed out")
     if out.returncode != 0:
-        return _blocked("H4", "no secrets in git history", "git log failed")
+        return _blocked("H3", "no secrets in git history", "git log failed")
     hits = [label for label, pattern in SECRET_PATTERNS if pattern.search(out.stdout or "")]
     if hits:
-        return _bad("H4", "no secrets in git history", f"patterns: {hits}", hits)
-    return _ok("H4", "no secrets in git history", "no secret patterns in full history")
+        return _bad("H3", "no secrets in git history", f"patterns: {hits}", hits)
+    return _ok("H3", "no secrets in git history", "no secret patterns in full history")
 
 
 def check_t1_tests(_: dict) -> CheckResult:
@@ -604,15 +670,31 @@ def check_t3_lint_format_types(_: dict) -> CheckResult:
     return _ok("T3", "ruff + black + mypy clean", "all three clean", mode="full")
 
 
-def check_t4_no_network(_: dict) -> CheckResult:
+def check_t4_flaky(_: dict) -> CheckResult:
+    signatures: list[str] = []
+    for _ in range(3):
+        rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly"], timeout=600)
+        if rc != 0:
+            return _bad("T4", "suite is not order/run dependent", f"run rc={rc}", [output[-400:]], mode="full")
+        signatures.append([line for line in output.splitlines() if line.strip()][-1:][0])
+    rc, output = _run([sys.executable, "-m", "pytest", "-q", "-p", "randomly"], timeout=600)
+    if rc != 0:
+        return _bad("T4", "suite is not order/run dependent", f"random-order rc={rc}", [output[-400:]], mode="full")
+    signatures.append([line for line in output.splitlines() if line.strip()][-1:][0])
+    if len(set(signatures)) != 1:
+        return _bad("T4", "suite is not order/run dependent", f"varying results: {signatures}", mode="full")
+    return _ok("T4", "suite is not order/run dependent", f"4 runs stable: {signatures[0]}", mode="full")
+
+
+def check_t7_no_network(_: dict) -> CheckResult:
     if not _module_available("pytest_socket"):
-        return _blocked("T4", "suite passes with network disabled", "pytest-socket not installed")
+        return _blocked("T7", "no network in unit tests", "pytest-socket not installed")
     rc, output = _run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly", "--disable-socket"], timeout=600
     )
     if rc != 0:
-        return _bad("T4", "suite passes with network disabled", f"rc={rc}", [output[-500:]], mode="full")
-    return _ok("T4", "suite passes with network disabled", "all tests pass offline", mode="full")
+        return _bad("T7", "no network in unit tests", f"rc={rc}", [output[-500:]], mode="full")
+    return _ok("T7", "no network in unit tests", "all tests pass offline", mode="full")
 
 
 def check_t5_mutation(_: dict) -> CheckResult:
@@ -636,13 +718,14 @@ def check_t6_vulture(_: dict) -> CheckResult:
 
 
 FULL_CHECKS: list[Callable[[dict], CheckResult]] = [
-    check_h4_history_secrets,
+    check_h3_history_secrets,
     check_t1_tests,
     check_t2_coverage,
     check_t3_lint_format_types,
-    check_t4_no_network,
+    check_t4_flaky,
     check_t5_mutation,
     check_t6_vulture,
+    check_t7_no_network,
 ]
 
 
