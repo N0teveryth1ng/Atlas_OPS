@@ -22,6 +22,31 @@ skills:
   java:
     display: Java
     category: language
+    related: [spring]
+  go:
+    display: Go
+    category: language
+    aliases: [golang, go lang]
+    related: []
+  kotlin:
+    display: Kotlin
+    category: language
+    aliases: [kt]
+    related: [java]
+  ruby:
+    display: Ruby
+    category: language
+    aliases: [rb]
+    related: [rails]
+  php:
+    display: PHP
+    category: language
+    aliases: [php7, php8]
+    related: []
+  swift:
+    display: Swift
+    category: language
+    aliases: [swift5]
     related: []
   csharp:
     display: C#
@@ -83,8 +108,18 @@ skills:
   dotnet:
     display: .NET
     category: framework
-    aliases: [".net", net, dot net]
+    aliases: [".net", net, dot net, ".net core", "dotnet core", "net core", "asp.net"]
     related: [csharp]
+  spring:
+    display: Spring
+    category: framework
+    aliases: [spring boot, springboot, spring framework, spring mvc]
+    related: [java]
+  rails:
+    display: Ruby on Rails
+    category: framework
+    aliases: [ruby on rails, ror]
+    related: [ruby]
   postgresql:
     display: PostgreSQL
     category: database
@@ -102,6 +137,7 @@ skills:
   docker:
     display: Docker
     category: tool
+    aliases: [containerization]
     related: [kubernetes]
   kubernetes:
     display: Kubernetes
@@ -111,12 +147,12 @@ skills:
   git:
     display: Git
     category: tool
-    aliases: [github, gitlab]
+    aliases: [github, gitlab, version control]
     related: []
   aws:
     display: AWS
     category: cloud
-    aliases: [amazon web services]
+    aliases: [amazon web services, amazon aws]
     related: []
   gcp:
     display: GCP
@@ -146,3 +182,33 @@ skills:
     display: NumPy
     category: library
     related: [python]
+  machinelearning:
+    display: Machine Learning
+    category: concept
+    aliases: [ml, machine-learning, machine learning engineer]
+    related: [python, tensorflow, pytorch]
+  rest:
+    display: REST
+    category: concept
+    aliases: [rest api, restful, rest apis, rest api design]
+    related: []
+  graphql:
+    display: GraphQL
+    category: concept
+    aliases: [gql]
+    related: []
+  linux:
+    display: Linux
+    category: tool
+    aliases: [unix, bash, shell, shell scripting]
+    related: []
+  redis:
+    display: Redis
+    category: database
+    aliases: [redis cache, in-memory cache]
+    related: []
+  terraform:
+    display: Terraform
+    category: tool
+    aliases: [iac, infrastructure as code]
+    related: []
