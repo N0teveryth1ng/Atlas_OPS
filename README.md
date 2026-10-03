@@ -48,7 +48,8 @@ Design rules:
 - **Phase 3** — skill ontology / alias map + weighted matching. *(done)*
 - **Phase 4** — collectors, query planner, normalize, dedupe. *(done)*
 - **Phase 5** — evaluator + adversarial verifier. *(done)*
-- **Phase 6** — ranker, digest, email, scheduling. *(current)*
+- **Phase 6** — ranker, digest, email, scheduling. *(done)*
+- **Phase 7** — feedback loop + tuning. *(current)*
 - **Phase 6** — ranker, digest, email, scheduling.
 - **Phase 7** — feedback loop + tuning.
 - **Phase 8 (deferred)** — tailoring / assisted applying.
@@ -151,6 +152,24 @@ Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
   operation, prefer Windows Task Scheduler, cron/systemd, or GitHub Actions.
   Sending nothing when nothing clears the bar is a valid, expected outcome.
 
+## Feedback loop (Phase 7)
+
+Record a judgement for any job and the pipeline adapts on the next run:
+
+```bash
+python -m atlas.cli feedback <job_id> good
+python -m atlas.cli feedback <job_id> bad --reason too_senior
+python -m atlas.cli feedback --export        # append labelled cases to eval/feedback.jsonl
+```
+
+Reason codes: `too_senior`, `wrong_stack`, `bad_company`, `wrong_location`,
+`other`, `good_fit`. Feedback is stored in SQLite and folded back in as
+**bounded** tuning (`atlas/feedback.py`): bad companies are blacklisted, good
+companies get a rank bonus, and weights are nudged then renormalised (e.g. a
+`wrong_stack` dislike raises must-have-coverage weight). `--export` grows the
+labelled eval set, and `atlas eval` records a pass/fail history in the DB so
+accuracy can be tracked over time.
+
 ## CLI
 
 ```bash
@@ -164,6 +183,7 @@ python -m atlas.cli run --no-email            # build + print the digest only
 python -m atlas.cli schedule --hour 9         # run now, then daily at 09:00
 python -m atlas.cli eval                     # golden-set evaluation (deterministic)
 python -m atlas.cli eval --with-llm          # + live LLM precision@10 gate
+python -m atlas.cli feedback <job_id> good|bad --reason <code>
 ```
 
 ## Testing
