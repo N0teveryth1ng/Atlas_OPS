@@ -15,8 +15,10 @@ from atlas.schemas import (
 )
 
 
-def test_normalize_skill_name():
-    assert normalize_skill_name("  React   JS ") == "react js"
+def test_normalize_skill_name_maps_aliases_through_ontology():
+    assert normalize_skill_name("  React   JS ") == "react"
+    assert normalize_skill_name("psql") == "postgresql"
+    assert normalize_skill_name("SomeUnmappedTool") == "someunmappedtool"
 
 
 def test_derive_experience_level_thresholds():

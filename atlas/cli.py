@@ -168,9 +168,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    from .evaluation import run_eval
+    from .evaluation import run_eval, run_skill_eval
 
+    print("== JD parse + hard filter ==")
     ok = run_eval(Path(args.golden)) if args.golden else run_eval()
+    print("\n== Skill matching ==")
+    ok = run_skill_eval() and ok
     return 0 if ok else 1
 
 
