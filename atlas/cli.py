@@ -451,6 +451,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_label_check(args: argparse.Namespace) -> int:
+    from .labeling import format_report, validate_labels
+
+    report = validate_labels(args.labels)
+    print(format_report(report))
+    return 0 if report.meets_minimums else 1
+
+
 # --------------------------------------------------------------------------- #
 # Parser
 # --------------------------------------------------------------------------- #
@@ -499,6 +507,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_explain = sub.add_parser("explain", help="Print the latest decision for a job")
     p_explain.add_argument("job_id", type=int, help="Job id from the digest/DB")
     p_explain.set_defaults(func=cmd_explain)
+
+    p_labels = sub.add_parser(
+        "label-check", help="Validate a human-labelled labels file (read-only)"
+    )
+    p_labels.add_argument(
+        "--labels", default="eval/labels.jsonl", help="Path to the labels JSONL file"
+    )
+    p_labels.set_defaults(func=cmd_label_check)
 
     p_sched = sub.add_parser("schedule", help="Run once now, then daily at the configured hour")
     p_sched.add_argument("--hour", type=int, default=None, help="Local hour 0-23 (default: config)")
