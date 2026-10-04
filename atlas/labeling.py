@@ -19,9 +19,6 @@ MIN_CASES = 40
 MIN_TRAPS = 15
 MIN_APPLY = 10
 
-# A skipped case counts as a seniority/experience "trap" when either an explicit
-# trap_type says so, a trap flag is set, or the free-text reason mentions
-# seniority, experience or level signals.
 SENIORITY_RE = re.compile(
     r"\b(senior|seniority|lead|principal|staff|manager|director|"
     r"years?|yrs?|experience|overqualif|mid[- ]?level)\b",
@@ -72,16 +69,54 @@ def _is_trap(entry: dict, label: str) -> bool:
     return bool(SENIORITY_RE.search(str(entry.get("reason", ""))))
 
 
-def validate_labels(path: Path | str) -> LabelReport:
+def _url_matches(pool_entry: dict, label_url: str) -> bool:
+    pool_url = str(pool_entry.get("url", "")).strip()
+    if pool_url and pool_url == label_url:
+        return True
+    urls = pool_entry.get("urls")
+    if isinstance(urls, list):
+        for u in urls:
+            try:
+                if str(u).strip() == label_url:
+                    return True
+            except (TypeError, AttributeError):
+                continue
+    return False
+
+
+def validate_labels(
+    path: Path | str,
+    pool_path: Path | str = Path("eval/labeling_pool.jsonl"),
+    pool_by_id: dict[str, dict] | None = None,
+) -> LabelReport:
     target = Path(path)
     report = LabelReport(path=str(target))
+    pool_p = Path(pool_path)
     if not target.exists():
         report.issues.append(LabelIssue(0, "labels file not found"))
         return report
-    # Read line-by-line on newlines only: ``str.splitlines`` would also break on
-    # Unicode separators (e.g. U+0085) that legitimately appear inside JSON
-    # string values in real JDs.
+    pool_by_id_map: dict[str, dict] = {}
+    if pool_by_id is not None:
+        pool_by_id_map.update(dict(pool_by_id))
+    else:
+        if not pool_p.exists():
+            report.issues.append(LabelIssue(0, f"pool file not found: {pool_p}"))
+            return report
+        text_pool = pool_p.read_text(encoding="utf-8")
+        for raw in text_pool.split("\n"):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict):
+                pid = str(entry.get("pool_id", "")).strip()
+                if pid:
+                    pool_by_id_map.setdefault(pid, entry)
     text = target.read_text(encoding="utf-8")
+    seen_pool_ids: dict[str, int] = {}
     for lineno, raw in enumerate(text.split("\n"), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -107,6 +142,19 @@ def validate_labels(path: Path | str) -> LabelReport:
         if str(entry["labeled_by"]).strip().lower() != "human":
             report.issues.append(LabelIssue(lineno, "labeled_by must be 'human'"))
             continue
+        pid = str(entry["pool_id"]).strip()
+        if pid not in pool_by_id_map:
+            report.issues.append(LabelIssue(lineno, "unknown pool_id"))
+            continue
+        if pid in seen_pool_ids:
+            first = seen_pool_ids[pid]
+            report.issues.append(LabelIssue(lineno, f"duplicate pool_id (first at line {first})"))
+            continue
+        label_url = str(entry["url"]).strip()
+        if not _url_matches(pool_by_id_map[pid], label_url):
+            report.issues.append(LabelIssue(lineno, "url does not match pool entry"))
+            continue
+        seen_pool_ids[pid] = lineno
         report.valid += 1
         if label == "apply":
             report.applies += 1

@@ -454,7 +454,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_label_check(args: argparse.Namespace) -> int:
     from .labeling import format_report, validate_labels
 
-    report = validate_labels(args.labels)
+    report = validate_labels(args.labels, pool_path=args.pool)
     print(format_report(report))
     return 0 if report.meets_minimums else 1
 
@@ -513,6 +513,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_labels.add_argument(
         "--labels", default="eval/labels.jsonl", help="Path to the labels JSONL file"
+    )
+    p_labels.add_argument(
+        "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
     )
     p_labels.set_defaults(func=cmd_label_check)
 

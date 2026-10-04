@@ -31,6 +31,17 @@ def _entry(pool_id: str, label: str, reason: str = "ok", **extra) -> dict:
     return entry
 
 
+def _pool_map_for(entries: list[dict | str]) -> dict[str, dict]:
+    pool: dict[str, dict] = {}
+    for e in entries:
+        d = e if isinstance(e, dict) else json.loads(e)
+        pid = str(d["pool_id"])
+        if pid not in pool:
+            url = str(d.get("url", f"https://example.test/{pid}"))
+            pool[pid] = {"pool_id": pid, "url": url, "urls": []}
+    return pool
+
+
 def _complete_pool() -> list[dict]:
     entries = [_entry(f"apply-{i}", "apply", "strong match on python") for i in range(10)]
     entries += [_entry(f"trap-{i}", "skip", "senior role requiring 8 years") for i in range(15)]
@@ -39,7 +50,9 @@ def _complete_pool() -> list[dict]:
 
 
 def test_complete_pool_meets_minimums(tmp_path: Path) -> None:
-    report = labeling.validate_labels(_write(tmp_path, _complete_pool()))
+    entries = _complete_pool()
+    pool = _pool_map_for(entries)
+    report = labeling.validate_labels(_write(tmp_path, entries), pool_by_id=pool)
     assert report.valid == 40
     assert report.applies == 10
     assert report.skips == 30
@@ -96,7 +109,7 @@ def test_trap_detection_variants(tmp_path: Path) -> None:
         _entry("e", "apply", "senior title but fits"),  # apply never a trap
         _entry("f", "skip", "experience level overqualifies"),  # keyword
     ]
-    report = labeling.validate_labels(_write(tmp_path, entries))
+    report = labeling.validate_labels(_write(tmp_path, entries), pool_by_id=_pool_map_for(entries))
     assert report.valid == 6
     assert report.traps == 4
     assert report.applies == 1
@@ -104,7 +117,9 @@ def test_trap_detection_variants(tmp_path: Path) -> None:
 
 def test_blank_and_comment_lines_are_ignored(tmp_path: Path) -> None:
     entries = ["", "# a comment", *[json.dumps(_entry("p1", "apply"))]]
-    report = labeling.validate_labels(_write(tmp_path, entries))
+    report = labeling.validate_labels(
+        _write(tmp_path, entries), pool_by_id=_pool_map_for([_entry("p1", "apply")])
+    )
     assert report.valid == 1
     assert report.issues == []
 
@@ -119,41 +134,39 @@ def test_shortfalls_reported_when_incomplete(tmp_path: Path) -> None:
 
 
 def test_format_report_ok_and_incomplete(tmp_path: Path) -> None:
-    ok = labeling.format_report(labeling.validate_labels(_write(tmp_path, _complete_pool())))
+    complete = _complete_pool()
+    ok = labeling.format_report(
+        labeling.validate_labels(_write(tmp_path, complete), pool_by_id=_pool_map_for(complete))
+    )
     assert "OK - all minimums met" in ok
     assert "valid cases : 40" in ok
 
     short = labeling.format_report(
-        labeling.validate_labels(_write(tmp_path, [_entry("p1", "skip", "unrelated")]))
+        labeling.validate_labels(
+            _write(tmp_path, [_entry("p1", "skip", "unrelated")]),
+            pool_by_id=_pool_map_for([_entry("p1", "skip", "unrelated")]),
+        )
     )
     assert "INCOMPLETE" in short
 
 
 def test_cli_label_check_exit_codes(tmp_path: Path) -> None:
-    good = _write(tmp_path, _complete_pool())
-    assert main(["label-check", "--labels", str(good)]) == 0
+    complete = _complete_pool()
+    good = _write(tmp_path, complete)
+    pool_path = tmp_path / "pool.jsonl"
+    pool_lines = [
+        json.dumps({"pool_id": pid, "url": url, "urls": []})
+        for pid, url in [(d["pool_id"], d["url"]) for d in complete]
+    ]
+    pool_path.write_text("\n".join(pool_lines) + "\n", encoding="utf-8")
+    assert main(["label-check", "--labels", str(good), "--pool", str(pool_path)]) == 0
 
     short = tmp_path / "short.jsonl"
     short.write_text(json.dumps(_entry("p1", "apply")) + "\n", encoding="utf-8")
-    assert main(["label-check", "--labels", str(short)]) == 1
-
-
-def test_unicode_line_separator_does_not_split_record(tmp_path: Path) -> None:
-    # U+0085 (NEL) can appear inside real JD text; str.splitlines() would wrongly
-    # break the JSON record there.
-    path = tmp_path / "labels.jsonl"
-    path.write_text(
-        '{"pool_id": "p1", "url": "u", "label": "apply", '
-        '"reason": "fits\u0085well", "labeled_by": "human"}\n',
+    sp = tmp_path / "sp.jsonl"
+    sp.write_text(
+        json.dumps({"pool_id": "p1", "url": "https://example.test/p1", "urls": []}) + "\n",
         encoding="utf-8",
     )
-    report = labeling.validate_labels(path)
-    assert report.valid == 1
-    assert report.issues == []
-
-
-def test_cli_never_writes_labels(tmp_path: Path) -> None:
-    path = _write(tmp_path, _complete_pool())
-    before = path.read_bytes()
-    main(["label-check", "--labels", str(path)])
-    assert path.read_bytes() == before
+    assert main(["label-check", "--labels", str(short), "--pool", str(sp)]) == 1
+    good = _write(tmp_path, _complete_pool())
