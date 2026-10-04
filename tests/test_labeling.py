@@ -170,3 +170,295 @@ def test_cli_label_check_exit_codes(tmp_path: Path) -> None:
     )
     assert main(["label-check", "--labels", str(short), "--pool", str(sp)]) == 1
     good = _write(tmp_path, _complete_pool())
+
+
+def test_unknown_pool_id_reported(tmp_path: Path) -> None:
+    labels = tmp_path / "labels.jsonl"
+    labels.write_text(
+        json.dumps(
+            {
+                "pool_id": "p1",
+                "url": "u1",
+                "label": "apply",
+                "reason": "fits well here",
+                "labeled_by": "human",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    pool = tmp_path / "pool.jsonl"
+    pool.write_text("", encoding="utf-8")  # empty pool; p1 unknown
+    report = labeling.validate_labels(labels, pool_path=pool)
+    assert report.valid == 0
+    assert any("unknown pool_id" in i.message for i in report.issues)
+
+
+def test_duplicate_pool_id_reported_and_first_counts(tmp_path: Path) -> None:
+    labels = tmp_path / "labels.jsonl"
+    labels.write_text(
+        json.dumps(
+            {
+                "pool_id": "p1",
+                "url": "u1",
+                "label": "apply",
+                "reason": "fits well here",
+                "labeled_by": "human",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "pool_id": "p1",
+                "url": "u1",
+                "label": "skip",
+                "reason": "too senior for this",
+                "labeled_by": "human",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    pool = tmp_path / "pool.jsonl"
+    pool.write_text(json.dumps({"pool_id": "p1", "url": "u1"}) + "\n", encoding="utf-8")
+    report = labeling.validate_labels(labels, pool_path=pool)
+    assert report.valid == 1  # only first counts
+    assert report.applies == 1
+    assert any("duplicate pool_id (first at line 1)" in i.message for i in report.issues)
+
+
+def test_url_mismatch_reported(tmp_path: Path) -> None:
+    labels = tmp_path / "labels.jsonl"
+    labels.write_text(
+        json.dumps(
+            {
+                "pool_id": "p1",
+                "url": "u2",
+                "label": "apply",
+                "reason": "fits well here",
+                "labeled_by": "human",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    pool = tmp_path / "pool.jsonl"
+    pool.write_text(json.dumps({"pool_id": "p1", "url": "u1"}) + "\n", encoding="utf-8")
+    report = labeling.validate_labels(labels, pool_path=pool)
+    assert report.valid == 0
+    assert any("url does not match pool entry" in i.message for i in report.issues)
+
+
+def test_url_matches_pool_urls_list_accepted(tmp_path: Path) -> None:
+    labels = tmp_path / "labels.jsonl"
+    labels.write_text(
+        json.dumps(
+            {
+                "pool_id": "p1",
+                "url": "u2",
+                "label": "apply",
+                "reason": "fits well here",
+                "labeled_by": "human",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    pool = tmp_path / "pool.jsonl"
+    pool.write_text(
+        json.dumps({"pool_id": "p1", "url": "u1", "urls": ["u2"]}) + "\n", encoding="utf-8"
+    )
+    report = labeling.validate_labels(labels, pool_path=pool)
+    assert report.valid == 1
+
+
+def test_missing_pool_file_exits_1(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    tmp_path / "labels.jsonl"
+    # write minimal valid labels file? no, test CLI behavior
+    complete = _complete_pool()
+    labels_f = _write(tmp_path, complete)
+    pool_path = tmp_path / "missing.jsonl"
+    res = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "atlas.cli",
+            "label-check",
+            "--labels",
+            str(labels_f),
+            "--pool",
+            str(pool_path),
+        ],
+        cwd="D:\\Atlas",
+        capture_output=True,
+        check=False,
+    )
+    assert res.returncode == 1
+
+
+def test_happy_path_meets_minimums_exit_0(tmp_path: Path) -> None:
+    labels = tmp_path / "labels.jsonl"
+    pool = tmp_path / "pool.jsonl"
+    pool_lines = []
+    lbl_lines = []
+    # create 40 apply and 15 skip (traps) to meet minimums
+    # we'll make skip cases include seniority keywords to count as traps
+    for i in range(40):
+        pid = f"p{i}"
+        url = f"u{i}"
+        pool_lines.append(json.dumps({"pool_id": pid, "url": url}))
+        lbl_lines.append(
+            json.dumps(
+                {
+                    "pool_id": pid,
+                    "url": url,
+                    "label": "apply",
+                    "reason": "fits well here",
+                    "labeled_by": "human",
+                }
+            )
+        )
+    for i in range(40, 55):  # 15 more
+        pid = f"p{i}"
+        url = f"u{i}"
+        pool_lines.append(json.dumps({"pool_id": pid, "url": url}))
+        lbl_lines.append(
+            json.dumps(
+                {
+                    "pool_id": pid,
+                    "url": url,
+                    "label": "skip",
+                    "reason": "too senior for this role",
+                    "labeled_by": "human",
+                }
+            )
+        )
+    pool.write_text("\n".join(pool_lines) + "\n", encoding="utf-8")
+    labels.write_text("\n".join(lbl_lines) + "\n", encoding="utf-8")
+    import subprocess
+    import sys
+
+    res = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "atlas.cli",
+            "label-check",
+            "--labels",
+            str(labels),
+            "--pool",
+            str(pool),
+        ],
+        cwd="D:\\Atlas",
+        capture_output=True,
+        check=False,
+    )
+    assert res.returncode == 0
+
+
+def test_read_only_labels_and_pool_bytes_unchanged(tmp_path: Path) -> None:
+    complete = _complete_pool()
+    labels = _write(tmp_path, complete)
+    pool = tmp_path / "pool.jsonl"
+    pool_lines = []
+    for d in complete:
+        pool_lines.append(json.dumps({"pool_id": d["pool_id"], "url": d["url"], "urls": []}))
+    pool.write_text("\n".join(pool_lines) + "\n", encoding="utf-8")
+    before_labels = labels.read_bytes()
+    before_pool = pool.read_bytes()
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "atlas.cli",
+            "label-check",
+            "--labels",
+            str(labels),
+            "--pool",
+            str(pool),
+        ],
+        cwd="D:\\Atlas",
+        capture_output=True,
+        check=False,
+    )
+    assert labels.read_bytes() == before_labels
+    assert pool.read_bytes() == before_pool
+
+
+def test_invalid_lines_not_counted_toward_minimums(tmp_path: Path) -> None:
+    labels = tmp_path / "labels.jsonl"
+    pool = tmp_path / "pool.jsonl"
+    pool_lines = []
+    for i in range(55):
+        pid = f"p{i}"
+        url = f"u{i}"
+        pool_lines.append(json.dumps({"pool_id": pid, "url": url}))
+    valid = []
+    for i in range(40):
+        pid = f"p{i}"
+        url = f"u{i}"
+        valid.append(
+            json.dumps(
+                {
+                    "pool_id": pid,
+                    "url": url,
+                    "label": "apply",
+                    "reason": "fits well here",
+                    "labeled_by": "human",
+                }
+            )
+        )
+    for i in range(40, 55):
+        pid = f"p{i}"
+        url = f"u{i}"
+        valid.append(
+            json.dumps(
+                {
+                    "pool_id": pid,
+                    "url": url,
+                    "label": "skip",
+                    "reason": "too senior for this role",
+                    "labeled_by": "human",
+                }
+            )
+        )
+    lbl_lines = []
+    lbl_lines.append("{bad json")
+    lbl_lines.extend(valid)
+    lbl_lines.append("{another bad")
+    pool.write_text("\n".join(pool_lines) + "\n", encoding="utf-8")
+    labels.write_text("\n".join(lbl_lines) + "\n", encoding="utf-8")
+    import subprocess
+    import sys
+
+    res = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "atlas.cli",
+            "label-check",
+            "--labels",
+            str(labels),
+            "--pool",
+            str(pool),
+        ],
+        cwd="D:\\Atlas",
+        capture_output=True,
+        check=False,
+    )
+    # Invalid lines must not count toward minimums; issues mean exit != 0
+    out = res.stdout.decode("utf-8", errors="ignore")
+    assert "valid cases : 55" in out
+    assert "apply       : 40" in out
+    assert "traps       : 15" in out
+    assert res.returncode == 1
+
+
+def test_unicode_line_separator_does_not_split_record(tmp_path):
+    pass
