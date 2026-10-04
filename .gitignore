@@ -26,6 +26,8 @@ uploads/
 profile.json
 logs/
 eval/feedback.jsonl
+# raw third-party JD text: kept local, never committed
+eval/labeling_pool.jsonl
 selfcheck_report.json
 
 # --- os / editor ---
