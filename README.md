@@ -79,12 +79,27 @@ cp .env.example .env              # fill in real values, never commit .env
 | `RESEND_API_KEY` | Resend email API key |
 | `RESEND_FROM_EMAIL` | From address for digests |
 | `RESEND_TO_EMAIL` | Digest recipient |
+| `BRAINTRUST_API_KEY` | Optional. Enables Braintrust tracing; leave empty to disable |
+| `BRAINTRUST_PROJECT` | Braintrust project/org for traces (default `atlasops`) |
+| `ATLAS_OFFLINE` | Set to `1` to force-disable all telemetry |
 | `ATLAS_DB` | Optional path to the SQLite DB (default `atlas.sqlite3`) |
 
 ### Configuration
 
 Preferences live in `config.yaml` (single source of truth). See the file for
 all keys.
+
+### Observability (optional)
+
+Every model call goes through `atlas.llm.LLMClient`, which is the single
+instrumentation point. With `BRAINTRUST_API_KEY` set, each call is traced to
+Braintrust with the model, temperature, validation attempts and latency; with
+the key absent (or `ATLAS_OFFLINE=1`, or under `pytest`/CI) the client is a
+local no-op and nothing leaves the machine.
+
+PII is redacted before any payload is sent: emails, phone numbers, Windows user
+paths and URLs are replaced by stable non-reversible tokens, so redacted spans
+still correlate across runs. Telemetry failures can never fail a pipeline run.
 
 ## Project layout
 
@@ -254,3 +269,7 @@ expanded with ~40 real labelled JDs.
 
 - Never commit `.env`, `uploads/`, resumes, or the SQLite DB.
 - Rotate any key that was ever committed.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

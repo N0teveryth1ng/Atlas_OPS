@@ -29,7 +29,14 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-BRAINTRUST_PROJECT = "atlasops"
+#: Fallback BrainTrust project/org. Overridable with ``BRAINTRUST_PROJECT``.
+DEFAULT_BRAINTRUST_PROJECT = "atlasops"
+
+
+def braintrust_project() -> str:
+    """Project/org name that receives Atlas traces."""
+    return os.getenv("BRAINTRUST_PROJECT", "").strip() or DEFAULT_BRAINTRUST_PROJECT
+
 
 #: Text that must never reach Braintrust. Each pattern maps to a placeholder
 #: that is stable for the same input, so redacted spans stay correlatable
@@ -140,13 +147,13 @@ class Observability:
             logger.warning("Braintrust disabled: package not installed")
             return False
         try:
-            braintrust.login(api_key=key, org_name=org_name or BRAINTRUST_PROJECT)
+            braintrust.login(api_key=key, org_name=org_name or braintrust_project())
         except Exception as exc:  # noqa: BLE001 - never fail a run over telemetry
             logger.warning("Braintrust login failed, continuing without it: %s", exc)
             return False
         self._bt = braintrust
         self.enabled = True
-        logger.info("Braintrust tracing enabled (project %s)", BRAINTRUST_PROJECT)
+        logger.info("Braintrust tracing enabled (project %s)", braintrust_project())
         return True
 
     def start_span(

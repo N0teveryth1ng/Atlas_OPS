@@ -11,8 +11,10 @@ from __future__ import annotations
 import pytest
 
 from atlas.observability import (
+    DEFAULT_BRAINTRUST_PROJECT,
     REDACTIONS,
     Observability,
+    braintrust_project,
     get_observability,
     redact,
     redact_obj,
@@ -24,9 +26,23 @@ from atlas.observability import (
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BRAINTRUST_API_KEY", raising=False)
+    monkeypatch.delenv("BRAINTRUST_PROJECT", raising=False)
     monkeypatch.delenv("ATLAS_OFFLINE", raising=False)
     monkeypatch.delenv("CI", raising=False)
     reset_observability()
+
+
+class TestProjectName:
+    def test_defaults_to_atlasops(self) -> None:
+        assert braintrust_project() == DEFAULT_BRAINTRUST_PROJECT == "atlasops"
+
+    def test_env_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BRAINTRUST_PROJECT", "atlas-staging")
+        assert braintrust_project() == "atlas-staging"
+
+    def test_blank_env_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BRAINTRUST_PROJECT", "   ")
+        assert braintrust_project() == DEFAULT_BRAINTRUST_PROJECT
 
 
 class TestRedact:
