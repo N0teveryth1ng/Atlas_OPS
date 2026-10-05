@@ -10,3 +10,7 @@
 - No Phase 8/PR B until owner says GO.
 - One defect per commit + regression test.
 - Gates before commit: pytest -q, ruff check atlas tests, black --check atlas tests, mypy atlas, selfcheck --fast.
+- At session start read AGENTS.md, PRD.md, HANDOFF.md, then run git log --oneline -10 and git status -sb and confirm they match HANDOFF.md.
+- Never create scratch or temp files in the repo.
+- Never report a step as done without raw command output; after any edit, re-read the file to prove it saved.
+- Never mark an owner-dependent gate (G1, G2/T5, G5, DEC6, G6, G11) PASS yourself.
