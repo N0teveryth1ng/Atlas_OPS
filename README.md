@@ -81,6 +81,7 @@ cp .env.example .env              # fill in real values, never commit .env
 | `RESEND_TO_EMAIL` | Digest recipient |
 | `BRAINTRUST_API_KEY` | Optional. Enables Braintrust tracing; leave empty to disable |
 | `BRAINTRUST_PROJECT` | Braintrust project/org for traces (default `atlasops`) |
+| `BRAINTRUST_PROJECT_ID` | Braintrust project id that receives traces and eval scores (default `3c5416f9-…`) |
 | `ATLAS_OFFLINE` | Set to `1` to force-disable all telemetry |
 | `ATLAS_DB` | Optional path to the SQLite DB (default `atlas.sqlite3`) |
 
@@ -100,6 +101,23 @@ local no-op and nothing leaves the machine.
 PII is redacted before any payload is sent: emails, phone numbers, Windows user
 paths and URLs are replaced by stable non-reversible tokens, so redacted spans
 still correlate across runs. Telemetry failures can never fail a pipeline run.
+
+#### Eval metrics in the dashboard
+
+`atlas eval` also publishes its headline numbers to the same project as named
+scores, so `https://www.braintrust.dev/app/atlasops` shows them without opening a
+log file:
+
+| Score | Source | Value |
+|---|---|---|
+| `year_extraction_accuracy` | `atlas eval` | correct / checked years over the golden set |
+| `skill_matching_accuracy` | `atlas eval` | ontology-matcher accuracy over `skill_cases.jsonl` |
+| `llm_precision_at_k` | `atlas eval --with-llm` | precision of the top-k predicted-apply jobs |
+
+Each row is tagged `atlas-ops`, `eval` and the score name, so the dashboard can
+be filtered to Atlas evals alone. Publishing is a silent no-op without
+`BRAINTRUST_API_KEY` (or under `ATLAS_OFFLINE=1`/`pytest`/CI) and never changes
+the eval's exit code; only the year and skill scores need a key, not `GROQ_API_KEY`.
 
 ## Project layout
 
@@ -240,6 +258,7 @@ python -m atlas.cli schedule --hour 9         # run now, then daily at 09:00
 python -m atlas.cli eval                     # golden-set evaluation (deterministic)
 python -m atlas.cli eval --with-llm          # + live LLM precision@10 gate
 python -m atlas.cli feedback <job_id> good|bad --reason <code>
+python -m atlas.cli label-check               # validate a human-labelled labels file (read-only)
 python -m atlas.cli selfcheck --fast          # deterministic pre-flight checks
 python -m atlas.cli selfcheck --full          # + coverage/lint/type/mutation
 ```
