@@ -1,14 +1,19 @@
 # HANDOFF.md
 
 ## State
-- main in sync with origin/main; latest commits are docs-only handoff commits on top of d6e4a4f
-- tests: 539 passed (verified: `python -m pytest -q` -> 539 passed in 18.45s)
-- lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 63 files unchanged; `mypy atlas` -> no issues in 39 source files
-- selfcheck --fast: 21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6)
+- main in sync with origin/main; latest commits are docs-only on top of d6e4a4f
+- tests: 594 passed (verified: `python -m pytest -q` -> 594 passed in 8.70s)
+- lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 65 files unchanged; `mypy atlas` -> no issues in 40 source files
+- selfcheck --fast: 20 PASS / 1 FAIL / 2 BLOCKED (FAIL is H1, working tree dirty from uncommitted BrainTrace eval publishing; BLOCKED are G5, DEC6)
 - selfcheck --full: 28 PASS / 0 FAIL / 3 BLOCKED (G5, DEC6, T5)
 - selfcheck exits 1 whenever any gate is BLOCKED; that is expected here, not a new failure.
 
 ## Recent commits
+08b925e feat: add MIT license and document BrainTrace observability
+80ea58f test: build path fixtures at runtime so selfcheck A4 stays green
+edda227 feat: add optional Braintrust observability with PII redaction
+4a883ef Update README.md (#13)
+bca0f70 docs: add pipeline architecture diagram to README (#12)
 320b266 docs: complete handoff files (update rules/actions)
 9ae42c8 docs: complete handoff files
 5218bfd docs: add AGENTS.md, PRD.md, HANDOFF.md for session handoff
@@ -20,7 +25,11 @@ ebb9362 docs(preflight): record current state, block owner gates, keep raw JD po
 3e3197c feat(decision): apply/review/skip decision engine, CLI, prompts, selfcheck (#11)
 
 ## Done
-label-check read-only; 22 collected labeling tests; 539 tests pass; clean except blocked gates.
+label-check read-only; 22 collected labeling tests; 594 tests pass.
+Braintrust (BrainTrace) observability: MIT license, PII-redacted LLM tracing via
+atlas/observability.py, and eval metrics published as named scores
+(year_extraction_accuracy, skill_matching_accuracy, llm_precision_at_k) into
+Braintrust project atlasops (3c5416f9-ff13-4c16-9a07-71d0e5a8c090).
 
 ## Not done/hold
 Phase 8/PR B on hold.
@@ -53,6 +62,7 @@ Adzuna has no keys; Greenhouse/Lever/Ashby were unreachable from the sandbox; ve
 
 ## How to run
 Entry point is `python -m atlas.cli`. Global flags: `-h/--help`, `--version`.
+Verified against `python -m atlas.cli --help` on 2026-10-05; all 12 commands below match the real parser.
 
 Commands and their flags (from `python -m atlas.cli --help` and per-command `--help`):
 - `profile [--resume RESUME] [--describe DESCRIBE] [--describe-file DESCRIBE_FILE] [--out OUT] [--yes]`
