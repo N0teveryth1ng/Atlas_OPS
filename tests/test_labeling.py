@@ -462,3 +462,43 @@ def test_invalid_lines_not_counted_toward_minimums(tmp_path: Path) -> None:
 
 def test_unicode_line_separator_does_not_split_record(tmp_path):
     pass
+
+
+def test_cli_never_writes_labels(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    pool = tmp_path / "pool.jsonl"
+    labels = tmp_path / "labels.jsonl"
+    pool.write_text(
+        '{"pool_id": "p1", "url": "https://example.com/job/1", ' '"title": "Junior Developer"}\n',
+        encoding="utf-8",
+    )
+    labels.write_text(
+        '{"pool_id": "p1", "url": "https://example.com/job/1", '
+        '"label": "apply", "reason": "entry level role", '
+        '"labeled_by": "human"}\n',
+        encoding="utf-8",
+    )
+    before_pool = pool.read_bytes()
+    before_labels = labels.read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "atlas.cli",
+            "label-check",
+            "--labels",
+            str(labels),
+            "--pool",
+            str(pool),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode in (0, 1)
+    assert labels.read_bytes() == before_labels
+    assert pool.read_bytes() == before_pool
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["labels.jsonl", "pool.jsonl"]
