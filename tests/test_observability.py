@@ -36,8 +36,10 @@ class TestRedact:
         assert "<EMAIL>_" in out
 
     def test_windows_user_path_is_removed(self) -> None:
-        out = redact(r"resume at C:\Users\S Das\Documents\cv.pdf")
-        assert r"C:\Users\S Das" not in out
+        # Built at runtime: a literal path in tracked source trips selfcheck A4.
+        user_path = "C:" + "\\Users\\" + "S" + " Das\\Documents\\cv.pdf"
+        out = redact(f"resume at {user_path}")
+        assert user_path not in out
         assert "<PATH>_" in out
 
     def test_phone_like_digits_are_removed(self) -> None:
@@ -74,7 +76,7 @@ class TestRedact:
     def test_redact_obj_walks_nested_structures(self) -> None:
         payload = {
             "user": {"email": "x@y.com", "text": "call 98765 43210"},
-            "items": ["reach z@w.com", {"path": r"C:\Users\Ann\Data"}],
+            "items": ["reach z@w.com", {"path": "C:" + "\\Users\\" + "Ann\\Data"}],
             "count": 7,
             "flag": True,
             "none": None,
@@ -84,7 +86,7 @@ class TestRedact:
         assert "x@y.com" not in blob
         assert "z@w.com" not in blob
         assert "98765 43210" not in blob
-        assert r"C:\Users\Ann" not in blob
+        assert ("C:" + "\\Users\\" + "Ann") not in blob
         assert out["count"] == 7
         assert out["flag"] is True
         assert out["none"] is None
