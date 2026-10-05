@@ -146,14 +146,27 @@ class LLMClient:
             {"role": "user", "content": user},
         ]
 
+        from .observability import get_observability
+
+        obs = get_observability()
+        span = obs.start_span(
+            f"llm.call_json.{schema.__name__}",
+            input={"system": system, "user": user, "model": model},
+            metadata={"temperature": temperature},
+        )
+
         last_error: str | None = None
         for attempt in range(1, self.max_validation_retries + 1):
             raw = self._create(messages, model, temperature)
             try:
                 payload = extract_json(raw)
-                return schema.model_validate(payload)
+                result = schema.model_validate(payload)
+                span.set_metadata(validation_attempts=attempt, validation_ok=True)
+                span.end(output=result.model_dump(mode="json"))
+                return result
             except (ValueError, ValidationError) as exc:
                 last_error = str(exc)
+                span.set_metadata(validation_ok=False, validation_error=str(exc)[:500])
                 logger.warning(
                     "Validation failed for %s (attempt %s/%s): %s",
                     schema.__name__,
@@ -174,6 +187,7 @@ class LLMClient:
                     }
                 )
 
+        span.end(output=None)
         raise LLMError(
             f"Could not get a valid {schema.__name__} after "
             f"{self.max_validation_retries} attempts: {last_error}"
