@@ -3,6 +3,11 @@
 Each stage stores its inputs/outputs via ``log_stage`` so any job can be traced
 and a run is replayable (plan section 6). This is a plain state machine, not a
 free-roaming agent loop.
+
+Each stage is additionally wrapped in an optional Braintrust span, opened with
+:func:`atlas.observability.traced_stage`. That wrapping is observational only: it
+records allowlisted fields and the stage's latency, and a span that cannot be
+created or ended leaves the stage's own behaviour untouched.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from .config import Settings, get_settings
 from .db import log_stage, set_job_status
@@ -22,6 +28,7 @@ from .filters import apply_hard_filters
 from .jd_parser import parse_jd
 from .job_status import JobStatus, transition
 from .llm import LLMClient
+from .observability import traced_stage
 from .schemas import (
     CandidateProfile,
     Decision,
@@ -38,6 +45,16 @@ from .skills import SkillMatch, match_skills
 from .verifier import verify_job
 
 logger = logging.getLogger(__name__)
+
+
+def _job_fields(job_id: int | None, job: Job) -> dict[str, Any]:
+    """The only job attributes a trace may carry: id, title, company and url."""
+    return {
+        "job_id": job_id,
+        "job_title": job.title,
+        "job_company": job.company,
+        "job_url": job.url,
+    }
 
 
 @dataclass
@@ -130,7 +147,16 @@ def process_job(
     result = ProcessedJob(job_id=job_id, job=job)
     result.advance(JobStatus.parsed, conn)
 
-    parsed = parse_jd(client, title=job.title or "", description=job.description_raw or "")
+    job_fields = _job_fields(job_id, job)
+
+    with traced_stage(
+        "pipeline.parse",
+        stage="parse",
+        model=settings.models.extractor,
+        prompt_version="jd_parser",
+        **job_fields,
+    ):
+        parsed = parse_jd(client, title=job.title or "", description=job.description_raw or "")
     result.parsed = parsed
     result.needs_review = parsed.confidence < settings.filters.min_parse_confidence
     if conn is not None:
@@ -143,7 +169,12 @@ def process_job(
             data=parsed.model_dump(),
         )
 
-    filter_result = apply_hard_filters(job, parsed, profile, settings)
+    with traced_stage("pipeline.filters", stage="filters", **job_fields) as filters_span:
+        filter_result = apply_hard_filters(job, parsed, profile, settings)
+        filters_span.set_metadata(
+            passed=filter_result.passed,
+            rejection_reasons=[rejection.rule_id for rejection in filter_result.rejections],
+        )
     result.filter_result = filter_result
     if conn is not None:
         if filter_result.passed:
@@ -169,32 +200,63 @@ def process_job(
         return result
 
     result.advance(JobStatus.passed_filters, conn)
-    skill_match = match_skills(parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills)
+    with traced_stage("pipeline.skill_match", stage="skill_match", **job_fields) as skill_span:
+        skill_match = match_skills(
+            parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills
+        )
+        skill_span.set_metadata(
+            must_have_coverage=skill_match.must_have_coverage,
+            nice_to_have_coverage=skill_match.nice_to_have_coverage,
+        )
     result.skill_match = skill_match
 
     try:
-        verdict = evaluate_job(
-            client,
-            profile=profile,
-            job=job,
-            parsed_jd=parsed,
-            skill_match=skill_match,
-            settings=settings,
-            cache=cache,
-        )
+        with traced_stage(
+            "pipeline.evaluator",
+            stage="evaluator",
+            model=settings.models.evaluator,
+            prompt_version="evaluator",
+            **job_fields,
+        ) as evaluator_span:
+            verdict = evaluate_job(
+                client,
+                profile=profile,
+                job=job,
+                parsed_jd=parsed,
+                skill_match=skill_match,
+                settings=settings,
+                cache=cache,
+            )
+            evaluator_span.set_metadata(
+                score=verdict.fit_score,
+                recommendation=verdict.recommendation.value,
+            )
         result.verdict = verdict
         result.advance(JobStatus.evaluated, conn)
 
-        verifier = verify_job(
-            client,
-            profile=profile,
-            job=job,
-            parsed_jd=parsed,
-            verdict=verdict,
-            skill_match=skill_match,
-            settings=settings,
-            cache=cache,
-        )
+        with traced_stage(
+            "pipeline.verifier",
+            stage="verifier",
+            model=settings.models.verifier,
+            prompt_version="verifier",
+            **job_fields,
+        ) as verifier_span:
+            verifier = verify_job(
+                client,
+                profile=profile,
+                job=job,
+                parsed_jd=parsed,
+                verdict=verdict,
+                skill_match=skill_match,
+                settings=settings,
+                cache=cache,
+            )
+            verifier_span.set_metadata(
+                passed=not verifier.veto,
+                recommendation=(
+                    verifier.downgrade_to.value if verifier.downgrade_to is not None else None
+                ),
+            )
         result.verifier = verifier
         result.advance(JobStatus.verified, conn)
     except EvidenceValidationError as exc:
@@ -206,17 +268,34 @@ def process_job(
         return result
 
     try:
-        decision = evaluate_decision(
-            client,
-            profile=profile,
-            job=job,
-            parsed=parsed,
-            verdict=verdict,
-            verifier=verifier,
-            skill_match=skill_match,
-            settings=settings,
-            cache=cache,
-        )
+        with traced_stage(
+            "pipeline.decision",
+            stage="decision",
+            model=settings.models.evaluator,
+            prompt_version="decision",
+            **job_fields,
+        ) as decision_span:
+            decision = evaluate_decision(
+                client,
+                profile=profile,
+                job=job,
+                parsed=parsed,
+                verdict=verdict,
+                verifier=verifier,
+                skill_match=skill_match,
+                settings=settings,
+                cache=cache,
+            )
+            # Nested dict keys are filtered out by the payload allowlist, so the
+            # model/prompt maps are flattened to the names they carry.
+            decision_span.set_metadata(
+                decision=decision.outcome.value,
+                match_score=decision.match_score,
+                confidence=decision.confidence,
+                veto_reasons=[veto.rule_id for veto in decision.vetoes],
+                model_names=sorted(set(decision.model_names.values())),
+                prompt_versions=sorted(set(decision.prompt_versions.values())),
+            )
     except EvidenceValidationError as exc:
         logger.warning("job %s: decision evidence failed: %s", job_id, exc)
         result.evidence_failed = True
@@ -285,11 +364,19 @@ def run_pipeline(
     processed: list[ProcessedJob] = []
     jobs = load_jobs(conn, limit=limit)
     logger.info("Pipeline: processing %d job(s)", len(jobs))
-    for job_id, job in jobs:
-        try:
-            processed.append(
-                process_job(client, job_id, job, profile, settings, cache=cache, conn=conn)
-            )
-        except Exception as exc:  # noqa: BLE001 - one bad job must not kill the run
-            logger.warning("job %s failed: %s", job_id, exc)
+    with traced_stage("pipeline.run", stage="run", run_id=run_id, jobs=len(jobs)) as run_span:
+        for job_id, job in jobs:
+            try:
+                processed.append(
+                    process_job(client, job_id, job, profile, settings, cache=cache, conn=conn)
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad job must not kill the run
+                logger.warning("job %s failed: %s", job_id, exc)
+        run_span.set_metadata(
+            processed=len(processed),
+            filtered_out=sum(
+                1 for r in processed if r.filter_result is not None and not r.filter_result.passed
+            ),
+            evaluated=sum(1 for r in processed if r.verdict is not None),
+        )
     return processed

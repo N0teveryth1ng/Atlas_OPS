@@ -15,6 +15,11 @@ Every ``run_*`` entry point also publishes its headline number to the Braintrust
 dashboard as a named score (``YEAR_ACCURACY_SCORE``, ``SKILL_ACCURACY_SCORE``,
 ``LLM_PRECISION_SCORE``). Publishing is a no-op when telemetry is off and never
 changes the boolean or printed report the caller sees.
+
+:func:`run_eval` publishes the golden set as one Braintrust *experiment* row
+carrying every score the harness already computes, so the 20 cases can be read
+side by side on the dashboard. No metric definition, formula or threshold
+changes here; the row is a copy of numbers already reported on stdout.
 """
 
 from __future__ import annotations
@@ -35,11 +40,25 @@ SKILL_CASES_PATH = REPO_ROOT / "eval" / "skill_cases.jsonl"
 YEAR_ACCURACY_TARGET = 0.95
 SKILL_ACCURACY_TARGET = 0.95
 
+#: Experiment name every golden-set eval row is published under.
+EVAL_EXPERIMENT = "atlas-golden-set-20"
+
 #: Score names published to the Braintrust dashboard by :func:`run_eval`,
 #: :func:`run_skill_eval` and :func:`run_llm_eval`.
 YEAR_ACCURACY_SCORE = "year_extraction_accuracy"
 SKILL_ACCURACY_SCORE = "skill_matching_accuracy"
 LLM_PRECISION_SCORE = "llm_precision_at_k"
+SENIORITY_PASSTHROUGH_SCORE = "seniority_passthroughs"
+
+#: Reserved score name for agreement between the decision engine and human
+#: labels. It is deliberately *not* published today: agreement needs a labelled
+#: ground truth, and the only source for that is ``eval/labels.jsonl``, which the
+#: owner has not produced (gate DEC6). Publishing a number derived from anything
+#: else would fabricate the measurement DEC6 exists to produce.
+DECISION_AGREEMENT_SCORE = "decision_agreement"
+
+#: Path the owner populates to unblock :data:`DECISION_AGREEMENT_SCORE`.
+DECISION_LABELS_PATH = REPO_ROOT / "eval" / "labels.jsonl"
 
 
 @dataclass
@@ -152,11 +171,15 @@ def format_report(report: EvalReport) -> str:
 def run_eval(path: Path | str = GOLDEN_SET_PATH) -> bool:
     report = evaluate(load_golden_set(path))
     print(format_report(report))
+    # One row, every score the golden set already yields. Seniority
+    # pass-throughs reuse report.experience_pass_through unchanged; decision
+    # agreement is skipped because DEC6 has no labelled ground truth yet.
     get_observability().publish_score(
         YEAR_ACCURACY_SCORE,
         report.year_accuracy,
         input={"eval": "golden_set", "dataset": Path(path).name},
         metadata={
+            "experiment": EVAL_EXPERIMENT,
             "year_correct": report.year_correct,
             "year_checked": report.year_checked,
             "golden_cases": report.total,
@@ -164,6 +187,7 @@ def run_eval(path: Path | str = GOLDEN_SET_PATH) -> bool:
             "false_rejects": len(report.false_rejects),
             "accepted": report.accepted,
         },
+        extra_scores={SENIORITY_PASSTHROUGH_SCORE: float(len(report.experience_pass_through))},
     )
     return report.accepted
 

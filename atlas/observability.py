@@ -1,21 +1,26 @@
 """Optional Braintrust observability.
 
-Every LLM call in the pipeline flows through :class:`atlas.llm.LLMClient`. This
-module gives that single chokepoint a Braintrust trace without changing any
-caller: when no API key is configured, every helper here is a no-op, so tests,
-``selfcheck`` and offline runs behave exactly as before.
+Every LLM call and every pipeline stage flows through this module, which gives
+the run a Braintrust trace without changing any caller: when no API key is
+configured, or the process is offline (CI, tests, ``ATLAS_OFFLINE``), every
+helper here is a no-op, so those runs behave exactly as before.
 
-Three rules govern what gets logged:
+Four rules govern what gets logged:
 
-* **PII is redacted before it leaves the process.** The pipeline reads real
-  resumes and real job descriptions. Phone numbers, emails and Windows user
-  paths are replaced with stable placeholders before any payload is sent.
-* **Never raise.** Observability must not be able to fail a pipeline run, so
-  every Braintrust interaction is wrapped and logged at debug level.
-* **A broken publish must be loud.** :meth:`Observability.publish_score` catches
-  only the SDK's own ``BraintrustAPIError`` hierarchy and reports it at error
-  level with the original exception. Anything else — a wrong signature, a wrong
-  call, a bug — propagates instead of masquerading as a silent no-op.
+* **An allowlist decides what may leave the process.** Only the field names in
+  :data:`ALLOWED_PAYLOAD_KEYS` survive; everything else is dropped by
+  :func:`allowlist_payload` before a payload is handed to the SDK. The
+  allowlist -- not the discipline of each call site -- is the control, so a
+  future call site that tries to send a resume or a profile is filtered out.
+* **Redaction is defence in depth.** :func:`redact`/:func:`redact_obj` still
+  run over whatever the allowlist kept, so an allowed *value* that happens to
+  carry an email, a phone number or a user path is masked as well.
+* **Prompt text is never sent.** Prompts are reduced to a character count and a
+  short stable hash (see :func:`prompt_fingerprint`), which keeps runs
+  correlatable without leaking job or resume content.
+* **Never raise.** A tracing failure is reported at warning level and the
+  pipeline continues, so observability can never change a run's behaviour, exit
+  code or eval result.
 """
 
 from __future__ import annotations
@@ -26,19 +31,26 @@ import logging
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any, TypeVar
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-#: Fallback BrainTrust project/org. Overridable with ``BRAINTRUST_PROJECT``.
-DEFAULT_BRAINTRUST_PROJECT = "atlasops"
+#: Project that receives Atlas traces and eval scores. Overridable with
+#: ``BRAINTRUST_PROJECT``; the dashboard URL follows this name.
+DEFAULT_BRAINTRUST_PROJECT = "My Project"
 
 #: Project id that receives Atlas rows. Scopes every write to the owner-chosen
 #: project so nothing can land in an unrelated one.
-DEFAULT_BRAINTRUST_PROJECT_ID = "3c5416f9-ff13-4c16-9a07-71d0e5a8c090"
+DEFAULT_BRAINTRUST_PROJECT_ID = "d7011a46-5b44-404c-a2d8-f0024bb40920"
+
+#: Org that owns the project above. Login needs the *org* name, which is not the
+#: project name, so the two are kept apart. Overridable with ``BRAINTRUST_ORG``.
+DEFAULT_BRAINTRUST_ORG = "atlasops"
 
 BRAINTRUST_APP_URL = "https://www.braintrust.dev/app"
 
@@ -46,9 +58,103 @@ BRAINTRUST_APP_URL = "https://www.braintrust.dev/app"
 #: Atlas eval scores alone.
 EVAL_TAGS = ("atlas-ops", "eval")
 
+#: Every field name Atlas may put on the wire. Grouped by what it describes so a
+#: reviewer can see the boundary without reading the call sites: run/stage
+#: identity, outcomes, scores, model and prompt identity, timing, token counts,
+#: call diagnostics (shape only, never free text) and eval bookkeeping.
+#:
+#: Deliberately absent: the user's name, email and phone, resume text,
+#: ``profile.json`` contents, prompt text, and every link except the job url.
+ALLOWED_PAYLOAD_KEYS: frozenset[str] = frozenset(
+    {
+        # -- run and stage identity -----------------------------------------
+        "stage",
+        "run_id",
+        "job_id",
+        "job_title",
+        "job_company",
+        "job_url",
+        # -- outcomes --------------------------------------------------------
+        "decision",
+        "recommendation",
+        "status",
+        "passed",
+        "filter_passed",
+        "needs_review",
+        "evidence_failed",
+        "rejection_reasons",
+        "veto_reasons",
+        # -- scores ----------------------------------------------------------
+        "score",
+        "scores",
+        "match_score",
+        "confidence",
+        "fit_score",
+        "must_have_coverage",
+        "nice_to_have_coverage",
+        # -- model and prompt identity --------------------------------------
+        "model",
+        "model_name",
+        "model_names",
+        "prompt_version",
+        "prompt_versions",
+        "schema",
+        "temperature",
+        # -- timing and token counts ----------------------------------------
+        "latency_s",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "prompt_system_chars",
+        "prompt_system_sha",
+        "prompt_user_chars",
+        "prompt_user_sha",
+        # -- call diagnostics (shape only, no free text) ---------------------
+        "validation_attempts",
+        "validation_ok",
+        "validation_error_type",
+        "arg_count",
+        "result_type",
+        # -- eval bookkeeping ------------------------------------------------
+        "experiment",
+        "eval",
+        "dataset",
+        "k",
+        "candidates",
+        "top_k_selected",
+        "year_correct",
+        "year_checked",
+        "golden_cases",
+        "experience_pass_through",
+        "false_rejects",
+        "accepted",
+        "skill_cases",
+        "baseline_accuracy",
+        "baseline_correct",
+        "new_correct",
+        "failures",
+        "jobs",
+        "processed",
+        "filtered_out",
+        "evaluated",
+        "sent",
+        "item_count",
+        "quote_validation_failures",
+    }
+)
+
+#: Allowlisted keys whose value may legitimately be a URL. Everything else is
+#: still URL-redacted, so an allowlisted key cannot become a link smuggling
+#: channel.
+ALLOWED_URL_FIELDS: frozenset[str] = frozenset({"job_url"})
+
+#: Score names and tags travel as dict keys / list entries. Restricting them to
+#: an identifier shape stops free text being smuggled through a metric name.
+_SAFE_METRIC_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
 
 def braintrust_project() -> str:
-    """Project/org name that receives Atlas traces."""
+    """Project name that receives Atlas traces."""
     return os.getenv("BRAINTRUST_PROJECT", "").strip() or DEFAULT_BRAINTRUST_PROJECT
 
 
@@ -57,9 +163,84 @@ def braintrust_project_id() -> str:
     return os.getenv("BRAINTRUST_PROJECT_ID", "").strip() or DEFAULT_BRAINTRUST_PROJECT_ID
 
 
+def braintrust_org() -> str:
+    """Org that owns :func:`braintrust_project_id`; what login needs."""
+    return os.getenv("BRAINTRUST_ORG", "").strip() or DEFAULT_BRAINTRUST_ORG
+
+
 def braintrust_dashboard_url() -> str:
-    """Human-facing URL of the configured project. Never contains a key."""
-    return f"{BRAINTRUST_APP_URL}/{braintrust_project()}"
+    """Human-facing URL of the configured project. Never contains a key.
+
+    The project name is percent-encoded: the owner-chosen name is
+    ``My Project``, and a raw space makes the printed link unopenable.
+    """
+    return f"{BRAINTRUST_APP_URL}/{quote(braintrust_project())}"
+
+
+def _safe_metric_name(name: str) -> bool:
+    return bool(_SAFE_METRIC_RE.match(name))
+
+
+def _short_hash(text: str) -> str:
+    """Stable, non-reversible short digest of ``text``."""
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def prompt_fingerprint(text: str, field: str = "prompt") -> dict[str, Any]:
+    """Return ``{field}_chars`` and ``{field}_sha`` for ``text``.
+
+    Two identical prompts produce the same fingerprint, so a run stays
+    correlatable across time, while the prompt's content never leaves the
+    process.
+    """
+    if not _safe_metric_name(field):
+        logger.warning("Braintrust prompt fingerprint: unusable field name, nothing sent")
+        return {}
+    return {f"{field}_chars": len(text), f"{field}_sha": _short_hash(text)}
+
+
+def allowlist_payload(payload: Any) -> Any:
+    """Return ``payload`` with every key outside :data:`ALLOWED_PAYLOAD_KEYS` gone.
+
+    Nested dicts are filtered too, which is what makes it safe to forward a
+    model's parsed output as a span: ``Verdict.reasons_for`` and friends are
+    dropped with their parent key, while allowlisted numbers survive.
+    """
+    if isinstance(payload, dict):
+        kept: dict[str, Any] = {}
+        dropped: list[str] = []
+        for key, value in payload.items():
+            name = str(key)
+            if name in ALLOWED_PAYLOAD_KEYS:
+                kept[name] = allowlist_payload(value)
+            else:
+                dropped.append(name)
+        if dropped:
+            logger.warning(
+                "Braintrust payload: dropped non-allowlisted field(s): %s",
+                ", ".join(sorted(dropped)),
+            )
+        return kept
+    if isinstance(payload, (list, tuple)):
+        return [allowlist_payload(item) for item in payload]
+    return payload
+
+
+def _allowed_scores(scores: Mapping[str, Any]) -> dict[str, float]:
+    """Keep only numeric scores whose name is a plain identifier."""
+    kept: dict[str, float] = {}
+    dropped: list[str] = []
+    for name, value in scores.items():
+        usable = _safe_metric_name(str(name)) and isinstance(value, (int, float))
+        if usable and not isinstance(value, bool):
+            kept[str(name)] = value
+        else:
+            dropped.append(str(name))
+    if dropped:
+        logger.warning(
+            "Braintrust scores: dropped unusable score name(s): %s", ", ".join(sorted(dropped))
+        )
+    return kept
 
 
 #: Text that must never reach Braintrust. Each pattern maps to a placeholder
@@ -98,8 +279,7 @@ def _looks_like_phone(candidate: str) -> bool:
 
 def _stable_token(placeholder: str, raw: str) -> str:
     """Return a stable, non-reversible stand-in for ``raw``."""
-    digest = hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:8]
-    return f"{placeholder}_{digest}"
+    return f"{placeholder}_{_short_hash(raw)}"
 
 
 def _redact_phone(match: re.Match[str]) -> str:
@@ -125,24 +305,50 @@ def _token_redactor(token: str) -> Callable[[re.Pattern[str], str], str]:
     return apply
 
 
-def redact(text: str) -> str:
-    """Replace PII spans in ``text`` with stable, non-reversible placeholders."""
+def _redact_text(text: str, *, keep_urls: bool = False) -> str:
     out = text
     for placeholder, pattern in REDACTIONS:
+        if keep_urls and placeholder == "<URL>":
+            continue
         apply = _phone_redactor if placeholder == "<PHONE>" else _token_redactor(placeholder)
         out = apply(pattern, out)
     return out
 
 
+def redact(text: str) -> str:
+    """Replace PII spans in ``text`` with stable, non-reversible placeholders."""
+    return _redact_text(text)
+
+
+def _redact_obj(value: Any, *, keep_urls: bool) -> Any:
+    if isinstance(value, str):
+        return _redact_text(value, keep_urls=keep_urls)
+    if isinstance(value, dict):
+        return {k: _redact_obj(v, keep_urls=keep_urls) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_obj(v, keep_urls=keep_urls) for v in value]
+    return value
+
+
 def redact_obj(value: Any) -> Any:
     """Recursively redact strings inside dicts/lists; other types pass through."""
-    if isinstance(value, str):
-        return redact(value)
-    if isinstance(value, dict):
-        return {k: redact_obj(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [redact_obj(v) for v in value]
-    return value
+    return _redact_obj(value, keep_urls=False)
+
+
+def secure_payload(payload: Any) -> Any:
+    """Apply the allowlist, then redaction, to anything about to be sent.
+
+    Order matters: redaction alone would mask the job url, and the allowlist
+    alone would trust every value. Redaction keeps URLs only in the allowlisted
+    URL fields (:data:`ALLOWED_URL_FIELDS`).
+    """
+    allowed = allowlist_payload(payload)
+    if isinstance(allowed, dict):
+        return {
+            key: (value if key in ALLOWED_URL_FIELDS else _redact_obj(value, keep_urls=False))
+            for key, value in allowed.items()
+        }
+    return _redact_obj(allowed, keep_urls=False)
 
 
 class Observability:
@@ -158,7 +364,12 @@ class Observability:
         self._api_key: str | None = None
 
     def init(self, *, api_key: str | None = None, org_name: str | None = None) -> bool:
-        """Best-effort login. Returns True when tracing is active."""
+        """Best-effort login. Returns True when tracing is active.
+
+        A logger for the project is created here, not lazily at first span:
+        ``start_span`` hands back a no-op span until the project is the active
+        object, so deferring it would drop every stage trace silently.
+        """
         key = api_key or os.getenv("BRAINTRUST_API_KEY", "").strip()
         if not key:
             logger.debug("Braintrust disabled: BRAINTRUST_API_KEY not set")
@@ -172,15 +383,32 @@ class Observability:
             logger.warning("Braintrust disabled: package not installed")
             return False
         try:
-            braintrust.login(api_key=key, org_name=org_name or braintrust_project())
+            braintrust.login(api_key=key, org_name=org_name or braintrust_org())
         except Exception as exc:  # noqa: BLE001 - never fail a run over telemetry
             logger.warning("Braintrust login failed, continuing without it: %s", exc)
             return False
         self._bt = braintrust
         # Kept only to hand the SDK its own credential on publish; never logged.
         self._api_key = key
+        try:
+            # A span needs an object to hang off: start_span returns a no-op span
+            # when nothing has been logged to the project in this process, which
+            # would silently drop every stage trace. init_logger also makes the
+            # project the active parent object for spans started later on.
+            braintrust.init_logger(
+                project_id=braintrust_project_id(),
+                api_key=key,
+                async_flush=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - never fail a run over telemetry
+            logger.warning("Braintrust logger unavailable, continuing without it: %s", exc)
+            return False
         self.enabled = True
-        logger.info("Braintrust tracing enabled (project %s)", braintrust_project())
+        logger.info(
+            "Braintrust tracing enabled (project %s, org %s)",
+            braintrust_project(),
+            braintrust_org(),
+        )
         return True
 
     def publish_score(
@@ -190,35 +418,38 @@ class Observability:
         *,
         input: Any = None,
         metadata: dict[str, Any] | None = None,
+        extra_scores: Mapping[str, float] | None = None,
     ) -> bool:
-        """Write one row carrying ``name`` as a Braintrust score.
+        """Write one row carrying ``name`` (plus ``extra_scores``) as Braintrust scores.
 
         Returns True when a row reached the project. When observability is
         disabled this is a silent no-op: no SDK call, no output, no exception.
-        On an SDK error the exception is reported at error level rather than
-        swallowed, because a silent no-op must mean "telemetry off", never
-        "telemetry broken".
+        Any SDK failure -- including a wrong signature or a wrong call -- is
+        reported at warning level and returns False, because a broken publish
+        must never fail an eval run or a pipeline run.
         """
         if not self.enabled:
             return False
 
         bt = self._bt
+        tags = [*EVAL_TAGS, name] if _safe_metric_name(name) else list(EVAL_TAGS)
         try:
+            scores = _allowed_scores({name: value, **(extra_scores or {})})
             log = bt.init_logger(
                 project_id=braintrust_project_id(),
                 api_key=self._api_key,
                 async_flush=False,
             )
             log.log(
-                input=redact_obj(input),
-                output={"score": value},
-                scores={name: value},
-                metadata=redact_obj(dict(metadata or {})),
-                tags=[*EVAL_TAGS, name],
+                input=secure_payload(input),
+                output=secure_payload({"score": value}),
+                scores=scores,
+                metadata=secure_payload(dict(metadata or {})),
+                tags=tags,
             )
             log.flush()
-        except bt.api.BraintrustAPIError as exc:
-            logger.error("Braintrust publish of %s failed, row not recorded: %s", name, exc)
+        except Exception as exc:  # noqa: BLE001 - telemetry must never fail a run
+            logger.warning("Braintrust publish of %s failed, row not recorded: %s", name, exc)
             return False
 
         print(f"Braintrust: published {name} -> {braintrust_dashboard_url()}")
@@ -247,20 +478,20 @@ class _Span:
     ) -> None:
         self.obs = obs
         self.name = name
-        self.metadata: dict[str, Any] = dict(metadata or {})
+        self.metadata: dict[str, Any] = allowlist_payload(dict(metadata or {}))
         self.score: float | None = None
         self._handle: Any = None
         self._start = time.perf_counter()
         self.input = input
         if obs.enabled:
             try:
-                self._handle = obs._bt.start_span(name=name, input=redact_obj(input))
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Braintrust span start failed for %s: %s", name, exc)
+                self._handle = obs._bt.start_span(name=name, input=secure_payload(input))
+            except Exception as exc:  # noqa: BLE001 - telemetry must never fail a run
+                logger.warning("Braintrust span %s could not start: %s", name, exc)
                 self._handle = None
 
     def set_metadata(self, **kwargs: Any) -> None:
-        self.metadata.update(redact_obj(kwargs))
+        self.metadata.update(allowlist_payload(kwargs))
 
     def set_score(self, value: float) -> None:
         self.score = value
@@ -272,11 +503,17 @@ class _Span:
             self.metadata["score"] = self.score
         if self._handle is None:
             return
-        meta = dict(self.metadata)
+        # The SDK's Span.end takes only an end_time, so the event goes out via
+        # log() first. The two calls are guarded separately: a span that cannot
+        # record its result is still closed rather than left open.
         try:
-            self._handle.end(output=redact_obj(output), metadata=meta)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Braintrust span end failed for %s: %s", self.name, exc)
+            self._handle.log(output=secure_payload(output), metadata=secure_payload(self.metadata))
+        except Exception as exc:  # noqa: BLE001 - telemetry must never fail a run
+            logger.warning("Braintrust span %s could not log its result: %s", self.name, exc)
+        try:
+            self._handle.end()
+        except Exception as exc:  # noqa: BLE001 - telemetry must never fail a run
+            logger.warning("Braintrust span %s could not end: %s", self.name, exc)
 
 
 _OBS: Observability | None = None
@@ -304,8 +541,36 @@ def reset_observability() -> None:
     _OBS = None
 
 
+@contextmanager
+def traced_stage(name: str, **metadata: Any) -> Iterator[_Span]:
+    """Span around one pipeline stage, as a context manager.
+
+    This is the form the pipeline uses, because it gives the guarantee the
+    pipeline needs: if the span cannot be started, or cannot be ended, the stage
+    still runs. Both failures are reported at warning level and swallowed, so a
+    tracing fault can never change what a stage computes.
+    """
+    try:
+        span = get_observability().start_span(name, metadata=metadata)
+    except Exception as exc:  # noqa: BLE001 - the stage must still run
+        logger.warning("Braintrust span %s could not start, stage still runs: %s", name, exc)
+        span = _Span(Observability(), name)
+    try:
+        yield span
+    finally:
+        try:
+            span.end()
+        except Exception as exc:  # noqa: BLE001 - the stage has already run
+            logger.warning("Braintrust span %s could not end: %s", name, exc)
+
+
 def traced(name: str | None = None) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorate a function so each call is logged as a Braintrust span.
+
+    Neither the arguments nor the return value are sent: they can hold a profile
+    or a job description, and the allowlist is not what stands between them and
+    the wire. What is recorded is the shape of the call -- how many arguments, and
+    the result type -- plus the span's latency.
 
     Exceptions are recorded on the span and re-raised untouched, so tracing can
     never change control flow.
@@ -319,14 +584,15 @@ def traced(name: str | None = None) -> Callable[[Callable[..., T]], Callable[...
             obs = get_observability()
             if not obs.enabled:
                 return fn(*args, **kwargs)
-            span = obs.start_span(span_name, input={"args": list(args), "kwargs": kwargs})
+            span = obs.start_span(span_name, metadata={"arg_count": len(args)})
             try:
                 result = fn(*args, **kwargs)
             except Exception as exc:
-                span.set_metadata(error=repr(exc))
-                span.end(output=None)
+                span.set_metadata(validation_error_type=type(exc).__name__)
+                span.end()
                 raise
-            span.end(output=result)
+            span.set_metadata(result_type=type(result).__name__)
+            span.end()
             return result
 
         return wrapper
