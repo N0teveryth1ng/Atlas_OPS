@@ -60,3 +60,33 @@ Agent summaries were wrong several times (invented test counts, a commit holding
 3. Owner runs mutmut under WSL/Linux (T5).
 4. Re-run selfcheck --full and the preflight.
 5. Only if verdict is GO, plan PR B (apply layer).
+
+## Owner decisions
+- Fresher, about 3 months internship; experience tolerance 1 year.
+- Interface: CLI + scheduled run + email (FastAPI/Jinja UI dropped).
+- auto_applications/ bots disabled from the pipeline, kept for Phase 8.
+- History purge + key rotation chosen; rotation NOT yet confirmed (G1 stays BLOCKED).
+- Sources: existing feeds + Adzuna + Greenhouse/Lever/Ashby; second Groq model as verifier.
+
+## Also done (earlier phases)
+Profile/input modes, query planner, collectors, normalize/dedupe, JD parser, hard filters, skill matching, evaluator + verifier + ranker, digest + Resend email + scheduler, feedback + tuning, selfcheck runner, seniority matrix, decision engine, evidence-quote validation, job status machine, label-check. Earlier commits: 21fb374 (audit), f4bb4a0 (remediation), 3e3197c (decision engine).
+
+## More limitations
+Adzuna has no keys; Greenhouse/Lever/Ashby were unreachable from the sandbox; verifier is the same provider family as the evaluator.
+
+## How to run
+python -m pytest -q
+python -m atlas.cli selfcheck --fast
+python -m atlas.cli selfcheck --full
+python -m atlas.cli eval
+python -m atlas.cli label-check
+
+## Process lessons
+Agent summaries were wrong several times (invented test counts, a commit holding only a temp file, placeholder output, edits reported but not saved). Verify every claim with raw command output in your own terminal.
+
+## Next actions
+1. Owner labels >=40 JDs from eval/labeling_pool.jsonl into eval/labels.jsonl, runs label-check.
+2. Owner confirms API-key rotation.
+3. Owner runs mutmut under WSL/Linux (T5).
+4. Re-run selfcheck --full and the preflight.
+5. Only if verdict is GO, plan PR B (apply layer).
