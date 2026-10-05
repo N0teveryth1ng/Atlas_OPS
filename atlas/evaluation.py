@@ -10,6 +10,11 @@ and reports the Phase-2 acceptance numbers from the rework plan:
    minimum experience on >= 95% of the golden set.
 
 The harness deliberately avoids the LLM so it is free, fast and deterministic.
+
+Every ``run_*`` entry point also publishes its headline number to the Braintrust
+dashboard as a named score (``YEAR_ACCURACY_SCORE``, ``SKILL_ACCURACY_SCORE``,
+``LLM_PRECISION_SCORE``). Publishing is a no-op when telemetry is off and never
+changes the boolean or printed report the caller sees.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from pathlib import Path
 from .config import REPO_ROOT, Settings, get_settings
 from .filters import DISALLOWED_SENIORITY, apply_hard_filters
 from .jd_parser import parse_jd_regex_only
+from .observability import get_observability
 from .schemas import CandidateProfile, Job, Proficiency, Skill
 from .skills import get_ontology, match_skills
 
@@ -28,6 +34,12 @@ GOLDEN_SET_PATH = REPO_ROOT / "eval" / "golden_set.jsonl"
 SKILL_CASES_PATH = REPO_ROOT / "eval" / "skill_cases.jsonl"
 YEAR_ACCURACY_TARGET = 0.95
 SKILL_ACCURACY_TARGET = 0.95
+
+#: Score names published to the Braintrust dashboard by :func:`run_eval`,
+#: :func:`run_skill_eval` and :func:`run_llm_eval`.
+YEAR_ACCURACY_SCORE = "year_extraction_accuracy"
+SKILL_ACCURACY_SCORE = "skill_matching_accuracy"
+LLM_PRECISION_SCORE = "llm_precision_at_k"
 
 
 @dataclass
@@ -140,6 +152,19 @@ def format_report(report: EvalReport) -> str:
 def run_eval(path: Path | str = GOLDEN_SET_PATH) -> bool:
     report = evaluate(load_golden_set(path))
     print(format_report(report))
+    get_observability().publish_score(
+        YEAR_ACCURACY_SCORE,
+        report.year_accuracy,
+        input={"eval": "golden_set", "dataset": Path(path).name},
+        metadata={
+            "year_correct": report.year_correct,
+            "year_checked": report.year_checked,
+            "golden_cases": report.total,
+            "experience_pass_through": len(report.experience_pass_through),
+            "false_rejects": len(report.false_rejects),
+            "accepted": report.accepted,
+        },
+    )
     return report.accepted
 
 
@@ -236,6 +261,19 @@ def format_skill_report(report: SkillEvalReport) -> str:
 def run_skill_eval(path: Path | str = SKILL_CASES_PATH) -> bool:
     report = evaluate_skill_matching(load_skill_cases(path))
     print(format_skill_report(report))
+    get_observability().publish_score(
+        SKILL_ACCURACY_SCORE,
+        report.new_accuracy,
+        input={"eval": "skill_matching", "dataset": Path(path).name},
+        metadata={
+            "skill_cases": report.total,
+            "baseline_accuracy": report.baseline_accuracy,
+            "baseline_correct": report.baseline_correct,
+            "new_correct": report.new_correct,
+            "failures": report.failures,
+            "accepted": report.accepted,
+        },
+    )
     return report.accepted
 
 
@@ -365,4 +403,16 @@ def run_llm_eval(client=None) -> bool:
         mark = "apply" if item.label == "apply" else "skip"
         print(f"  [{item.score:5.1f}] pred_apply={item.predicted_apply} label={mark}  {item.id}")
     print(f"RESULT:                      {'PASS' if report.accepted else 'FAIL'}")
+    get_observability().publish_score(
+        LLM_PRECISION_SCORE,
+        report.precision_at_k,
+        input={"eval": "llm_precision", "dataset": GOLDEN_SET_PATH.name},
+        metadata={
+            "k": report.k,
+            "golden_cases": len(report.results),
+            "candidates": len(report.candidates),
+            "top_k_selected": len(report.top_k),
+            "accepted": report.accepted,
+        },
+    )
     return report.accepted

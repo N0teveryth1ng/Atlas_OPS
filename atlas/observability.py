@@ -5,13 +5,17 @@ module gives that single chokepoint a Braintrust trace without changing any
 caller: when no API key is configured, every helper here is a no-op, so tests,
 ``selfcheck`` and offline runs behave exactly as before.
 
-Two rules govern what gets logged:
+Three rules govern what gets logged:
 
 * **PII is redacted before it leaves the process.** The pipeline reads real
   resumes and real job descriptions. Phone numbers, emails and Windows user
   paths are replaced with stable placeholders before any payload is sent.
 * **Never raise.** Observability must not be able to fail a pipeline run, so
   every Braintrust interaction is wrapped and logged at debug level.
+* **A broken publish must be loud.** :meth:`Observability.publish_score` catches
+  only the SDK's own ``BraintrustAPIError`` hierarchy and reports it at error
+  level with the original exception. Anything else — a wrong signature, a wrong
+  call, a bug — propagates instead of masquerading as a silent no-op.
 """
 
 from __future__ import annotations
@@ -32,10 +36,30 @@ T = TypeVar("T")
 #: Fallback BrainTrust project/org. Overridable with ``BRAINTRUST_PROJECT``.
 DEFAULT_BRAINTRUST_PROJECT = "atlasops"
 
+#: Project id that receives Atlas rows. Scopes every write to the owner-chosen
+#: project so nothing can land in an unrelated one.
+DEFAULT_BRAINTRUST_PROJECT_ID = "3c5416f9-ff13-4c16-9a07-71d0e5a8c090"
+
+BRAINTRUST_APP_URL = "https://www.braintrust.dev/app"
+
+#: Tags every published eval row carries, so the dashboard can be filtered to
+#: Atlas eval scores alone.
+EVAL_TAGS = ("atlas-ops", "eval")
+
 
 def braintrust_project() -> str:
     """Project/org name that receives Atlas traces."""
     return os.getenv("BRAINTRUST_PROJECT", "").strip() or DEFAULT_BRAINTRUST_PROJECT
+
+
+def braintrust_project_id() -> str:
+    """Project id that received the writes. Always paired with the project name."""
+    return os.getenv("BRAINTRUST_PROJECT_ID", "").strip() or DEFAULT_BRAINTRUST_PROJECT_ID
+
+
+def braintrust_dashboard_url() -> str:
+    """Human-facing URL of the configured project. Never contains a key."""
+    return f"{BRAINTRUST_APP_URL}/{braintrust_project()}"
 
 
 #: Text that must never reach Braintrust. Each pattern maps to a placeholder
@@ -131,6 +155,7 @@ class Observability:
     def __init__(self) -> None:
         self.enabled = False
         self._bt: Any = None
+        self._api_key: str | None = None
 
     def init(self, *, api_key: str | None = None, org_name: str | None = None) -> bool:
         """Best-effort login. Returns True when tracing is active."""
@@ -152,8 +177,51 @@ class Observability:
             logger.warning("Braintrust login failed, continuing without it: %s", exc)
             return False
         self._bt = braintrust
+        # Kept only to hand the SDK its own credential on publish; never logged.
+        self._api_key = key
         self.enabled = True
         logger.info("Braintrust tracing enabled (project %s)", braintrust_project())
+        return True
+
+    def publish_score(
+        self,
+        name: str,
+        value: float,
+        *,
+        input: Any = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Write one row carrying ``name`` as a Braintrust score.
+
+        Returns True when a row reached the project. When observability is
+        disabled this is a silent no-op: no SDK call, no output, no exception.
+        On an SDK error the exception is reported at error level rather than
+        swallowed, because a silent no-op must mean "telemetry off", never
+        "telemetry broken".
+        """
+        if not self.enabled:
+            return False
+
+        bt = self._bt
+        try:
+            log = bt.init_logger(
+                project_id=braintrust_project_id(),
+                api_key=self._api_key,
+                async_flush=False,
+            )
+            log.log(
+                input=redact_obj(input),
+                output={"score": value},
+                scores={name: value},
+                metadata=redact_obj(dict(metadata or {})),
+                tags=[*EVAL_TAGS, name],
+            )
+            log.flush()
+        except bt.api.BraintrustAPIError as exc:
+            logger.error("Braintrust publish of %s failed, row not recorded: %s", name, exc)
+            return False
+
+        print(f"Braintrust: published {name} -> {braintrust_dashboard_url()}")
         return True
 
     def start_span(
@@ -215,10 +283,18 @@ _OBS: Observability | None = None
 
 
 def get_observability() -> Observability:
-    """Return the process-wide observability singleton, initialising on first use."""
+    """Return the process-wide observability singleton, initialising on first use.
+
+    Initialisation is what logs in and flips :attr:`Observability.enabled`. Doing
+    it here rather than at each call site means every entry point -- LLM spans and
+    eval score publishing alike -- gets telemetry from the same key, and offline
+    runs still short-circuit inside :meth:`Observability.init`.
+    """
     global _OBS
     if _OBS is None:
-        _OBS = Observability()
+        obs = Observability()
+        obs.init()
+        _OBS = obs
     return _OBS
 
 
