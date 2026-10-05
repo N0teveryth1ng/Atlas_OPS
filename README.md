@@ -22,7 +22,11 @@ Optimised for **precision and accuracy**, not scale or latency.
 
 ## Architecture (target)
 
-![Atlas_OPS pipeline architecture](docs/diagrams/architecture.svg)
+
+
+
+<img width="1116" height="3500" alt="Image" src="https://github.com/user-attachments/assets/82d1c6b3-b8b4-4596-903e-b2cdece06e76" />
+
 
 ```
 Resume/description -> Profile Agent -> profile.json (human-approved once)
