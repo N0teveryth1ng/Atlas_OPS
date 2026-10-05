@@ -29,7 +29,7 @@ Resume/description -> Profile Agent -> profile.json (human-approved once)
                     -> Query Planner -> Collectors -> Normalize + Dedupe (SQLite)
                     -> JD Parser (regex + LLM) -> Hard Filter (code)
                     -> Skill Match -> Evaluator (LLM) -> Verifier (adversarial)
-                    -> Decision Engine -> Ranker -> Digest + Email -> Feedback
+                    -> Ranker -> Decision Engine -> Digest + Email -> Feedback
 ```
 
 Design rules:
