@@ -46,6 +46,34 @@ def test_description_sections_are_joined(monkeypatch):
     assert "on-call" in description
 
 
+def test_recorded_detail_nests_sections_under_job_ad():
+    """Guards the fixture against being re-flattened away from the live shape."""
+    body = replay.load("smartrecruiters")["normal"].body
+    assert "sections" not in body
+    assert "sections" in body["jobAd"]
+
+
+def test_flattened_sections_are_still_accepted(monkeypatch):
+    """A tenant serving `sections` at the top level must still map cleanly."""
+    case = replay.load("smartrecruiters")["normal"]
+    body = dict(case.body)
+    body["sections"] = body.pop("jobAd")["sections"]
+    replay.install_two_step(
+        monkeypatch,
+        replay.Recorded(
+            source=case.source,
+            case=case.case,
+            status=case.status,
+            headers=case.headers,
+            body=body,
+            listing=case.listing,
+            url=case.url,
+            provenance=case.provenance,
+        ),
+    )
+    assert "live betting feeds" in _collector().fetch("")[0].description_raw
+
+
 def test_apply_url_is_the_fallback_when_no_posting_url(monkeypatch):
     case = replay.load("smartrecruiters")["normal"]
     body = {k: v for k, v in case.body.items() if k != "postingUrl"}
