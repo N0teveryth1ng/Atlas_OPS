@@ -37,8 +37,35 @@ class SmartRecruitersCollector(Collector):
         self._cache: dict[str, list[Job]] = {}
 
     def _listing(self, company: str) -> list[dict]:
-        payload = self.get_json(f"{API_ROOT}/{company}/postings", {"limit": PAGE_LIMIT}) or {}
-        return list(payload.get("content") or [])
+        content: list[dict] = []
+        seen_ids: set[str] = set()
+        offset = 0
+        while True:
+            payload = (
+                self.get_json(
+                    f"{API_ROOT}/{company}/postings",
+                    {"limit": PAGE_LIMIT, "offset": offset},
+                )
+                or {}
+            )
+            page = list(payload.get("content") or [])
+            if not page:
+                # An exhausted listing starts returning empty pages, so a stale
+                # or missing totalFound can never make this loop forever.
+                break
+            fresh = [
+                item for item in page if item.get("id") is None or str(item["id"]) not in seen_ids
+            ]
+            if not fresh:
+                # offset ignored and the same page repeated: stop rather than
+                # loop forever over the same postings.
+                break
+            content.extend(fresh)
+            seen_ids.update(str(item["id"]) for item in fresh if item.get("id") is not None)
+            offset += len(page)
+            if len(content) >= int(payload.get("totalFound") or 0):
+                break
+        return content
 
     def _detail(self, company: str, posting_id: str) -> dict:
         payload = self.get_json(f"{API_ROOT}/{company}/postings/{posting_id}", None) or {}

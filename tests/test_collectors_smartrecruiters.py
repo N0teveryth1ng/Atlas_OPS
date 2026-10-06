@@ -33,8 +33,10 @@ def test_normal_case_maps_job(monkeypatch):
         "744000153670469-machine-learning-engineer-m-f-d-"
     )
     assert job.posted_at is not None
-    # listing, then detail
+    # listing (paged: totalFound=2 > 1 recorded item probes one more offset),
+    # then detail
     assert log == [
+        f"{API_ROOT}/sportradar/postings",
         f"{API_ROOT}/sportradar/postings",
         f"{API_ROOT}/sportradar/postings/744000153670469",
     ]
@@ -141,7 +143,7 @@ def test_board_is_cached_across_fetches(monkeypatch):
     collector = _collector()
     collector.fetch("backend")
     collector.fetch("python")
-    assert len(log) == 2
+    assert len(log) == 3
 
 
 def test_empty_listing_returns_nothing(monkeypatch):
@@ -188,8 +190,8 @@ def test_429_recovers_when_the_limit_lifts(monkeypatch):
     cases = replay.load("smartrecruiters")
     log = replay.install_two_step(monkeypatch, cases["normal"], prefix=[cases["http_429"]])
     assert len(_collector().fetch("machine")) == 1
-    # one 429, then the listing, then the detail
-    assert len(log) == 3
+    # one 429, then the paged listing, then the detail
+    assert len(log) == 4
 
 
 @pytest.mark.parametrize("case_name", ["malformed", "http_429", "http_500"])
@@ -208,3 +210,69 @@ def test_collector_identity():
     collector = _collector()
     assert collector.name == "smartrecruiters"
     assert collector.query_based is False
+
+
+def _detail_body(posting_id: str) -> dict:
+    return {
+        "name": f"Role {posting_id}",
+        "postingUrl": f"https://jobs.smartrecruiters.com/acme/{posting_id}",
+        "jobAd": {"sections": {"jobDescription": {"text": f"Desc {posting_id}"}}},
+        "company": {"name": "Acme"},
+    }
+
+
+def _paginating_get_json(pages: dict[int, tuple[int, list[dict]]]):
+    """Fake get_json serving listing pages keyed by offset, plus per-id details."""
+    log: list[str] = []
+
+    def get_json(url, params):
+        log.append(url)
+        if "/postings/" not in url:
+            found, content = pages[(params or {}).get("offset", 0)]
+            return {"totalFound": found, "content": content}
+        posting_id = url.rstrip("/").rsplit("/", 1)[-1]
+        return _detail_body(posting_id)
+
+    return get_json, log
+
+
+def test_listing_paginates_beyond_a_single_page():
+    pages = {
+        0: (2, [{"id": "p1"}]),
+        1: (2, [{"id": "p2"}]),
+    }
+    get_json, log = _paginating_get_json(pages)
+    collector = SmartRecruitersCollector(["acme"], get_json=get_json)
+    jobs = collector.fetch("")
+
+    assert [job.source_id for job in jobs] == ["p1", "p2"]
+    # two listing pages + one detail per posting
+    assert len(log) == 4
+
+
+def test_listing_stops_when_total_found_is_stale():
+    pages = {
+        0: (1000, [{"id": "p1"}]),
+        1: (1000, [{"id": "p2"}]),
+        2: (1000, []),
+    }
+    get_json, log = _paginating_get_json(pages)
+    collector = SmartRecruitersCollector(["acme"], get_json=get_json)
+    jobs = collector.fetch("")
+
+    assert [job.source_id for job in jobs] == ["p1", "p2"]
+    # the empty third page terminates the loop instead of looping forever
+    assert log.count(f"{API_ROOT}/acme/postings") == 3
+
+
+def test_listing_stops_when_offset_is_ignored():
+    def get_json(url, params):
+        if "/postings/" not in url:
+            return {"totalFound": 1000, "content": [{"id": "dup"}]}
+        posting_id = url.rstrip("/").rsplit("/", 1)[-1]
+        return _detail_body(posting_id)
+
+    collector = SmartRecruitersCollector(["acme"], get_json=get_json)
+    jobs = collector.fetch("")
+
+    assert [job.source_id for job in jobs] == ["dup"]
