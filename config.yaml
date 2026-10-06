@@ -51,13 +51,13 @@ sources:
   ashby: true
   # Opt-in feeds. Off by default: check the terms note in README (Sources)
   # and the source's licence before enabling.
-  himalayas: false      # public API, max 20/page, requires attribution
-  arbeitnow: false     # free public API, please link back to arbeitnow.com
-  jobicy: false       # friendlyNotice: credit Jobicy, link the original URL
+  himalayas: true      # public API, max 20/page, requires attribution
+  arbeitnow: true     # free public API, please link back to arbeitnow.com
+  jobicy: true       # friendlyNotice: credit Jobicy, link the original URL
   weworkremotely: false  # RSS ok w/ attribution, but API terms forbid scraping
   smartrecruiters: false # public API, but robots.txt disallows all crawlers
   workable: false      # v1 widget API, robots allow; third-party licence unverified
-  recruitee: false    # documented careers-site API, no key required
+  recruitee: true    # documented careers-site API, no key required
   teamtailor: false  # public jobs.json feed; third-party licence unverified
   adzuna_country: "in"
   results_per_page: 50
