@@ -5,6 +5,7 @@ from __future__ import annotations
 from ..companies import load_companies
 from ..config import Settings
 from .adzuna import AdzunaCollector
+from .arbeitnow import ArbeitnowCollector
 from .ashby import AshbyCollector
 from .base import Collector, GetJson, default_get_json, parse_datetime
 from .feeds import RemoteOKCollector, RemotiveCollector
@@ -14,6 +15,7 @@ from .lever import LeverCollector
 
 __all__ = [
     "AdzunaCollector",
+    "ArbeitnowCollector",
     "AshbyCollector",
     "Collector",
     "GetJson",
@@ -61,4 +63,6 @@ def build_collectors(
         collectors.append(AshbyCollector(companies["ashby"], get_json=get_json))
     if sources.himalayas:
         collectors.append(HimalayasCollector(get_json=get_json))
+    if sources.arbeitnow:
+        collectors.append(ArbeitnowCollector(get_json=get_json))
     return collectors

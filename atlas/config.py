@@ -67,6 +67,8 @@ class SourcesConfig(BaseModel):
     ashby: bool = True
     #: Opt-in: attribution/link-back is required by the provider's API terms.
     himalayas: bool = False
+    #: Opt-in: the API asks for a link back to arbeitnow.com.
+    arbeitnow: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 
