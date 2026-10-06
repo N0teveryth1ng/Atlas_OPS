@@ -13,6 +13,7 @@ from .greenhouse import GreenhouseCollector
 from .himalayas import HimalayasCollector
 from .jobicy import JobicyCollector
 from .lever import LeverCollector
+from .weworkremotely import WeWorkRemotelyCollector
 
 __all__ = [
     "AdzunaCollector",
@@ -26,6 +27,7 @@ __all__ = [
     "LeverCollector",
     "RemoteOKCollector",
     "RemotiveCollector",
+    "WeWorkRemotelyCollector",
     "build_collectors",
     "default_get_json",
     "parse_datetime",
@@ -69,4 +71,7 @@ def build_collectors(
         collectors.append(ArbeitnowCollector(get_json=get_json))
     if sources.jobicy:
         collectors.append(JobicyCollector(get_json=get_json))
+    if sources.weworkremotely:
+        # Feed is XML, so it uses its own text path and is not get_json-injectable.
+        collectors.append(WeWorkRemotelyCollector())
     return collectors

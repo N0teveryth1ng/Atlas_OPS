@@ -54,6 +54,7 @@ sources:
   himalayas: false      # public API, max 20/page, requires attribution
   arbeitnow: false     # free public API, please link back to arbeitnow.com
   jobicy: false       # friendlyNotice: credit Jobicy, link the original URL
+  weworkremotely: false  # RSS ok w/ attribution, but API terms forbid scraping
   adzuna_country: "in"
   results_per_page: 50
 

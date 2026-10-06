@@ -206,3 +206,13 @@ def test_jobicy_is_opt_in_and_needs_no_companies():
     settings.sources.jobicy = True
     on = build_collectors(settings, get_json=lambda url, params: {}, companies={})
     assert "jobicy" in {c.name for c in on}
+
+
+def test_weworkremotely_is_opt_in_and_needs_no_companies():
+    off = build_collectors(Settings(), get_json=lambda url, params: {}, companies={})
+    assert "weworkremotely" not in {c.name for c in off}
+
+    settings = Settings()
+    settings.sources.weworkremotely = True
+    on = build_collectors(settings, get_json=lambda url, params: {}, companies={})
+    assert "weworkremotely" in {c.name for c in on}
