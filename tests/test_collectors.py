@@ -175,3 +175,14 @@ def test_build_collectors_skips_ats_without_companies():
     assert "greenhouse" not in names
     assert "lever" not in names
     assert "ashby" not in names
+
+
+def test_himalayas_is_opt_in_and_needs_no_companies():
+    """Off by default (its API terms require attribution), and needs no tokens."""
+    off = build_collectors(Settings(), get_json=lambda url, params: {}, companies={})
+    assert "himalayas" not in {c.name for c in off}
+
+    settings = Settings()
+    settings.sources.himalayas = True
+    on = build_collectors(settings, get_json=lambda url, params: {}, companies={})
+    assert "himalayas" in {c.name for c in on}

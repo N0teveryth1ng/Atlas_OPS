@@ -1,0 +1,103 @@
+{
+  "source": "himalayas",
+  "url": "https://himalayas.app/jobs/api/search?limit=20&offset=0",
+  "captured": "2026-10-05",
+  "notes": "Public API documented at https://himalayas.app/jobs/api. Maximum 20 jobs per request; 429 means rate limited. Requires attribution/link back to himalayas.app.",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "jobs": [
+          {
+            "id": "1031423",
+            "guid": "https://himalayas.app/jobs/1031423-kodland-python-developer-uk-remote",
+            "applicationLink": "https://himalayas.app/jobs/1031423-kodland-python-developer-uk-remote/apply",
+            "title": "Python Developer",
+            "companyName": "Kodland",
+            "companyLogo": "https://d2e7japv9k8e8q.cloudfront.net/logo.png",
+            "companyDescription": "Kodland teaches Python to kids and teens through live online classes.",
+            "companySize": "11-50",
+            "companyWebsite": "https://www.kodland.com",
+            "companyIndustry": "Education",
+            "companyRating": null,
+            "location": "UK",
+            "locationRestrictions": [
+              "United Kingdom",
+              "Europe",
+              "Worldwide"
+            ],
+            "remote": true,
+            "seniority": "Mid Level",
+            "experience": null,
+            "description": "You will help design and build learning experiences for young Python programmers.",
+            "jobType": "Full time",
+            "salary": null,
+            "currency": null,
+            "benefits": [],
+            "skills": [
+              "Python",
+              "Django"
+            ],
+            "responsibilities": [
+              "Write clear, friendly code",
+              "Review student submissions"
+            ],
+            "qualifications": [
+              "Comfortable in Python"
+            ],
+            "pubDate": 1790326674
+          }
+        ],
+        "total": 1,
+        "nextPage": null,
+        "more": false
+      }
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "jobs": [],
+        "total": 0,
+        "nextPage": null,
+        "more": false
+      }
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>Service temporarily unavailable</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Rate limit exceeded. Please retry in 60 seconds."
+      }
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Internal server error"
+      }
+    }
+  }
+}

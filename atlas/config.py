@@ -65,6 +65,8 @@ class SourcesConfig(BaseModel):
     greenhouse: bool = True
     lever: bool = True
     ashby: bool = True
+    #: Opt-in: attribution/link-back is required by the provider's API terms.
+    himalayas: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 
