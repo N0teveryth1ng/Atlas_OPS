@@ -49,15 +49,15 @@ sources:
   greenhouse: true
   lever: true
   ashby: true
-  # Opt-in feeds. Off by default: check the terms note in README (Sources)
-  # and the source's licence before enabling.
+  # Term-verified feeds, on by default (their attribution terms are in README
+  # Sources) vs. sources still needing an owner decision, which stay false.
   himalayas: true      # public API, max 20/page, requires attribution
   arbeitnow: true     # free public API, please link back to arbeitnow.com
   jobicy: true       # friendlyNotice: credit Jobicy, link the original URL
   weworkremotely: false  # RSS ok w/ attribution, but API terms forbid scraping
   smartrecruiters: false # public API, but robots.txt disallows all crawlers
   workable: false      # v1 widget API, robots allow; third-party licence unverified
-  recruitee: true    # documented careers-site API, no key required
+  recruitee: true    # careers-site API; tenant in companies.yaml, token from 2027-02-10
   teamtailor: false  # public jobs.json feed; third-party licence unverified
   adzuna_country: "in"
   results_per_page: 50

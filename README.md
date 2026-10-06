@@ -137,22 +137,27 @@ auto_applications/# legacy Playwright bots, retained for Phase 8 (disabled)
 Collectors are pluggable (`atlas/collectors/`) and enabled per-source in
 `config.yaml` under `sources:`. Failures in one source never abort the run.
 
-| Source | Type | Needs |
-|---|---|---|
-| RemoteOK | feed | - |
-| Remotive | feed | - |
-| Adzuna | API | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
-| Greenhouse | ATS board | token in `companies.yaml` |
-| Lever | ATS board | token in `companies.yaml` |
-| Ashby | ATS board | token in `companies.yaml` |
-| Himalayas | API | opt-in (see below) |
-| Arbeitnow | API | opt-in (see below) |
-| Jobicy | API | opt-in (see below) |
-| We Work Remotely | RSS feed | opt-in (see below) |
-| SmartRecruiters | ATS board | token in `companies.yaml`, opt-in |
-| Workable | ATS board | token in `companies.yaml`, opt-in |
-| Recruitee | ATS board | tenant in `companies.yaml`, `RECRUITEE_CAREERS_SITES_TOKEN` (required from 2027-02-10), opt-in |
-| Teamtailor | ATS board | token in `companies.yaml`, opt-in |
+| Source | Type | Default | Needs |
+|---|---|---|---|
+| RemoteOK | feed | on | - |
+| Remotive | feed | on | - |
+| Adzuna | API | on | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
+| Greenhouse | ATS board | on | token in `companies.yaml` |
+| Lever | ATS board | on | token in `companies.yaml` |
+| Ashby | ATS board | on | token in `companies.yaml` |
+| Himalayas | API | on | - |
+| Arbeitnow | API | on | - |
+| Jobicy | API | on | - |
+| We Work Remotely | RSS feed | off | opt-in (see below) |
+| SmartRecruiters | ATS board | off | token in `companies.yaml`, opt-in |
+| Workable | ATS board | off | token in `companies.yaml`, opt-in |
+| Recruitee | ATS board | on | tenant in `companies.yaml` (none configured by default), `RECRUITEE_CAREERS_SITES_TOKEN` (required from 2027-02-10) |
+| Teamtailor | ATS board | off | token in `companies.yaml`, opt-in |
+
+"on" means `sources.<name>: true` in the `config.yaml` committed here. A source
+set to `true` still runs nothing until whatever its **Needs** column asks for is
+in place: ATS collectors only fetch the target companies listed in
+`companies.yaml`, and that file ships with empty lists for every one of them.
 
 Jobs are stripped of HTML/boilerplate, given a stable dedupe key, merged across
 boards, freshness-filtered, and stored in SQLite. Per-source and per-query yield
@@ -162,9 +167,12 @@ and the full set of URLs stays in `job.urls`.
 
 ### Terms, licensing, and programmatic access
 
-Every source below is **off by default**. Enabling one is an assertion that you
-have read its terms and are comfortable with the access pattern. The right-hand
-column is what was actually verified, not what the marketing page implies.
+A source runs only when `sources.<name>` is `true` in `config.yaml`, and the
+ATS collectors additionally need target entries in `companies.yaml` - so the
+sources marked **off** in the table above stay off until you decide. Turning one
+on is an assertion that you have read its terms and are comfortable with the
+access pattern. The right-hand column is what was actually verified, not what
+the marketing page implies.
 
 | Source | Terms / access position | Verdict |
 |---|---|---|
