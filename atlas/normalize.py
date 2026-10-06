@@ -112,6 +112,46 @@ def is_ats_url(url: str | None) -> bool:
     return any(netloc == host or netloc.endswith("." + host) for host in ATS_HOSTS)
 
 
+#: ``(host, collector name)`` pairs used to attribute a URL to the source that
+#: contributed it. Matched with the same exact-host-or-dot-suffix rule as
+#: :data:`ATS_HOSTS` (``sysmex.recruitee.com`` is Recruitee, a query string
+#: containing ``boards.greenhouse.io`` is not Greenhouse); first match wins.
+SOURCE_HOSTS: tuple[tuple[str, str], ...] = (
+    ("himalayas.app", "himalayas"),
+    ("jobicy.com", "jobicy"),
+    ("arbeitnow.com", "arbeitnow"),
+    ("remoteok.com", "remoteok"),
+    ("remotive.com", "remotive"),
+    ("weworkremotely.com", "weworkremotely"),
+    ("boards.greenhouse.io", "greenhouse"),
+    ("boards-api.greenhouse.io", "greenhouse"),
+    ("job-boards.greenhouse.io", "greenhouse"),
+    ("jobs.lever.co", "lever"),
+    ("hire.lever.co", "lever"),
+    ("jobs.ashbyhq.com", "ashby"),
+    ("apply.workable.com", "workable"),
+    ("jobs.smartrecruiters.com", "smartrecruiters"),
+    ("recruitee.com", "recruitee"),
+    ("teamtailor.com", "teamtailor"),
+)
+
+
+def source_for_url(url: str | None) -> str | None:
+    """Collector ``name`` for a URL, or ``None`` when the host is unknown.
+
+    Mirrors :func:`is_ats_url`'s discipline: the hostname must equal a known
+    host or end with ``"." + host``. Used to credit every provider that
+    contributed a URL to a merged job.
+    """
+    if not url:
+        return None
+    netloc = (urlparse(url).hostname or "").lower()
+    for host, source in SOURCE_HOSTS:
+        if netloc == host or netloc.endswith("." + host):
+            return source
+    return None
+
+
 def _merge_into(target: Job, other: Job) -> None:
     urls = {target.url, other.url, *target.urls, *other.urls}
     target.urls = sorted(urls)

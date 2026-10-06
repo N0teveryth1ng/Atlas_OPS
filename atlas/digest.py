@@ -9,14 +9,29 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from html import escape
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
 from .config import Settings
 from .job_status import SHIPPABLE, InvariantViolation, JobStatus
+from .normalize import source_for_url
 from .schemas import Recommendation
 
 MAX_REASONS = 3
+
+
+class SourceCredit(BaseModel):
+    """One provider that contributed a URL to a job, with its own direct link.
+
+    Attribution is derived from already-persisted URLs (``job.urls``), so no
+    schema or DB column is needed: terms like Himalayas' link-back and Jobicy's
+    friendlyNotice are satisfied even when dedupe made another source's URL the
+    canonical ``job.url``.
+    """
+
+    name: str
+    url: str
 
 
 class DigestItem(BaseModel):
@@ -25,6 +40,7 @@ class DigestItem(BaseModel):
     company: str = ""
     location: str = ""
     urls: list[str] = Field(default_factory=list)
+    credits: list[SourceCredit] = Field(default_factory=list)
     score: float = 0.0
     recommendation: str = Recommendation.maybe.value
     reasons_for: list[str] = Field(default_factory=list)
@@ -76,6 +92,31 @@ def _job_urls(job) -> list[str]:
     return seen
 
 
+def _source_credits(urls: list[str]) -> list[SourceCredit]:
+    """One credit per contributing source, order preserved from ``urls``.
+
+    Known sources deduplicate by name (first URL wins); an unknown host is kept
+    per URL under its hostname so no URL is ever lost from the digest.
+    """
+    credits: list[SourceCredit] = []
+    seen_sources: set[str] = set()
+    seen_unknown: set[str] = set()
+    for url in urls:
+        source = source_for_url(url)
+        if source is not None:
+            if source in seen_sources:
+                continue
+            seen_sources.add(source)
+            name = source
+        else:
+            if url in seen_unknown:
+                continue
+            seen_unknown.add(url)
+            name = urlparse(url).hostname or "link"
+        credits.append(SourceCredit(name=name, url=url))
+    return credits
+
+
 def _item_from_result(result) -> DigestItem:
     verdict = result.verdict
     verifier = result.verifier
@@ -88,12 +129,14 @@ def _item_from_result(result) -> DigestItem:
         risks.extend(item.quote for item in verifier.reasons_against)
     reasons_for = [item.quote for item in verdict.reasons_for] if verdict is not None else []
 
+    urls = _job_urls(result.job)
     return DigestItem(
         job_id=result.job_id,
         title=result.job.title or "",
         company=result.job.company or "",
         location=result.job.location or "",
-        urls=_job_urls(result.job),
+        urls=urls,
+        credits=_source_credits(urls),
         score=result.score,
         recommendation=result.final_recommendation.value,
         reasons_for=reasons_for[:MAX_REASONS],
@@ -205,6 +248,8 @@ def render_text(digest: Digest) -> str:
             lines.append(f"- [{item.score:.0f}] {item.title} @ {item.company} ({item.location})")
             if item.urls:
                 lines.append(f"    {item.urls[0]}")
+            for credit in item.credits:
+                lines.append(f"    via {credit.name}: {credit.url}")
             lines.append(f"    fit: {item.recommendation}")
             for reason in item.reasons_for:
                 lines.append(f"    + {reason}")
@@ -262,6 +307,14 @@ def render_html(digest: Digest) -> str:
                 f"<div style='color:#555;font-size:13px'>{esc(item.company)} &middot; "
                 f"{esc(item.location)} &middot; {esc(item.recommendation)}</div>"
             )
+            if item.credits:
+                links = ", ".join(
+                    f"<a href='{esc(credit.url)}' style='color:#0b5'>{esc(credit.name)}</a>"
+                    for credit in item.credits
+                )
+                rows.append(
+                    f"<div style='color:#666;font-size:12px;margin:3px 0 0'>Via {links}</div>"
+                )
             if item.reasons_for:
                 rows.append("<ul style='margin:8px 0;padding-left:18px'>")
                 for reason in item.reasons_for:

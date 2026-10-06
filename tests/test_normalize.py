@@ -1,10 +1,12 @@
 from atlas.normalize import (
     ATS_HOSTS,
+    SOURCE_HOSTS,
     dedupe_jobs,
     description_signature,
     is_ats_url,
     make_dedupe_key,
     normalize_job,
+    source_for_url,
     strip_boilerplate,
     strip_html,
 )
@@ -203,3 +205,52 @@ def test_dedupe_leaves_aggregator_only_urls_alone():
 def test_ats_hosts_are_unique_and_lowercase():
     assert len(ATS_HOSTS) == len(set(ATS_HOSTS))
     assert all(host == host.lower() for host in ATS_HOSTS)
+
+
+def test_source_for_url_covers_every_direct_source():
+    assert source_for_url("https://himalayas.app/jobs/python-dev") == "himalayas"
+    assert source_for_url("https://jobicy.com/remote-jobs/1") == "jobicy"
+    assert source_for_url("https://www.arbeitnow.com/jobs/1") == "arbeitnow"
+    assert source_for_url("https://remoteok.com/remote-jobs/123") == "remoteok"
+    assert source_for_url("https://www.remotive.com/remote-jobs/1") == "remotive"
+    assert source_for_url("https://weworkremotely.com/remote-jobs/abc") == "weworkremotely"
+
+
+def test_source_for_url_covers_every_ats_host():
+    assert source_for_url("https://boards.greenhouse.io/acme/jobs/1") == "greenhouse"
+    assert source_for_url("https://boards-api.greenhouse.io/acme/1") == "greenhouse"
+    assert source_for_url("https://job-boards.greenhouse.io/acme/1") == "greenhouse"
+    assert source_for_url("https://jobs.lever.co/acme/abc") == "lever"
+    assert source_for_url("https://hire.lever.co/acme/abc") == "lever"
+    assert source_for_url("https://jobs.ashbyhq.com/acme/abc") == "ashby"
+    assert source_for_url("https://apply.workable.com/acme/j/ABC/") == "workable"
+    assert source_for_url("https://jobs.smartrecruiters.com/Acme/744") == "smartrecruiters"
+    assert source_for_url("https://sysmex.recruitee.com/jobs/1") == "recruitee"
+    assert source_for_url("https://acme.teamtailor.com/jobs/abc") == "teamtailor"
+
+
+def test_source_for_url_uses_the_same_dot_suffix_discipline_as_is_ats_url():
+    assert source_for_url("https://sub.jobs.ashbyhq.com/acme/abc") == "ashby"
+    assert source_for_url("https://sub.job-boards.greenhouse.io/acme/1") == "greenhouse"
+    # A hostname that merely ends without a dot boundary is not a match.
+    assert source_for_url("https://evilrecruitee.com/jobs/1") is None
+    assert source_for_url("https://notremoteok.com/jobs/1") is None
+
+
+def test_source_for_url_ignores_known_hosts_in_the_path_or_query():
+    assert source_for_url("https://example.com/jobs/1?ref=boards.greenhouse.io") is None
+    assert source_for_url("https://example.com/boards.greenhouse.io/1") is None
+    assert source_for_url("https://example.com/jobs/1?next=acme.recruitee.com") is None
+
+
+def test_source_for_url_unknown_and_empty_hosts_are_none():
+    assert source_for_url("https://example.com/careers/1") is None
+    assert source_for_url("http://a") is None
+    assert source_for_url("") is None
+    assert source_for_url(None) is None
+
+
+def test_source_hosts_are_lowercase_and_reach_every_ats_host():
+    assert all(host == host.lower() for host, _ in SOURCE_HOSTS)
+    names = {host for host, _ in SOURCE_HOSTS}
+    assert set(ATS_HOSTS) <= names
