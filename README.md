@@ -139,16 +139,66 @@ Collectors are pluggable (`atlas/collectors/`) and enabled per-source in
 
 | Source | Type | Needs |
 |---|---|---|
-| RemoteOK | feed | — |
-| Remotive | feed | — |
+| RemoteOK | feed | - |
+| Remotive | feed | - |
 | Adzuna | API | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
 | Greenhouse | ATS board | token in `companies.yaml` |
 | Lever | ATS board | token in `companies.yaml` |
 | Ashby | ATS board | token in `companies.yaml` |
+| Himalayas | API | opt-in (see below) |
+| Arbeitnow | API | opt-in (see below) |
+| Jobicy | API | opt-in (see below) |
+| We Work Remotely | RSS feed | opt-in (see below) |
+| SmartRecruiters | ATS board | token in `companies.yaml`, opt-in |
+| Workable | ATS board | token in `companies.yaml`, opt-in |
+| Recruitee | ATS board | token in `companies.yaml`, opt-in |
+| Teamtailor | ATS board | token in `companies.yaml`, opt-in |
 
 Jobs are stripped of HTML/boilerplate, given a stable dedupe key, merged across
 boards, freshness-filtered, and stored in SQLite. Per-source and per-query yield
-is printed (and recorded in the `runs` summary).
+is printed (and recorded in the `runs` summary). When the same job turns up on
+both an aggregator and an ATS board, the ATS URL is kept as the canonical one
+and the full set of URLs stays in `job.urls`.
+
+### Terms, licensing, and programmatic access
+
+Every source below is **off by default**. Enabling one is an assertion that you
+have read its terms and are comfortable with the access pattern. The right-hand
+column is what was actually verified, not what the marketing page implies.
+
+| Source | Terms / access position | Verdict |
+|---|---|---|
+| RemoteOK | Public JSON API, no key | ok |
+| Remotive | Public JSON API, no key | ok |
+| Adzuna | Documented API, key required | ok (existing source) |
+| Greenhouse / Lever / Ashby | Public ATS boards, no key | ok |
+| [Himalayas](https://himalayas.app/jobs/api) | Public JSON API documented for third-party use. Max 20 jobs per request; 429 on excess. **Requires linking back to himalayas.app.** Scraping the site itself is forbidden by their terms. | ok, with attribution |
+| [Arbeitnow](https://www.arbeitnow.com/api/job-board-api) | "This is a free public API for jobs, please do not abuse. I would appreciate linking back to the site. By using the API, you agree to the terms of service present on Arbeitnow.com." No visa-sponsorship field is published. | ok, with link back |
+| [Jobicy](https://jobicy.com/api/v2/remote-jobs) | `friendlyNotice` requires crediting Jobicy and linking to the **original** application URL. Publishes an AI catalog / MCP server, so automated reads are expected. robots.txt allows all user-agents. | ok, with attribution |
+| [We Work Remotely](https://weworkremotely.com/remote-job-rss-feed) | The RSS page permits use **with attribution**. Their [API terms and guidelines](https://weworkremotely.com/api-terms-and-guidelines) forbid scraping or storing the data and building a job-search service. | **needs owner decision** - the RSS/API split is unresolved |
+| [SmartRecruiters](https://developers.smartrecruiters.com/docs/posting-api) | Documented public posting API, no key. **But** `api.smartrecruiters.com/robots.txt` is `User-agent: * / Disallow: /`. | **needs owner decision** - documented API vs disallowed robots |
+| Workable | The live endpoint is the **v1 widget** API (`/api/v1/widget/accounts/{subdomain}`); the v3 path 404s. robots.txt allows crawling and declares `ai-input: yes, ai-train: no`. No clear third-party feed licence found in their public terms. | **needs owner decision** - licence unverified |
+| [Recruitee](https://docs.recruitee.com/reference/intro-to-careers-site-api) | Documented public careers-site API, no key | ok |
+| Teamtailor | Public `jobs.json` JSON Feed. The official `api.teamtailor.com/v1/jobs` needs an API key and is deliberately unused. No third-party licence for the public feed was verified. | **needs owner decision** - licence unverified |
+
+Sources marked **needs owner decision** are wired and tested but should stay
+`false` in `config.yaml` until you have confirmed the position yourself.
+
+### Resilience
+
+`atlas/collectors/base.py` holds two fetch paths. The original
+`default_get_json` is untouched and still does 3 attempts with exponential
+backoff. New collectors use `HttpFetcher`, which adds an explicit `HttpPolicy`
+(timeout, attempts, backoff bounds, a cap on how long a `Retry-After` can park
+you), parses `Retry-After` in both delta-seconds and HTTP-date form, and also
+serves raw text for XML/Atom feeds. Transport failures, 5xx, 429 and 503 retry;
+a permanent 4xx does not.
+
+Every source is covered by `tests/fixtures/<source>.json`, replayed offline by
+`tests/replay.py` so no test touches the network. Each fixture has five cases -
+`normal`, `empty`, `malformed`, `http_429`, `http_500` - and each case records
+whether it was captured live or hand-written (`tests/fixtures/README.md` explains
+why the split matters).
 
 ## Pipeline (Phase 5)
 
