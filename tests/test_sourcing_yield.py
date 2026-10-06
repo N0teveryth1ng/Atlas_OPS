@@ -66,6 +66,7 @@ def test_collect_leaves_pipeline_counts_at_zero():
 def test_apply_pipeline_yields_counts_passing_and_sent():
     result = SourcingResult(
         source_yields=[SourceYield(source="fake", fetched=3, kept=2)],
+        persisted_job_sources={10: "fake", 11: "fake", 12: "fake"},
     )
     processed = [
         FakeProcessed(_job(url="http://a"), FakeFilterResult(passed=True), 10),
@@ -80,7 +81,9 @@ def test_apply_pipeline_yields_counts_passing_and_sent():
 
 
 def test_shippable_ids_but_no_email_count_as_not_sent():
-    result = SourcingResult(source_yields=[SourceYield(source="fake")])
+    result = SourcingResult(
+        source_yields=[SourceYield(source="fake")], persisted_job_sources={10: "fake"}
+    )
     processed = [FakeProcessed(_job(), FakeFilterResult(passed=True), 10)]
     apply_pipeline_yields(result, processed, sent_ids=set())
     assert result.source_yields[0].passed_filters == 1
@@ -89,7 +92,9 @@ def test_shippable_ids_but_no_email_count_as_not_sent():
 
 def test_needs_review_entries_pass_filters_but_are_never_sent():
     """A review-flagged job passed the filters but is deliberately not shipped."""
-    result = SourcingResult(source_yields=[SourceYield(source="fake")])
+    result = SourcingResult(
+        source_yields=[SourceYield(source="fake")], persisted_job_sources={10: "fake"}
+    )
     processed = [FakeProcessed(_job(), FakeFilterResult(passed=True), 10)]
     apply_pipeline_yields(result, processed, sent_ids={})
     assert result.source_yields[0].passed_filters == 1
@@ -97,7 +102,9 @@ def test_needs_review_entries_pass_filters_but_are_never_sent():
 
 
 def test_missing_filter_result_is_not_counted_as_passing():
-    result = SourcingResult(source_yields=[SourceYield(source="fake")])
+    result = SourcingResult(
+        source_yields=[SourceYield(source="fake")], persisted_job_sources={10: "fake"}
+    )
     processed = [FakeProcessed(_job(), None, 10)]
     apply_pipeline_yields(result, processed, sent_ids={10})
     assert result.source_yields[0].passed_filters == 0
@@ -112,7 +119,9 @@ def test_rows_without_a_job_id_cannot_be_sent():
 
 
 def test_jobs_from_an_unknown_source_are_ignored():
-    result = SourcingResult(source_yields=[SourceYield(source="fake")])
+    result = SourcingResult(
+        source_yields=[SourceYield(source="fake")], persisted_job_sources={10: "other"}
+    )
     processed = [FakeProcessed(_job(source="other"), FakeFilterResult(passed=True), 10)]
     apply_pipeline_yields(result, processed, sent_ids={10})
     assert result.source_yields[0].passed_filters == 0
@@ -122,6 +131,7 @@ def test_jobs_from_an_unknown_source_are_ignored():
 def test_counts_are_attributed_per_source():
     result = SourcingResult(
         source_yields=[SourceYield(source="src_a"), SourceYield(source="src_b")],
+        persisted_job_sources={1: "src_a", 2: "src_a", 3: "src_b"},
     )
     processed = [
         FakeProcessed(_job(source="src_a", url="http://a"), FakeFilterResult(passed=True), 1),
@@ -141,8 +151,46 @@ def test_apply_pipeline_yields_returns_the_same_result_object():
 
 def test_apply_pipeline_yields_does_not_touch_fetched_or_kept():
     """It must not recompute sourcing numbers - only add the pipeline columns."""
-    result = SourcingResult(source_yields=[SourceYield(source="fake", fetched=7, kept=4)])
+    result = SourcingResult(
+        source_yields=[SourceYield(source="fake", fetched=7, kept=4)],
+        persisted_job_sources={1: "fake"},
+    )
     apply_pipeline_yields(result, [FakeProcessed(_job(), FakeFilterResult(True), 1)], {1})
     item = result.source_yields[0]
     assert item.fetched == 7
     assert item.kept == 4
+
+
+def test_older_persisted_jobs_do_not_inflate_yields(tmp_path):
+    from atlas.db import connect, init_db, start_run, upsert_job
+
+    conn = connect(tmp_path / "t.db")
+    init_db(conn)
+    old_job = _job(title="Old Role", company="Oldco", url="http://old")
+    old_id, _ = upsert_job(conn, start_run(conn, "old-run"), old_job)
+
+    current = FakeCollector("fake", [_job(title="New Role", company="Newco")])
+    result = collect(
+        [current], [""], settings=Settings(), conn=conn, run_id=start_run(conn, "run"), now=NOW
+    )
+    conn.close()
+
+    assert result.persisted_job_sources
+    new_id = next(iter(result.persisted_job_sources))
+    processed = [
+        FakeProcessed(
+            _job(title="Old Role", company="Oldco", url="http://old"),
+            FakeFilterResult(passed=True),
+            old_id,
+        ),
+        FakeProcessed(
+            _job(title="New Role", company="Newco"),
+            FakeFilterResult(passed=True),
+            new_id,
+        ),
+    ]
+    apply_pipeline_yields(result, processed, sent_ids=set())
+
+    item = result.source_yields[0]
+    assert item.passed_filters == 1
+    assert item.sent == 0

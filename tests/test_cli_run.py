@@ -63,7 +63,10 @@ def _run(tmp_path, monkeypatch, *, email: bool):
     save_profile(setup, CandidateProfile(full_name="A", target_roles=["Backend"], approved=True))
     setup.close()
 
-    result = SourcingResult(source_yields=[SourceYield(source="fake", fetched=1, kept=1)])
+    result = SourcingResult(
+        source_yields=[SourceYield(source="fake", fetched=1, kept=1)],
+        persisted_job_sources={JOB_ID: "fake"},
+    )
     monkeypatch.setattr(cli, "connect", lambda: connect(dbfile))
     monkeypatch.setattr(cli, "_make_client", lambda: object())
     monkeypatch.setattr(sourcing, "run_sourcing", lambda *args, **kwargs: result)

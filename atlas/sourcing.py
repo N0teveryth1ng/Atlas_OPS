@@ -38,6 +38,7 @@ class SourcingResult:
     query_yield: dict[str, int] = field(default_factory=dict)
     dropped_stale: int = 0
     new_jobs: int = 0
+    persisted_job_sources: dict[int, str] = field(default_factory=dict)
 
 
 def apply_pipeline_yields(
@@ -51,18 +52,27 @@ def apply_pipeline_yields(
     decided — it never re-runs decisions or filters. A job is attributed to the
     source of its surviving canonical copy, which is how ``kept`` is counted too.
 
+    Only jobs persisted by *this* run (ids in ``persisted_job_sources``) can
+    affect the counts: older stored jobs from earlier runs share the DB and are
+    re-processed by the pipeline, but they must never inflate a current source.
+
     ``sent_ids`` is the set of job ids that made it into the digest. Anything not
     in it (``--no-email``, an aborted send, an invariant violation) counts as not
     sent.
     """
     yields = {item.source: item for item in result.source_yields}
     for entry in processed:
-        item = yields.get(entry.job.source)
+        if entry.job_id is None:
+            continue
+        source = result.persisted_job_sources.get(entry.job_id)
+        if source is None:
+            continue
+        item = yields.get(source)
         if item is None:
             continue
         if entry.filter_result is not None and entry.filter_result.passed:
             item.passed_filters += 1
-        if entry.job_id is not None and entry.job_id in sent_ids:
+        if entry.job_id in sent_ids:
             item.sent += 1
     return result
 
@@ -137,7 +147,8 @@ def _persist(
         )
     conn.commit()
     for job in jobs:
-        _, created = upsert_job(conn, run_id, job)
+        job_id, created = upsert_job(conn, run_id, job)
+        result.persisted_job_sources[job_id] = job.source
         if created:
             result.new_jobs += 1
 
