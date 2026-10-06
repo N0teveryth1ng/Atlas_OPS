@@ -1,11 +1,15 @@
-"""Tests for HimalayasCollector — five recorded fixture cases, no network."""
+"""Tests for HimalayasCollector — five recorded fixture cases, no network.
+
+The ``normal``/``empty`` cases are byte-identical captures of the live API taken on
+2026-10-06 (``?seniority=Entry-level&company=pairs`` and ``...&company=airbnb``).
+"""
 
 from __future__ import annotations
 
 import pytest
 
 from atlas.collectors.base import HttpFetcher, RetryableStatusError
-from atlas.collectors.himalayas import HimalayasCollector
+from atlas.collectors.himalayas import API_URL, HimalayasCollector
 from tests import replay
 
 
@@ -15,30 +19,74 @@ def _fetcher(max_attempts: int = 3) -> HttpFetcher:
 
 def test_normal_case_maps_job(monkeypatch):
     replay.install(monkeypatch, replay.load("himalayas")["normal"])
-    jobs = HimalayasCollector(_fetcher()).fetch("python")
+    jobs = HimalayasCollector(_fetcher()).fetch("business development")
     assert len(jobs) == 1
     job = jobs[0]
     assert job.source == "himalayas"
-    assert job.title == "Python Developer"
-    assert job.company == "Kodland"
-    assert job.location == "UK"
-    assert job.source_id == "1031423"
-    assert job.url.endswith("/apply")
+    assert job.title == "Business Development Associate"
+    assert job.company == "Pairs"
+    assert job.source_id == (
+        "https://himalayas.app/companies/pairs/jobs/business-development-associate"
+    )
+    assert job.url == job.source_id
     assert job.posted_at is not None
 
 
 def test_normal_case_hits_the_documented_endpoint_once(monkeypatch):
     log = replay.install(monkeypatch, replay.load("himalayas")["normal"])
-    HimalayasCollector(_fetcher()).fetch("python")
-    assert log == ["https://himalayas.app/jobs/api/search"]
+    HimalayasCollector(_fetcher()).fetch("business development")
+    assert log == [API_URL]
+
+
+def test_location_comes_from_location_restrictions(monkeypatch):
+    """The payload has no ``location`` key; ``locationRestrictions`` carries it."""
+    replay.install(monkeypatch, replay.load("himalayas")["normal"])
+    jobs = HimalayasCollector(_fetcher()).fetch("business development")
+    location = jobs[0].location
+    assert location is not None
+    assert "Canada" in location
+    assert "Germany" in location
+    assert "United Arab Emirates" in location
+
+
+def test_unrestricted_job_has_no_location(monkeypatch):
+    """An empty restriction list is the API's "no restriction" signal, not a place."""
+    case = replay.load("himalayas")["normal"]
+    job = dict(case.body["jobs"][0])
+    job["locationRestrictions"] = []
+    replay.install(
+        monkeypatch,
+        replay.Recorded(
+            source=case.source,
+            case=case.case,
+            status=case.status,
+            headers=case.headers,
+            body={"jobs": [job], "totalCount": 1},
+            url=case.url,
+            provenance=case.provenance,
+        ),
+    )
+    assert HimalayasCollector(_fetcher()).fetch("")[0].location is None
 
 
 def test_query_matches_description_too(monkeypatch):
     replay.install(monkeypatch, replay.load("himalayas")["normal"])
-    # "Django" appears only in the skills array of the recorded job, so it must
-    # not match: the collector filters on mapped fields, not unmapped extras.
-    assert HimalayasCollector(_fetcher()).fetch("django") == []
-    assert len(HimalayasCollector(_fetcher()).fetch("learning experiences")) == 1
+    # "diligence" never appears in a title or company name, only in descriptions.
+    assert len(HimalayasCollector(_fetcher()).fetch("diligence")) == 5
+    assert HimalayasCollector(_fetcher()).fetch("qatar") == []
+
+
+def test_query_matches_location_restrictions(monkeypatch):
+    """Widening regression: "Canada" lives only in ``locationRestrictions``.
+
+    The API ignores ``query`` entirely, so this local pass is the whole match; it
+    must therefore look at every textual field, not just the three that are mapped
+    onto :class:`~atlas.schemas.Job`.
+    """
+    replay.install(monkeypatch, replay.load("himalayas")["normal"])
+    jobs = HimalayasCollector(_fetcher()).fetch("canada")
+    assert len(jobs) == 5
+    assert all(job.location is not None for job in jobs)
 
 
 def test_query_filters_out_non_matching(monkeypatch):
@@ -54,12 +102,23 @@ def test_query_is_sent_to_the_api(monkeypatch):
         return {"jobs": [], "total": 0}
 
     HimalayasCollector(fake).fetch("Python Developer")
-    assert seen == [{"limit": 20, "query": "python developer"}]
+    assert seen == [{"limit": 20, "seniority": "Entry-level", "query": "python developer"}]
+
+
+def test_seniority_filter_is_sent_without_a_query(monkeypatch):
+    seen: list[dict | None] = []
+
+    def fake(url: str, params: dict | None) -> object:
+        seen.append(params)
+        return {"jobs": [], "total": 0}
+
+    HimalayasCollector(fake).fetch("")
+    assert seen == [{"limit": 20, "seniority": "Entry-level"}]
 
 
 def test_empty_query_returns_everything(monkeypatch):
     replay.install(monkeypatch, replay.load("himalayas")["normal"])
-    assert len(HimalayasCollector(_fetcher()).fetch("")) == 1
+    assert len(HimalayasCollector(_fetcher()).fetch("")) == 5
 
 
 def test_empty_case_returns_empty_list(monkeypatch):
@@ -128,7 +187,7 @@ def test_429_recovers_when_the_limit_lifts(monkeypatch):
         [cases["http_429"], cases["normal"]],
         repeat_last=False,
     )
-    assert len(HimalayasCollector(_fetcher()).fetch("python")) == 1
+    assert len(HimalayasCollector(_fetcher()).fetch("business development")) == 1
     assert len(log) == 2
 
 
