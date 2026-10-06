@@ -103,6 +103,20 @@ def test_is_ats_url_rejects_aggregators_and_junk():
     assert not is_ats_url(None)
 
 
+def test_is_ats_url_only_matches_the_host_not_query_or_path():
+    assert not is_ats_url("https://remoteok.com/jobs/1?next=boards.greenhouse.io")
+    assert not is_ats_url("https://remoteok.com/jobs/1/boards.greenhouse.io/2")
+    assert not is_ats_url("https://remoteok.com/jobs/1?ref=acme.recruitee.com")
+    assert not is_ats_url("https://remoteok.com/jobs/acme.teamtailor.com/404")
+
+
+def test_is_ats_url_still_recognises_every_known_host():
+    assert is_ats_url("https://boards-api.greenhouse.io/acme/123")
+    assert is_ats_url("https://sub.job-boards.greenhouse.io/acme/123")
+    assert is_ats_url("https://hire.lever.co/acme/abc")
+    assert is_ats_url("https://sub.jobs.ashbyhq.com/acme/abc")
+
+
 def test_dedupe_prefers_the_ats_url_as_canonical():
     """Same job on an aggregator and an ATS: show the first-party ATS page."""
     desc = "Own the platform end to end. " * 20

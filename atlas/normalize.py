@@ -11,6 +11,7 @@ import html
 import re
 import unicodedata
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 from .schemas import Job, RemoteType
 
@@ -105,8 +106,10 @@ def is_ats_url(url: str | None) -> bool:
     """True when the URL points at a known ATS board rather than an aggregator."""
     if not url:
         return False
-    lowered = url.lower()
-    return any(host in lowered for host in ATS_HOSTS)
+    netloc = (urlparse(url).hostname or "").lower()
+    # Match only on the hostname itself or a subdomain, never a bare substring
+    # that could sit in a path or query string of an aggregator URL.
+    return any(netloc == host or netloc.endswith("." + host) for host in ATS_HOSTS)
 
 
 def _merge_into(target: Job, other: Job) -> None:
