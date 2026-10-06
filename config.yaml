@@ -58,6 +58,7 @@ sources:
   smartrecruiters: false # public API, but robots.txt disallows all crawlers
   workable: false      # v1 widget API, robots allow; third-party licence unverified
   recruitee: false    # documented careers-site API, no key required
+  teamtailor: false  # public jobs.json feed; third-party licence unverified
   adzuna_country: "in"
   results_per_page: 50
 

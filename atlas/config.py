@@ -82,6 +82,8 @@ class SourcesConfig(BaseModel):
     workable: bool = False
     #: Opt-in: documented public careers-site API, no key required.
     recruitee: bool = False
+    #: Opt-in: public jobs.json feed, but no third-party licence was verified.
+    teamtailor: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 

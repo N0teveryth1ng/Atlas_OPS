@@ -258,3 +258,33 @@ def test_recruitee_is_opt_in_and_skipped_without_companies():
         companies={"recruitee": ["sysmex"]},
     )
     assert "recruitee" in {c.name for c in with_tokens}
+
+
+def test_teamtailor_is_opt_in_and_skipped_without_companies():
+    settings = Settings()
+    settings.sources.teamtailor = True
+    without = build_collectors(settings, get_json=lambda url, params: {}, companies={})
+    assert "teamtailor" not in {c.name for c in without}
+
+    with_tokens = build_collectors(
+        settings,
+        get_json=lambda url, params: {},
+        companies={"teamtailor": ["varma"]},
+    )
+    assert "teamtailor" in {c.name for c in with_tokens}
+
+
+def test_every_new_source_defaults_to_off():
+    """None of the eight new sources may be live out of the box."""
+    sources = Settings().sources
+    for name in (
+        "himalayas",
+        "arbeitnow",
+        "jobicy",
+        "weworkremotely",
+        "smartrecruiters",
+        "workable",
+        "recruitee",
+        "teamtailor",
+    ):
+        assert getattr(sources, name) is False, f"{name} should be opt-in"

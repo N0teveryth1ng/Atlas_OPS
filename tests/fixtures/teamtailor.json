@@ -1,0 +1,85 @@
+{
+  "source": "teamtailor",
+  "url": "https://varma.teamtailor.com/jobs.json",
+  "captured": "2026-10-05",
+  "notes": "Public JSON Feed at https://{subdomain}.teamtailor.com/jobs.json. Returns a JSON Feed document with an 'items' array; each item embeds a '_jobposting' object holding the real fields, plus first-class title/url/date_published for feed readers. The official api.teamtailor.com/v1/jobs endpoint requires an API key and is NOT used here. CAVEAT: no third-party licence for the public jobs.json feed was verified; owner must confirm before enabling.",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/feed+json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "version": "https://jsonfeed.org/version/1.1",
+        "title": "Varma jobs",
+        "home_page_url": "https://varma.com",
+        "feed_url": "https://varma.teamtailor.com/jobs.json",
+        "items": [
+          {
+            "id": "3f9c1a52-7d64-4c0b-9a7e-2b8c4e1f6a90",
+            "url": "https://varma.teamtailor.com/jobs/3f9c1a52-7d64-4c0b-9a7e-2b8c4e1f6a90",
+            "title": "Senior Fullstack Developer",
+            "date_published": "2026-09-30T08:00:00.000Z",
+            "_jobposting": {
+              "id": 4321987,
+              "uuid": "3f9c1a52-7d64-4c0b-9a7e-2b8c4e1f6a90",
+              "title": "Senior Fullstack Developer",
+              "company_name": "Varma",
+              "location": "Stockholm, Sweden",
+              "department": "Engineering",
+              "employment_type": "full-time",
+              "remote": true,
+              "requirements": "You have shipped production TypeScript for years.",
+              "description": "Build the platform our engineers use to deploy.",
+              "careers_url": "https://varma.teamtailor.com/jobs/3f9c1a52-7d64-4c0b-9a7e-2b8c4e1f6a90",
+              "created_at": "2026-09-30T08:00:00.000Z"
+            }
+          }
+        ]
+      }
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/feed+json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "version": "https://jsonfeed.org/version/1.1",
+        "title": "Varma jobs",
+        "home_page_url": "https://varma.com",
+        "items": []
+      }
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>Teamtailor careers site unavailable</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Rate limit exceeded"
+      }
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Internal server error"
+      }
+    }
+  }
+}
