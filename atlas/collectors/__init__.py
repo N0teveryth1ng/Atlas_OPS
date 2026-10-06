@@ -9,6 +9,7 @@ from .ashby import AshbyCollector
 from .base import Collector, GetJson, default_get_json, parse_datetime
 from .feeds import RemoteOKCollector, RemotiveCollector
 from .greenhouse import GreenhouseCollector
+from .himalayas import HimalayasCollector
 from .lever import LeverCollector
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "Collector",
     "GetJson",
     "GreenhouseCollector",
+    "HimalayasCollector",
     "LeverCollector",
     "RemoteOKCollector",
     "RemotiveCollector",
@@ -57,4 +59,6 @@ def build_collectors(
         collectors.append(LeverCollector(companies["lever"], get_json=get_json))
     if sources.ashby and companies.get("ashby"):
         collectors.append(AshbyCollector(companies["ashby"], get_json=get_json))
+    if sources.himalayas:
+        collectors.append(HimalayasCollector(get_json=get_json))
     return collectors
