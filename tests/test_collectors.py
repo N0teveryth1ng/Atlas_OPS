@@ -260,6 +260,23 @@ def test_recruitee_is_opt_in_and_skipped_without_companies():
     assert "recruitee" in {c.name for c in with_tokens}
 
 
+def test_build_collectors_passes_the_careers_sites_token_from_secrets():
+    settings = Settings()
+    settings.sources.recruitee = True
+    settings.secrets.recruitee_careers_sites_token = "unit-token"
+    collectors = build_collectors(settings, companies={"recruitee": ["sysmex"]})
+    recruitee = next(c for c in collectors if c.name == "recruitee")
+    assert recruitee.get_json.policy.headers == {"X-Careers-Sites-Token": "unit-token"}
+
+
+def test_build_collectors_omits_the_token_header_when_the_secret_is_empty():
+    settings = Settings()
+    settings.sources.recruitee = True
+    collectors = build_collectors(settings, companies={"recruitee": ["sysmex"]})
+    recruitee = next(c for c in collectors if c.name == "recruitee")
+    assert recruitee.get_json.policy.headers is None
+
+
 def test_teamtailor_is_opt_in_and_skipped_without_companies():
     settings = Settings()
     settings.sources.teamtailor = True

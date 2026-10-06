@@ -10,6 +10,12 @@ lives on its own subdomain::
 with a trailing `` UTC`` marker and no ISO timezone token, and some tenants use
 ``25-09-2026``. Both are handled here and read as UTC rather than being handed
 to ``fromisoformat`` directly.
+
+Authentication: calls still answer without credentials, but the authentication
+docs (https://docs.recruitee.com/reference/authentication-1) set 2027-02-10 as
+the deadline after which calls missing the ``X-Careers-Sites-Token`` header
+return ``401 Unauthorized``. The optional token is therefore sent as that
+header only — never as a query parameter — and only when it is non-empty.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ..schemas import Job, RemoteType
-from .base import Collector, GetJson, HttpFetcher, parse_datetime
+from .base import Collector, GetJson, HttpFetcher, HttpPolicy, parse_datetime
 
 API_ROOT = "https://{tenant}.recruitee.com/api/offers"
 
@@ -50,8 +56,25 @@ class RecruiteeCollector(Collector):
     name = "recruitee"
     query_based = False
 
-    def __init__(self, companies: list[str], *, get_json: GetJson | None = None):
-        super().__init__(get_json or HttpFetcher())
+    def __init__(
+        self,
+        companies: list[str],
+        *,
+        get_json: GetJson | None = None,
+        careers_sites_token: str = "",
+    ) -> None:
+        """Fetch each tenant's offers.
+
+        ``careers_sites_token`` is sent as the ``X-Careers-Sites-Token`` request
+        header whenever it is non-empty, and never appears in the URL or in any
+        log line. Recruitee's authentication docs set a 2027-02-10 deadline after
+        which calls without that header return 401; an empty token (the default)
+        produces exactly the unauthenticated request shape used today. The token
+        only shapes the default fetcher — an injected ``get_json`` owns its own
+        request shape and is used as-is.
+        """
+        headers = {"X-Careers-Sites-Token": careers_sites_token} if careers_sites_token else None
+        super().__init__(get_json or HttpFetcher(HttpPolicy(headers=headers)))
         self.companies = companies
         self._cache: dict[str, list[Job]] = {}
 

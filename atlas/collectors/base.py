@@ -62,9 +62,17 @@ class RetryableStatusError(Exception):
         super().__init__(f"HTTP {status_code}{suffix}")
 
 
-def _http_get(url: str, params: dict | None, *, timeout: float) -> httpx.Response:
-    """The single request primitive: one GET, our User-Agent, explicit timeout."""
-    return httpx.get(url, params=params or {}, timeout=timeout, headers={"User-Agent": USER_AGENT})
+def _http_get(
+    url: str, params: dict | None, *, timeout: float, headers: dict[str, str] | None = None
+) -> httpx.Response:
+    """The single request primitive: one GET, our User-Agent, explicit timeout.
+
+    ``headers`` are merged under the User-Agent: the caller may add headers but
+    can never override the identifying User-Agent. ``None`` (the default) is
+    exactly the historical single-header request. Headers are never logged.
+    """
+    merged = {**(headers or {}), "User-Agent": USER_AGENT}
+    return httpx.get(url, params=params or {}, timeout=timeout, headers=merged)
 
 
 @retry(
@@ -150,6 +158,8 @@ class HttpPolicy:
 
     ``sleep_seconds`` overrides the real sleep between attempts. Tests set it to
     ``0.0`` so a retry loop costs no wall-clock time; production leaves it ``None``.
+    ``headers`` are extra request headers merged under the User-Agent (which the
+    caller can never override); ``None`` means today's single-header request.
     """
 
     timeout: float = DEFAULT_TIMEOUT
@@ -159,6 +169,7 @@ class HttpPolicy:
     backoff_max: float = DEFAULT_BACKOFF_MAX
     max_retry_after: float = MAX_RETRY_AFTER_SECONDS
     sleep_seconds: float | None = None
+    headers: dict[str, str] | None = None
 
 
 def _wait_seconds(policy: HttpPolicy) -> Callable[[RetryCallState], float]:
@@ -216,7 +227,14 @@ class HttpFetcher:
 
     def request(self, url: str, params: dict | None = None) -> httpx.Response:
         """One attempt. 429/503 become :class:`RetryableStatusError`; other errors raise."""
-        response = _http_get(url, params, timeout=self.policy.timeout)
+        if self.policy.headers:
+            response = _http_get(
+                url, params, timeout=self.policy.timeout, headers=self.policy.headers
+            )
+        else:
+            # No configured headers: call the primitive exactly as before, so
+            # callers with no headers keep the identical request shape.
+            response = _http_get(url, params, timeout=self.policy.timeout)
         if response.status_code in RETRYABLE_STATUS:
             retry_after = parse_retry_after(response.headers.get("Retry-After"))
             logger.warning(

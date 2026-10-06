@@ -138,6 +138,21 @@ def test_request_sets_identifying_user_agent(monkeypatch):
     assert seen["headers"]["User-Agent"] == base.USER_AGENT
 
 
+def test_policy_headers_cannot_override_the_identifying_user_agent(monkeypatch):
+    """A caller may add headers (e.g. X-Careers-Sites-Token) but never replace ours."""
+    seen: dict[str, Any] = {}
+
+    def fake_get(url: str, params: dict, *, timeout: float, headers: dict) -> httpx.Response:
+        seen["headers"] = headers
+        return httpx.Response(200, json={}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(base.httpx, "get", fake_get)
+    policy = base.HttpPolicy(headers={"User-Agent": "spoofed-agent", "X-Extra": "yes"})
+    base.HttpFetcher(policy).fetch_json("https://unit.test/api")
+    assert seen["headers"]["User-Agent"] == base.USER_AGENT
+    assert seen["headers"]["X-Extra"] == "yes"
+
+
 def test_fetch_text_returns_raw_body(monkeypatch):
     replay.install(monkeypatch, _case(200, "<rss><item/></rss>"))
     assert base.HttpFetcher(replay.policy()).fetch_text("https://unit.test/rss") == (

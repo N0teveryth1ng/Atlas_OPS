@@ -149,6 +149,9 @@ class Secrets(BaseModel):
     groq_api_key: str = ""
     adzuna_app_id: str = ""
     adzuna_app_key: str = ""
+    #: Recruitee careers-site token; sent as the X-Careers-Sites-Token header.
+    #: Optional until 2027-02-10, after which Recruitee answers 401 without it.
+    recruitee_careers_sites_token: str = ""
     resend_api_key: str = ""
     resend_from_email: str = ""
     resend_to_email: str = ""
@@ -172,6 +175,7 @@ def _load_secrets() -> Secrets:
         groq_api_key=os.environ.get("GROQ_API_KEY", ""),
         adzuna_app_id=os.environ.get("ADZUNA_APP_ID", ""),
         adzuna_app_key=os.environ.get("ADZUNA_APP_KEY", ""),
+        recruitee_careers_sites_token=os.environ.get("RECRUITEE_CAREERS_SITES_TOKEN", ""),
         resend_api_key=os.environ.get("RESEND_API_KEY", ""),
         resend_from_email=os.environ.get("RESEND_FROM_EMAIL", ""),
         resend_to_email=os.environ.get("RESEND_TO_EMAIL", ""),
