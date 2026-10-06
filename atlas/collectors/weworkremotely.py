@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from xml.etree import ElementTree
 
+from defusedxml import ElementTree as DefusedElementTree
+
 from ..schemas import Job, RemoteType
 from .base import Collector, GetText, HttpFetcher, parse_http_date
 
@@ -43,7 +45,7 @@ class WeWorkRemotelyCollector(Collector):
         super().__init__(get_text=get_text or HttpFetcher().fetch_text)
 
     def fetch(self, query: str) -> list[Job]:
-        root = ElementTree.fromstring(self.get_text(FEED_URL, None))
+        root = DefusedElementTree.fromstring(self.get_text(FEED_URL, None))
         jobs: list[Job] = []
         for item in root.iterfind("./channel/item"):
             url = _text(item, "link")

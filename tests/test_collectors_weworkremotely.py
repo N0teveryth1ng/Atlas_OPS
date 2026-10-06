@@ -146,3 +146,17 @@ def test_uses_the_text_path_not_json(monkeypatch):
     replay.install(monkeypatch, replay.load("weworkremotely")["normal"])
     collector = WeWorkRemotelyCollector(_fetcher().fetch_text)
     assert len(collector.fetch("")) == 1
+
+
+def test_entity_expansion_payload_is_refused():
+    from defusedxml.common import DefusedXmlException
+
+    payload = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE lolz [<!ENTITY lol "lol">'
+        '<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">]>'
+        "<channel><item><title>&lol2;</title></item></channel>"
+    )
+    collector = WeWorkRemotelyCollector(get_text=lambda url, params: payload)
+    with pytest.raises(DefusedXmlException):
+        collector.fetch("")
