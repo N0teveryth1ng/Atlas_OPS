@@ -40,20 +40,22 @@ class WorkableCollector(Collector):
             link = item.get("url") or item.get("application_url") or ""
             if not link:
                 continue
-            description = "\n\n".join(
-                str(item[key])
-                for key in ("description", "requirements", "benefits")
-                if item.get(key)
-            )
+            first_location = (item.get("locations") or [{}])[0]
+            parts = [
+                first_location.get("city") or item.get("city"),
+                first_location.get("region") or item.get("state"),
+                first_location.get("country") or item.get("country"),
+            ]
+            location = ", ".join(part for part in parts if part) or None
             jobs.append(
                 Job(
                     source=self.name,
                     source_id=str(item["shortcode"]) if item.get("shortcode") else None,
                     title=item.get("title"),
                     company=company,
-                    location=item.get("location"),
+                    location=location,
                     url=link,
-                    description_raw=description,
+                    description_raw=str(item.get("description") or ""),
                     posted_at=parse_datetime(item.get("created_at")),
                 )
             )

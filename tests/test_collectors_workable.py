@@ -24,9 +24,9 @@ def test_normal_case_maps_job(monkeypatch):
     assert len(jobs) == 1
     job = jobs[0]
     assert job.source == "workable"
-    assert job.title == "Associate Designer"
+    assert job.title == "Associate Designer, Apparel"
     assert job.company == "huckberry"
-    assert job.location == "London, UK (Hybrid)"
+    assert job.location == "Austin, Texas, United States"
     assert job.source_id == "62180FD5F9"
     assert job.posted_at is not None
     assert log == [f"{API_ROOT}/huckberry"]
@@ -44,12 +44,53 @@ def test_v1_widget_endpoint_with_details(monkeypatch):
     assert seen == [(f"{API_ROOT}/huckberry", {"details": "true"})]
 
 
-def test_description_sections_are_joined(monkeypatch):
+def test_description_is_the_only_text_field(monkeypatch):
+    """Live payloads have one HTML description; there is no requirements/benefits."""
     replay.install(monkeypatch, replay.load("workable")["normal"])
     description = _collector().fetch("")[0].description_raw
-    assert "product surfaces" in description
-    assert "Figma craft" in description
-    assert "learning budget" in description
+    assert "apparel meant to be lived in" in description
+    assert "menswear" in description
+
+
+def test_location_is_built_from_city_state_country(monkeypatch):
+    """No location key exists; city/state/country are composed into the field."""
+    case = replay.load("workable")["normal"]
+    item = {k: v for k, v in case.body["jobs"][0].items() if k != "locations"}
+    replay.install(
+        monkeypatch,
+        replay.Recorded(
+            source=case.source,
+            case=case.case,
+            status=case.status,
+            headers=case.headers,
+            body={**case.body, "jobs": [item]},
+            url=case.url,
+            provenance=case.provenance,
+        ),
+    )
+    assert _collector().fetch("")[0].location == "Austin, Texas, United States"
+
+
+def test_location_is_none_when_no_place_available(monkeypatch):
+    case = replay.load("workable")["normal"]
+    item = {
+        k: v
+        for k, v in case.body["jobs"][0].items()
+        if k not in ("locations", "city", "state", "country")
+    }
+    replay.install(
+        monkeypatch,
+        replay.Recorded(
+            source=case.source,
+            case=case.case,
+            status=case.status,
+            headers=case.headers,
+            body={**case.body, "jobs": [item]},
+            url=case.url,
+            provenance=case.provenance,
+        ),
+    )
+    assert _collector().fetch("")[0].location is None
 
 
 def test_application_url_is_the_fallback(monkeypatch):
@@ -67,7 +108,7 @@ def test_application_url_is_the_fallback(monkeypatch):
             provenance=case.provenance,
         ),
     )
-    assert _collector().fetch("")[0].url.endswith("/apply/")
+    assert _collector().fetch("")[0].url.endswith("/apply")
 
 
 def test_items_without_any_url_are_skipped(monkeypatch):
