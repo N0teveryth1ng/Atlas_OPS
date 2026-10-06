@@ -200,10 +200,11 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
 
     client = _make_client()
     run_id = start_run(conn, run_kind)
+    sourcing_result = None
     if getattr(args, "collect", False):
         from .sourcing import run_sourcing
 
-        run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
+        sourcing_result = run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
 
     results = run_pipeline(
         conn, run_id, profile, settings, client, limit=getattr(args, "limit", None)
@@ -247,6 +248,15 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     )
     if sent:
         mark_digest_sent(conn, digest_id)
+    if sourcing_result is not None:
+        from .sourcing import apply_pipeline_yields
+
+        apply_pipeline_yields(sourcing_result, results, set(digest.job_ids()))
+        for item in sourcing_result.source_yields:
+            print(
+                f"  {item.source:<15} fetched={item.fetched:<5} kept={item.kept:<5} "
+                f"passed={item.passed_filters:<5} sent={item.sent}"
+            )
     finish_run(conn, run_id, "ok", summary=digest.summary.model_dump())
     conn.close()
     return 0
@@ -356,7 +366,11 @@ def cmd_collect(args: argparse.Namespace) -> int:
         f"New: {result.new_jobs}   Stale dropped: {result.dropped_stale}"
     )
     for item in result.source_yields:
-        print(f"  {item.source:<12} fetched={item.fetched:<5} kept={item.kept}")
+        # cmd_collect never runs the pipeline, so passed/sent stay 0 here.
+        print(
+            f"  {item.source:<15} fetched={item.fetched:<5} kept={item.kept:<5} "
+            f"passed={item.passed_filters:<5} sent={item.sent}"
+        )
     return 0
 
 
