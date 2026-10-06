@@ -1,8 +1,8 @@
 {
   "source": "smartrecruiters",
   "url": "https://api.smartrecruiters.com/v1/companies/Sportradar/postings?limit=100",
-  "captured": "2026-10-05",
-  "notes": "Public posting API, no key required: /v1/companies/{company}/postings lists, /v1/companies/{company}/postings/{id} gives the detail (jobAd.sections, location, departments). CAVEAT: api.smartrecruiters.com/robots.txt is 'User-agent: * / Disallow: /'. The API is documented as public for third-party apps, but the robots file disallows crawlers - owner must confirm this before enabling. Recorded via listing + detail; the fixture body is the detail payload.",
+  "captured": "2026-10-06",
+  "notes": "Public posting API, no key required: /v1/companies/{company}/postings lists, /v1/companies/{company}/postings/{id} gives detail. Live keys: listing/detail use `name` (NOT title), `company` is an object {identifier, name} (NOT companyName), `location` is an object with city/country/address/remote/hybrid/fullLocation (NO displayName), and jobAd.sections values are objects {title, text} (NOT bare strings); posting detail carries postingUrl/applyUrl and releasedDate. CAVEAT: robots.txt disallows crawling; owner must confirm before enabling.",
   "cases": {
     "normal": {
       "status": 200,
@@ -13,74 +13,226 @@
       "listing": {
         "content": [
           {
-            "id": 744000153369739,
-            "uuid": "8f4a1c22-0e3b-4a71-9a5e-2c1d9b7e4f10",
-            "companyName": "Sportradar",
-            "title": "Software Engineer, Backend",
-            "location": {
-              "country": "MT",
-              "region": "Valletta",
-              "city": "Valletta",
-              "postalCode": "VLT 1117",
-              "streetAddress": "Triq Dun Karm Street",
-              "displayName": "Valletta, Malta"
+            "id": "744000153670469",
+            "name": "Machine Learning Engineer (m/f/d)",
+            "uuid": "3dcce003-7085-4207-846f-f193d2f6e5d7",
+            "jobAdId": "d303ce90-3df0-4864-9955-dae55f7f0895",
+            "defaultJobAd": true,
+            "refNumber": "JREQ 13045",
+            "company": {
+              "identifier": "Sportradar",
+              "name": "Sportradar"
             },
-            "department": "Engineering",
-            "employmentType": "FULLTIME",
-            "ref": "ENG-BE-8842",
-            "status": "PUBLISHED",
-            "created": "2026-09-28T09:12:44.000Z",
-            "modified": "2026-10-01T11:03:19.000Z",
-            "requisitionId": "REQ-2026-8842",
-            "postingUrl": "https://jobs.sportradar.com/744000153369739-software-engineer-backend"
+            "releasedDate": "2026-10-06T06:39:24.356Z",
+            "location": {
+              "city": "Ljubljana",
+              "country": "si",
+              "address": "Litostrojska Cesta 52a",
+              "remote": false,
+              "hybrid": false,
+              "fullLocation": "Ljubljana, , Slovenia"
+            },
+            "industry": {
+              "id": "sports",
+              "label": "Sports"
+            },
+            "department": {},
+            "function": {
+              "id": "engineering",
+              "label": "Engineering"
+            },
+            "typeOfEmployment": {
+              "id": "permanent",
+              "label": "Full-time"
+            },
+            "experienceLevel": {
+              "id": "associate",
+              "label": "Associate"
+            },
+            "customField": [
+              {
+                "fieldId": "6384c6c1ecc9e5737721e0a6",
+                "fieldLabel": "Worker Type",
+                "valueId": "d831fabd-f110-4e52-a591-ce1ebe7213c1",
+                "valueLabel": "Employee"
+              },
+              {
+                "fieldId": "6384c9ff9ebbcb3a0363c656",
+                "fieldLabel": "Departments",
+                "valueId": "Technology_and_Artificial_Intelligence_Department",
+                "valueLabel": "Technology and Artificial Intelligence (Department)"
+              },
+              {
+                "fieldId": "6390b69338f73208c321f07b",
+                "fieldLabel": "Worker Sub Type",
+                "valueId": "cae99c68-536b-4a1c-a4fc-b10cd1b1830f",
+                "valueLabel": "Permanent"
+              },
+              {
+                "fieldId": "COUNTRY",
+                "fieldLabel": "Country/Region",
+                "valueId": "si",
+                "valueLabel": "Slovenia"
+              },
+              {
+                "fieldId": "6384c828ce6b193502ea2979",
+                "fieldLabel": "Is Evergreen",
+                "valueId": "b6b73525-3491-44ec-afd3-a53e6c53236e",
+                "valueLabel": "No"
+              },
+              {
+                "fieldId": "62a80e0f37d38e3f95c653a0",
+                "fieldLabel": "Brands",
+                "valueId": "default",
+                "valueLabel": "Sportradar"
+              },
+              {
+                "fieldId": "6384c907ccf64b1805b2c1ee",
+                "fieldLabel": "Time Type",
+                "valueId": "9f17158e-f94a-4a1f-9af6-fb67a9cef1f3",
+                "valueLabel": "Full time"
+              },
+              {
+                "fieldId": "6384c8113c1ab1024cb95072",
+                "fieldLabel": "Recruiting Start Date",
+                "valueLabel": "2026-10-01"
+              }
+            ],
+            "visibility": "PUBLIC",
+            "ref": "https://api.smartrecruiters.com/v1/companies/Sportradar/postings/744000153670469",
+            "creator": {
+              "name": "Tina Plut"
+            },
+            "language": {
+              "code": "en",
+              "label": "English",
+              "labelNative": "English (US)"
+            }
           }
         ],
-        "total": 1,
         "limit": 100,
-        "offset": 0
+        "offset": 0,
+        "totalFound": 2
       },
       "body": {
-        "id": 744000153369739,
-        "uuid": "8f4a1c22-0e3b-4a71-9a5e-2c1d9b7e4f10",
-        "companyName": "Sportradar",
-        "title": "Software Engineer, Backend",
+        "id": "744000153670469",
+        "name": "Machine Learning Engineer (m/f/d)",
+        "uuid": "3dcce003-7085-4207-846f-f193d2f6e5d7",
+        "jobId": "f98fb48d-1fad-474e-b521-9cdc433a6490",
+        "jobAdId": "d303ce90-3df0-4864-9955-dae55f7f0895",
+        "defaultJobAd": true,
+        "refNumber": "JREQ 13045",
+        "company": {
+          "name": "Sportradar",
+          "identifier": "Sportradar"
+        },
         "location": {
-          "country": "MT",
-          "region": "Valletta",
-          "city": "Valletta",
-          "postalCode": "VLT 1117",
-          "streetAddress": "Triq Dun Karm Street",
-          "displayName": "Valletta, Malta"
+          "city": "Ljubljana",
+          "country": "si",
+          "address": "Litostrojska Cesta 52a",
+          "remote": false,
+          "hybrid": false,
+          "fullLocation": "Ljubljana, , Slovenia"
         },
-        "department": "Engineering",
-        "employmentType": "FULLTIME",
-        "experienceLevel": {
-          "id": 3,
-          "name": "Mid-level"
-        },
-        "industry": "Information Technology",
-        "ref": "ENG-BE-8842",
-        "status": "PUBLISHED",
-        "created": "2026-09-28T09:12:44.000Z",
-        "modified": "2026-10-01T11:03:19.000Z",
-        "requisitionId": "REQ-2026-8842",
-        "postingUrl": "https://jobs.sportradar.com/744000153369739-software-engineer-backend",
-        "applyUrl": "https://jobs.sportradar.com/apply/744000153369739",
-        "customPostingUrl": "",
-        "keywords": [
-          "backend",
-          "distributed systems"
+        "customField": [
+          {
+            "fieldId": "6384c6c1ecc9e5737721e0a6",
+            "fieldLabel": "Worker Type",
+            "valueId": "d831fabd-f110-4e52-a591-ce1ebe7213c1",
+            "valueLabel": "Employee"
+          },
+          {
+            "fieldId": "6384c9ff9ebbcb3a0363c656",
+            "fieldLabel": "Departments",
+            "valueId": "Technology_and_Artificial_Intelligence_Department",
+            "valueLabel": "Technology and Artificial Intelligence (Department)"
+          },
+          {
+            "fieldId": "6390b69338f73208c321f07b",
+            "fieldLabel": "Worker Sub Type",
+            "valueId": "cae99c68-536b-4a1c-a4fc-b10cd1b1830f",
+            "valueLabel": "Permanent"
+          },
+          {
+            "fieldId": "COUNTRY",
+            "fieldLabel": "Country/Region",
+            "valueId": "si",
+            "valueLabel": "Slovenia"
+          },
+          {
+            "fieldId": "6384c828ce6b193502ea2979",
+            "fieldLabel": "Is Evergreen",
+            "valueId": "b6b73525-3491-44ec-afd3-a53e6c53236e",
+            "valueLabel": "No"
+          },
+          {
+            "fieldId": "6384c8113c1ab1024cb95072",
+            "fieldLabel": "Recruiting Start Date",
+            "valueLabel": "2026-10-01"
+          },
+          {
+            "fieldId": "62a80e0f37d38e3f95c653a0",
+            "fieldLabel": "Brands",
+            "valueId": "default",
+            "valueLabel": "Sportradar"
+          },
+          {
+            "fieldId": "6384c907ccf64b1805b2c1ee",
+            "fieldLabel": "Time Type",
+            "valueId": "9f17158e-f94a-4a1f-9af6-fb67a9cef1f3",
+            "valueLabel": "Full time"
+          }
         ],
+        "releasedDate": "2026-10-06T06:39:24.356Z",
+        "creator": {
+          "name": "Tina Plut",
+          "avatarUrl": ""
+        },
+        "postingUrl": "https://jobs.smartrecruiters.com/Sportradar/744000153670469-machine-learning-engineer-m-f-d-",
+        "applyUrl": "https://jobs.smartrecruiters.com/Sportradar/744000153670469-machine-learning-engineer-m-f-d-?oga=true",
+        "referralUrl": "https://jobs.smartrecruiters.com/external-referrals/company/Sportradar/publication/3dcce003-7085-4207-846f-f193d2f6e5d7?dcr_ci=Sportradar",
         "jobAd": {
           "sections": {
-            "companyDescription": "Sportradar provides data feeds and analytics for sports betting.",
-            "jobDescription": "<p>You will build and operate the services that power our live betting feeds.</p>",
-            "additionalInformation": [
-              "Remote-friendly within Europe"
-            ],
-            "qualifications": "<p>Solid Python or Java experience and a bias for simple designs.</p>",
-            "responsibilities": "<p>Own services end to end, including on-call.</p>"
+            "companyDescription": {
+              "title": "Company Description",
+              "text": "<p>We’re the world’s leading sports technology company, at the intersection between sports, media, and betting. More than 1,700 sports federations, media outlets, betting operators, and consumer platforms across 120 countries rely on our know-how and technology to boost their business.</p>"
+            },
+            "jobDescription": {
+              "title": "Job Description",
+              "text": "<p><strong>ABOUT US: </strong><br>\nWe are looking for a <strong>Machine Learning Engineer</strong> to join Sportradar's AI Unit, an established, high-performing team of AI experts working on the design, development, and deployment of advanced machine learning models that power sports betting, trading, media, and sports performance products.</p><p>As part of our AI team, you will leverage Sportradar's unique sports datasets, betting transaction data, user interaction data, and large-scale tracking data to develop innovative AI and analytics solutions. Depending on your expertise and interests, your work may focus on predictive analytics for sportsbook risk management and liquidity-driven odds trading, or on generative AI and deep learning solutions for sports performance modelling, simulation, and virtualization.</p><p>You will collaborate closely with product owners, technical leads, and software engineers to transform AI research into scalable production systems that deliver measurable business impact across Sportradar's product portfolio.<br>\n<br>\n<strong>THE CHALLENGE: </strong></p><ul><li><strong>Analyse, explore, and visualize</strong> large-scale datasets using statistical methods and modern data science tools.</li><li>Develop <strong>machine learning models</strong> ranging from predictive and statistical models to <strong>deep learning </strong>and <strong>generative AI solutions</strong>.</li><li><strong>Design and implement data processing, training, validation</strong>, and <strong>inference pipelines </strong>for production-grade AI systems.</li><li>Rigorously <strong>validate methods, models, algorithms</strong>, and <strong>hypotheses</strong> through historical back-testing, simulations, and experimentation.</li><li><strong>Bring AI solutions into production </strong>leveraging Sportradar's AI platform, ensuring model monitoring, maintenance, and continuous improvement.</li><li><strong>Design innovative approaches</strong> for analysing sports, betting, tracking, and behavioural data to enhance products and services.</li><li><strong>Collaborate with product and engineering teams </strong>to integrate model outputs into real-world product experiences.</li><li><strong>Present complex technical concepts </strong>and <strong>findings</strong> to both technical and non-technical stakeholders.</li></ul><p><br>\n<strong>ABOUT YOU: </strong></p><ul><li>Strong knowledge of <strong>machine learning, statistics, and data science</strong>.</li><li>Proven <strong>software engineering experience </strong>and <strong>strong programming skills</strong>&#xa0;in <strong>Python</strong> and <strong>Java</strong>.</li><li>Experience building and <strong>deploying production-grade ML solutions</strong>.</li><li>Proficiency with <strong>modern ML frameworks</strong> such as PyTorch and large-scale data processing.</li><li><strong>Advanced SQL skills </strong>and experience working with <strong>large datasets</strong>.</li><li><strong>Experience in one or more of the following areas:</strong> Predictive modelling, risk management, trading, or quantitative analytics. Deep learning, Natural Language Processing, transformers, sequence modelling, or representation learning.</li><li><strong>Experience validating models </strong>through experimentation, simulations, and back-testing.</li><li>Experience with <strong>cloud computing</strong>, preferably AWS.</li><li>Experience with <strong>agentic coding tools</strong>, like Cursor or Claude code.</li><li><strong>Bonus</strong>: Experience with Kafka, Flink, real-time analytics, or distributed systems.</li><li><strong>Bonus</strong>: Experience with tracking, time-series, computer vision, pose estimation, or spatiotemporal data.</li><li>Bachelor's degree in Computer Science, Engineering, Mathematics, Statistics, or a related field.</li><li>Fluent in <strong>English</strong> (written and spoken).</li><li><strong>Autonomous, analytical, creative, and collaborative mindset</strong>.</li></ul><p><br>\n<br>\n<strong>OUR OFFER</strong>:</p><ul><li>A <strong>collaborative environment</strong> with colleagues from all over the world (Engineering offices in Europe, Asia and the US), including various social events and teambuilding.</li><li><strong>Flexibility </strong>to manage your workday and tasks with autonomy.</li><li>A balance of structure and <strong>autonomy </strong>to tackle your daily tasks.</li><li>Vibrant and inclusive community, including <strong>Women in Tech</strong> and <strong>Pride groups</strong> which welcome all participants.</li><li><strong>Global Employee Assistance Programme</strong>.</li><li><strong>Calm and Reulay apps </strong>(leading well-being apps designed to support focus, quality rest, mindfulness, and long-term mental resilience).</li><li><strong>Online training videos</strong>.</li><li><strong>Flexible working hours</strong>.</li></ul><p><em>While we appreciate the flexibility and benefits of working from home, we strongly believe that coming together in person fosters stronger connections, encourages collaboration, and drives innovation—both as individuals and as a company. The energy, shared ideas, and team support we experience in the office strengthen the foundation of our success and culture. For this reason, we are an office-first business operating on a fully on-site model, with team members working in the office five days a week to build relationships, exchange ideas, and grow together. Certain exemptions may apply depending on location — your local point of contact can provide further details.</em><br>\n<br>\n<strong>OUR RECRUITMENT PROCESS:&#xa0; </strong></p><ul><li><strong>Initial Screening</strong>: A quick chat with our Talent Acquisition Partner to understand your background and expectations.</li><li><strong>Technical Interview</strong>: Meet with the Technical team to discuss your background and experience and assess&#xa0;team fit.</li><li><strong>Onsite Interview:</strong> Meet with the local team and take a tour of our office for a final meet-and-greet.</li><li><strong>Final Steps: </strong>Receive feedback and, if successful, an offer!</li></ul>"
+            },
+            "qualifications": {
+              "title": "Qualifications",
+              "text": ""
+            },
+            "additionalInformation": {
+              "title": "Additional Information",
+              "text": "<div sr-tagline=\"\"></div><p><em>At Sportradar, we celebrate our diverse group of hardworking employees. Sportradar is committed to ensuring equal access to its programs, facilities, and employment opportunities. All qualified applicants will receive consideration for employment without regard to age, race, color, religion, sex, sexual orientation, gender identity, national origin, disability, or status as a protected veteran. We encourage you to apply even if you only meet most of the requirements (but not 100% of the listed criteria) – we believe skills evolve over time. If you’re willing to learn and grow with us, we invite you to join our team!</em></p>"
+            }
           }
+        },
+        "active": true,
+        "visibility": "PUBLIC",
+        "industry": {
+          "id": "sports",
+          "label": "Sports"
+        },
+        "function": {
+          "id": "engineering",
+          "label": "Engineering"
+        },
+        "experienceLevel": {
+          "id": "associate",
+          "label": "Associate"
+        },
+        "typeOfEmployment": {
+          "id": "permanent",
+          "label": "Full-time"
+        },
+        "language": {
+          "code": "en",
+          "label": "English",
+          "labelNative": "English (US)"
         }
       }
     },
@@ -92,9 +244,9 @@
       "provenance": "synthetic",
       "body": {
         "content": [],
-        "total": 0,
         "limit": 100,
-        "offset": 0
+        "offset": 0,
+        "totalFound": 0
       }
     },
     "malformed": {
