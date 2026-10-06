@@ -71,14 +71,16 @@
           "backend",
           "distributed systems"
         ],
-        "sections": {
-          "companyDescription": "Sportradar provides data feeds and analytics for sports betting.",
-          "jobDescription": "<p>You will build and operate the services that power our live betting feeds.</p>",
-          "additionalInformation": [
-            "Remote-friendly within Europe"
-          ],
-          "qualifications": "<p>Solid Python or Java experience and a bias for simple designs.</p>",
-          "responsibilities": "<p>Own services end to end, including on-call.</p>"
+        "jobAd": {
+          "sections": {
+            "companyDescription": "Sportradar provides data feeds and analytics for sports betting.",
+            "jobDescription": "<p>You will build and operate the services that power our live betting feeds.</p>",
+            "additionalInformation": [
+              "Remote-friendly within Europe"
+            ],
+            "qualifications": "<p>Solid Python or Java experience and a bias for simple designs.</p>",
+            "responsibilities": "<p>Own services end to end, including on-call.</p>"
+          }
         }
       }
     },

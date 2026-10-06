@@ -44,7 +44,11 @@ class SmartRecruitersCollector(Collector):
             if posting_id is None:
                 continue
             detail = self._detail(company, str(posting_id))
-            sections = detail.get("sections") or {}
+            # The detail payload nests the description under `jobAd.sections`.
+            # Older/tenant-variant responses have been seen with it flattened at
+            # the top level, so accept either shape.
+            job_ad = detail.get("jobAd") or {}
+            sections = job_ad.get("sections") or detail.get("sections") or {}
             url = detail.get("postingUrl") or detail.get("applyUrl") or item.get("postingUrl") or ""
             if not url:
                 continue
