@@ -1,0 +1,101 @@
+{
+  "source": "arbeitnow",
+  "url": "https://www.arbeitnow.com/api/job-board-api",
+  "captured": "2026-10-05",
+  "notes": "Free public API. Terms: 'This is a free public API for jobs, please do not abuse. I would appreciate linking back to the site. By using the API, you agree to the terms of service present on Arbeitnow.com'. No visa_sponsorship field exists in the payload.",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "data": [
+          {
+            "slug": "remote-data-scientist-product-analytics-431439",
+            "company_name": "ElevenLabs",
+            "title": "Data Scientist, Product Analytics",
+            "description": "ElevenLabs is a pioneering audio technology company. You will build product analytics for our voice AI platform.",
+            "remote": true,
+            "url": "https://www.arbeitnow.com/view/remote-data-scientist-product-analytics-431439",
+            "tags": [
+              "Data Science",
+              "Analytics"
+            ],
+            "job_types": [
+              "Full-time"
+            ],
+            "location": "Europe",
+            "created_at": 1791243604
+          }
+        ],
+        "links": {
+          "first": "https://www.arbeitnow.com/api/job-board-api",
+          "last": "https://www.arbeitnow.com/api/job-board-api?page=1366"
+        },
+        "meta": {
+          "current_page": 1,
+          "from": 1,
+          "last_page": 1366,
+          "path": "https://www.arbeitnow.com/api/job-board-api",
+          "per_page": 100,
+          "to": 100,
+          "total": 136613
+        }
+      }
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "data": [],
+        "links": {
+          "first": null,
+          "last": null
+        },
+        "meta": {
+          "current_page": 1,
+          "from": null,
+          "last_page": 1,
+          "path": "https://www.arbeitnow.com/api/job-board-api",
+          "per_page": 100,
+          "to": null,
+          "total": 0
+        }
+      }
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>502 Bad Gateway</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Too many requests"
+      }
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Internal server error"
+      }
+    }
+  }
+}
