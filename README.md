@@ -186,7 +186,7 @@ the marketing page implies.
 | [We Work Remotely](https://weworkremotely.com/remote-job-rss-feed) | The RSS page permits use **with attribution**. Their [API terms and guidelines](https://weworkremotely.com/api-terms-and-guidelines) forbid scraping or storing the data and building a job-search service. | **needs owner decision** - the RSS/API split is unresolved |
 | [SmartRecruiters](https://developers.smartrecruiters.com/docs/posting-api) | Documented public posting API, no key. **But** `api.smartrecruiters.com/robots.txt` is `User-agent: * / Disallow: /`. | **needs owner decision** - documented API vs disallowed robots |
 | Workable | The live endpoint is the **v1 widget** API (`/api/v1/widget/accounts/{subdomain}`); the v3 path 404s. robots.txt allows crawling and declares `ai-input: yes, ai-train: no`. No clear third-party feed licence found in their public terms. | **needs owner decision** - licence unverified |
-| [Recruitee](https://docs.recruitee.com/reference/intro-to-careers-site-api) | Documented public careers-site API, no key | ok |
+| [Recruitee](https://docs.recruitee.com/reference/intro-to-careers-site-api) | Documented public careers-site API. No token is required before **2027-02-10**; from that date calls must send an `X-Careers-Sites-Token` header or they return `401 Unauthorized`. | ok (token required from 2027-02-10) |
 | Teamtailor | Public `jobs.json` JSON Feed. The official `api.teamtailor.com/v1/jobs` needs an API key and is deliberately unused. No third-party licence for the public feed was verified. | **needs owner decision** - licence unverified |
 
 Sources marked **needs owner decision** are wired and tested but should stay
