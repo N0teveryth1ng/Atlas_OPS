@@ -69,6 +69,8 @@ class SourcesConfig(BaseModel):
     himalayas: bool = False
     #: Opt-in: the API asks for a link back to arbeitnow.com.
     arbeitnow: bool = False
+    #: Opt-in: the API's friendlyNotice requires crediting Jobicy as the source.
+    jobicy: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 
