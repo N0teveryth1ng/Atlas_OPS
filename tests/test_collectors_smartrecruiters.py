@@ -276,3 +276,30 @@ def test_listing_stops_when_offset_is_ignored():
     jobs = collector.fetch("")
 
     assert [job.source_id for job in jobs] == ["dup"]
+
+
+def test_failed_detail_falls_back_to_listing_fields():
+    listing = [
+        {"id": "good"},
+        {
+            "id": "bad",
+            "name": "Bad Role (from listing)",
+            "postingUrl": "https://jobs.smartrecruiters.com/acme/bad",
+        },
+    ]
+
+    def get_json(url, params):
+        if "/postings/" not in url:
+            return {"totalFound": 2, "content": listing}
+        posting_id = url.rstrip("/").rsplit("/", 1)[-1]
+        if posting_id == "bad":
+            raise RuntimeError("simulated 404")
+        return _detail_body(posting_id)
+
+    collector = SmartRecruitersCollector(["acme"], get_json=get_json)
+    jobs = collector.safe_fetch("")
+
+    by_id = {job.source_id: job for job in jobs}
+    assert by_id["good"].title == "Role good"
+    assert by_id["bad"].title == "Bad Role (from listing)"
+    assert by_id["bad"].url == "https://jobs.smartrecruiters.com/acme/bad"

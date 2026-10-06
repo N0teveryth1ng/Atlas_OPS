@@ -11,11 +11,15 @@ applications. That conflict is why this source is opt-in and needs owner sign-of
 
 from __future__ import annotations
 
+import logging
+
 from ..schemas import Job
 from .base import Collector, GetJson, HttpFetcher, parse_datetime
 
 API_ROOT = "https://api.smartrecruiters.com/v1/companies"
 PAGE_LIMIT = 100
+
+logger = logging.getLogger(__name__)
 
 
 def _section_text(value: object) -> str | None:
@@ -79,7 +83,16 @@ class SmartRecruitersCollector(Collector):
             posting_id = item.get("id")
             if posting_id is None:
                 continue
-            detail = self._detail(company, str(posting_id))
+            try:
+                detail = self._detail(company, str(posting_id))
+            except Exception as exc:  # noqa: BLE001 - one bad posting must not drop the source
+                logger.warning(
+                    "smartrecruiters: detail for %s/%s failed, using listing fields: %s",
+                    company,
+                    posting_id,
+                    exc,
+                )
+                detail = {}
             # The detail payload nests the description under `jobAd.sections`,
             # where each section is {title, text}. Older/tenant-variant responses
             # have been seen with bare-string sections flattened at the top
