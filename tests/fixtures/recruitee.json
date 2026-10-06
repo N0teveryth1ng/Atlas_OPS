@@ -1,8 +1,8 @@
 {
   "source": "recruitee",
   "url": "https://talent.recruitee.com/api/offers",
-  "captured": "2026-10-05",
-  "notes": "Careers Site API documented at https://docs.recruitee.com/reference/intro-to-careers-site-api. Jobs arrive under an 'offers' key (NOT a bare list). Each offer has id, slug, title, location, department, employment_type, remote, requirements, description, and a 'careers_url'/'url'. IMPORTANT: created_at is in a custom non-ISO format (e.g. '2026-09-25 10:30:00' without a timezone marker), so the collector parses it as UTC rather than via datetime.fromisoformat.",
+  "captured": "2026-10-06",
+  "notes": "Careers Site API documented at https://docs.recruitee.com/reference/intro-to-careers-site-api. Jobs under an `offers` key. Live offer keys: id, slug, title, company_name, location, description, requirements, benefits, remote, careers_url, url, created_at. IMPORTANT: created_at is a custom non-ISO format such as '2026-09-25 10:30:00' or '2023-03-30 21:03:51 UTC' (trailing UTC marker) read as UTC; tenant url field is the API endpoint, careers_url is the human page.",
   "cases": {
     "normal": {
       "status": 200,
@@ -26,7 +26,7 @@
             "benefits": "Private health cover, relocation support.",
             "careers_url": "https://talent.recruitee.com/sysmex/jobs/1275477-senior-backend-engineer-malta",
             "url": "https://talent.recruitee.com/api/offers/1275477",
-            "created_at": "2026-09-25 10:30:00",
+            "created_at": "2026-09-25 10:30:00 UTC",
             "requisition_id": "SYS-BE-441"
           }
         ]

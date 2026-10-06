@@ -57,7 +57,7 @@ def test_offers_envelope_not_a_bare_list(monkeypatch):
 
 
 def test_custom_created_at_is_parsed_as_utc(monkeypatch):
-    """created_at is '2026-09-25 10:30:00' - no T, no timezone marker."""
+    """created_at is '2026-09-25 10:30:00 UTC' - trailing UTC marker, no ISO token."""
     replay.install(monkeypatch, replay.load("recruitee")["normal"])
     job = _collector().fetch("")[0]
     assert job.posted_at == datetime(2026, 9, 25, 10, 30, tzinfo=UTC)
@@ -65,6 +65,9 @@ def test_custom_created_at_is_parsed_as_utc(monkeypatch):
 
 def test_parse_recruitee_date_formats():
     assert parse_recruitee_date("2026-09-25 10:30:00") == datetime(2026, 9, 25, 10, 30, tzinfo=UTC)
+    assert parse_recruitee_date("2026-09-25 10:30:00 UTC") == datetime(
+        2026, 9, 25, 10, 30, tzinfo=UTC
+    )
     assert parse_recruitee_date("25-09-2026") == datetime(2026, 9, 25, tzinfo=UTC)
     assert parse_recruitee_date("25/09/2026") == datetime(2026, 9, 25, tzinfo=UTC)
     assert parse_recruitee_date("2026-09-25T10:30:00Z") == datetime(2026, 9, 25, 10, 30, tzinfo=UTC)
