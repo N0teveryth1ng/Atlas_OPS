@@ -71,6 +71,9 @@ class SourcesConfig(BaseModel):
     arbeitnow: bool = False
     #: Opt-in: the API's friendlyNotice requires crediting Jobicy as the source.
     jobicy: bool = False
+    #: Opt-in: RSS is permitted with attribution, but the API terms forbid
+    #: scraping/storing data. Owner must confirm before enabling.
+    weworkremotely: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 

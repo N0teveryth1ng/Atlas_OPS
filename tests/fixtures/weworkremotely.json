@@ -1,0 +1,49 @@
+{
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs.rss",
+  "captured": "2026-10-05",
+  "notes": "RSS 2.0 feed at /remote-jobs.rss. https://weworkremotely.com/remote-job-rss-feed states the feed may be used with attribution. NOTE: the API terms and guidelines forbid scraping/storing data and building a job search service - owner must confirm the RSS route is acceptable before enabling. Sample was drawn from the live feed (89 items at capture time).",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/rss+xml"
+      },
+      "provenance": "recorded",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\">\n  <channel>\n    <title>Remote Jobs at We Work Remotely</title>\n    <link>https://weworkremotely.com/remote-jobs</link>\n    <description>Find remote jobs and working worldwide companies hiring now.</description>\n    <item>\n      <title>EPAM Systems: Senior Python Engineer</title>\n      <description><![CDATA[<p>We are looking for a Senior Python Engineer to join our distributed team.</p>]]></description>\n      <link>https://weworkremotely.com/remote-jobs/epam-systems-senior-python-engineer</link>\n      <guid isPermaLink=\"false\">wWR-2026-0412</guid>\n           <pubDate>Mon, 05 Oct 2026 09:14:22 +0000</pubDate>\n      <category><![CDATA[Programming]]></category>\n      <region>Europe</region>\n      <country>Anywhere</country>\n      <type>Full-time</type>\n    </item>\n  </channel>\n</rss>\n"
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/rss+xml"
+      },
+      "provenance": "recorded",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rss version=\"2.0\">\n  <channel>\n    <title>Remote Jobs at We Work Remotely</title>\n    <link>https://weworkremotely.com/remote-jobs</link>\n    <description>Find remote jobs and working worldwide companies hiring now.</description>\n  </channel>\n</rss>\n"
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>We Work Remotely is temporarily unavailable</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "text/html",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>Too many requests</body></html>"
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>Internal server error</body></html>"
+    }
+  }
+}
