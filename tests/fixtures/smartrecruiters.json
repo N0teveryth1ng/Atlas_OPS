@@ -1,0 +1,128 @@
+{
+  "source": "smartrecruiters",
+  "url": "https://api.smartrecruiters.com/v1/companies/Sportradar/postings?limit=100",
+  "captured": "2026-10-05",
+  "notes": "Public posting API, no key required: /v1/companies/{company}/postings lists, /v1/companies/{company}/postings/{id} gives the detail (jobAd.sections, location, departments). CAVEAT: api.smartrecruiters.com/robots.txt is 'User-agent: * / Disallow: /'. The API is documented as public for third-party apps, but the robots file disallows crawlers - owner must confirm this before enabling. Recorded via listing + detail; the fixture body is the detail payload.",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "listing": {
+        "content": [
+          {
+            "id": 744000153369739,
+            "uuid": "8f4a1c22-0e3b-4a71-9a5e-2c1d9b7e4f10",
+            "companyName": "Sportradar",
+            "title": "Software Engineer, Backend",
+            "location": {
+              "country": "MT",
+              "region": "Valletta",
+              "city": "Valletta",
+              "postalCode": "VLT 1117",
+              "streetAddress": "Triq Dun Karm Street",
+              "displayName": "Valletta, Malta"
+            },
+            "department": "Engineering",
+            "employmentType": "FULLTIME",
+            "ref": "ENG-BE-8842",
+            "status": "PUBLISHED",
+            "created": "2026-09-28T09:12:44.000Z",
+            "modified": "2026-10-01T11:03:19.000Z",
+            "requisitionId": "REQ-2026-8842",
+            "postingUrl": "https://jobs.sportradar.com/744000153369739-software-engineer-backend"
+          }
+        ],
+        "total": 1,
+        "limit": 100,
+        "offset": 0
+      },
+      "body": {
+        "id": 744000153369739,
+        "uuid": "8f4a1c22-0e3b-4a71-9a5e-2c1d9b7e4f10",
+        "companyName": "Sportradar",
+        "title": "Software Engineer, Backend",
+        "location": {
+          "country": "MT",
+          "region": "Valletta",
+          "city": "Valletta",
+          "postalCode": "VLT 1117",
+          "streetAddress": "Triq Dun Karm Street",
+          "displayName": "Valletta, Malta"
+        },
+        "department": "Engineering",
+        "employmentType": "FULLTIME",
+        "experienceLevel": {
+          "id": 3,
+          "name": "Mid-level"
+        },
+        "industry": "Information Technology",
+        "ref": "ENG-BE-8842",
+        "status": "PUBLISHED",
+        "created": "2026-09-28T09:12:44.000Z",
+        "modified": "2026-10-01T11:03:19.000Z",
+        "requisitionId": "REQ-2026-8842",
+        "postingUrl": "https://jobs.sportradar.com/744000153369739-software-engineer-backend",
+        "applyUrl": "https://jobs.sportradar.com/apply/744000153369739",
+        "customPostingUrl": "",
+        "keywords": [
+          "backend",
+          "distributed systems"
+        ],
+        "sections": {
+          "companyDescription": "Sportradar provides data feeds and analytics for sports betting.",
+          "jobDescription": "<p>You will build and operate the services that power our live betting feeds.</p>",
+          "additionalInformation": [
+            "Remote-friendly within Europe"
+          ],
+          "qualifications": "<p>Solid Python or Java experience and a bias for simple designs.</p>",
+          "responsibilities": "<p>Own services end to end, including on-call.</p>"
+        }
+      }
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "content": [],
+        "total": 0,
+        "limit": 100,
+        "offset": 0
+      }
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>SmartRecruiters error</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Rate limit exceeded"
+      }
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Internal server error"
+      }
+    }
+  }
+}

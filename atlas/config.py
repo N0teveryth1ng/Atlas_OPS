@@ -74,6 +74,9 @@ class SourcesConfig(BaseModel):
     #: Opt-in: RSS is permitted with attribution, but the API terms forbid
     #: scraping/storing data. Owner must confirm before enabling.
     weworkremotely: bool = False
+    #: Opt-in: the API is public but api.smartrecruiters.com/robots.txt disallows
+    #: all crawlers. Owner must confirm the conflict before enabling.
+    smartrecruiters: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 

@@ -216,3 +216,17 @@ def test_weworkremotely_is_opt_in_and_needs_no_companies():
     settings.sources.weworkremotely = True
     on = build_collectors(settings, get_json=lambda url, params: {}, companies={})
     assert "weworkremotely" in {c.name for c in on}
+
+
+def test_smartrecruiters_is_opt_in_and_skipped_without_companies():
+    settings = Settings()
+    settings.sources.smartrecruiters = True
+    without = build_collectors(settings, get_json=lambda url, params: {}, companies={})
+    assert "smartrecruiters" not in {c.name for c in without}
+
+    with_tokens = build_collectors(
+        settings,
+        get_json=lambda url, params: {},
+        companies={"smartrecruiters": ["sportradar"]},
+    )
+    assert "smartrecruiters" in {c.name for c in with_tokens}

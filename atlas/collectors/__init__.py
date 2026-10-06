@@ -13,6 +13,7 @@ from .greenhouse import GreenhouseCollector
 from .himalayas import HimalayasCollector
 from .jobicy import JobicyCollector
 from .lever import LeverCollector
+from .smartrecruiters import SmartRecruitersCollector
 from .weworkremotely import WeWorkRemotelyCollector
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "LeverCollector",
     "RemoteOKCollector",
     "RemotiveCollector",
+    "SmartRecruitersCollector",
     "WeWorkRemotelyCollector",
     "build_collectors",
     "default_get_json",
@@ -74,4 +76,6 @@ def build_collectors(
     if sources.weworkremotely:
         # Feed is XML, so it uses its own text path and is not get_json-injectable.
         collectors.append(WeWorkRemotelyCollector())
+    if sources.smartrecruiters and companies.get("smartrecruiters"):
+        collectors.append(SmartRecruitersCollector(companies["smartrecruiters"], get_json=get_json))
     return collectors

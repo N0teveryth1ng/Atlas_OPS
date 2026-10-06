@@ -30,7 +30,11 @@ CASE_NAMES = ("normal", "empty", "malformed", "http_429", "http_500")
 
 @dataclass(frozen=True)
 class Recorded:
-    """One recorded (or synthetic) HTTP response for a collector."""
+    """One recorded (or synthetic) HTTP response for a collector.
+
+    ``listing`` is optional and only used by two-step sources: those that list
+    postings on one endpoint and then fetch each posting's detail on another.
+    """
 
     source: str
     case: str
@@ -39,14 +43,19 @@ class Recorded:
     body: Any
     url: str
     provenance: str
+    listing: Any = None
 
-    def response(self, url: str | None = None) -> httpx.Response:
-        """Rebuild this case as an ``httpx.Response`` bound to ``url``."""
+    def response(self, url: str | None = None, *, which: str = "detail") -> httpx.Response:
+        """Rebuild this case as an ``httpx.Response`` bound to ``url``.
+
+        ``which="listing"`` serves ``listing`` when the case defines one.
+        """
         request = httpx.Request("GET", url or self.url)
         headers = dict(self.headers)
-        if isinstance(self.body, str):
-            return httpx.Response(self.status, headers=headers, text=self.body, request=request)
-        return httpx.Response(self.status, headers=headers, json=self.body, request=request)
+        body = self.listing if which == "listing" and self.listing is not None else self.body
+        if isinstance(body, str):
+            return httpx.Response(self.status, headers=headers, text=body, request=request)
+        return httpx.Response(self.status, headers=headers, json=body, request=request)
 
 
 def fixture_path(source: str) -> Path:
@@ -66,6 +75,7 @@ def load(source: str) -> dict[str, Recorded]:
             body=case.get("body"),
             url=raw.get("url", ""),
             provenance=case.get("provenance", "recorded"),
+            listing=case.get("listing"),
         )
     return cases
 
@@ -102,6 +112,36 @@ def install_sequence(
 def install(monkeypatch, recorded: Recorded) -> list[str]:
     """Replay one recorded case for every request; returns the request log."""
     return install_sequence(monkeypatch, [recorded])
+
+
+def install_two_step(
+    monkeypatch,
+    recorded: Recorded,
+    *,
+    prefix: Sequence[Recorded] = (),
+) -> list[str]:
+    """Serve ``recorded.listing`` for listing URLs and ``body`` for detail URLs.
+
+    Sources that list postings and then fetch each posting's detail get both
+    halves from a single recorded case. A listing URL is recognised by having no
+    trailing path segment after ``/postings``; anything deeper is a detail.
+
+    ``prefix`` is served in order first, which is how "429 then success" is
+    expressed for a two-step source.
+    """
+    log: list[str] = []
+    remaining = list(prefix)
+
+    def fake_get(url: str, params: dict | None, *, timeout: float) -> httpx.Response:
+        log.append(url)
+        if remaining:
+            case = remaining.pop(0)
+            return case.response(url)
+        is_listing = url.rstrip("/").endswith("/postings")
+        return recorded.response(url, which="listing" if is_listing else "detail")
+
+    monkeypatch.setattr(base, "_http_get", fake_get)
+    return log
 
 
 def policy(**overrides: Any) -> base.HttpPolicy:
