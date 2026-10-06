@@ -26,6 +26,8 @@ class SourceYield:
     source: str
     fetched: int = 0
     kept: int = 0
+    passed_filters: int = 0
+    sent: int = 0
 
 
 @dataclass
@@ -36,6 +38,33 @@ class SourcingResult:
     query_yield: dict[str, int] = field(default_factory=dict)
     dropped_stale: int = 0
     new_jobs: int = 0
+
+
+def apply_pipeline_yields(
+    result: SourcingResult,
+    processed: list,
+    sent_ids: set[int],
+) -> SourcingResult:
+    """Fill in ``passed_filters`` and ``sent`` from an existing pipeline run.
+
+    Mutates and returns ``result``. This only reads what the pipeline already
+    decided — it never re-runs decisions or filters. A job is attributed to the
+    source of its surviving canonical copy, which is how ``kept`` is counted too.
+
+    ``sent_ids`` is the set of job ids that made it into the digest. Anything not
+    in it (``--no-email``, an aborted send, an invariant violation) counts as not
+    sent.
+    """
+    yields = {item.source: item for item in result.source_yields}
+    for entry in processed:
+        item = yields.get(entry.job.source)
+        if item is None:
+            continue
+        if entry.filter_result is not None and entry.filter_result.passed:
+            item.passed_filters += 1
+        if entry.job_id is not None and entry.job_id in sent_ids:
+            item.sent += 1
+    return result
 
 
 def is_fresh(job: Job, max_age_days: int, now: datetime) -> bool:
