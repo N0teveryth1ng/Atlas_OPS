@@ -6,6 +6,13 @@
 #   https://boards.greenhouse.io/ACME        -> greenhouse: [acme]
 #   https://jobs.lever.co/ACME               -> lever: [acme]
 #   https://jobs.ashbyhq.com/ACME            -> ashby: [acme]
+#   https://careers.smartrecruiters.com/X    -> smartrecruiters: [X]
+#   https://apply.workable.com/X/            -> workable: [X]
+#   https://X.recruitee.com/                 -> recruitee: [X]
+#   https://X.teamtailor.com/jobs            -> teamtailor: [X]
+#
+# Every ATS collector is skipped entirely while its list is empty, so the
+# committed template keeps all of them off until you fill one in.
 
 companies:
   greenhouse: []
@@ -15,3 +22,11 @@ companies:
     # - netflix
   ashby: []
     # - openai
+  smartrecruiters: []
+    # - sportradar
+  workable: []
+    # - huckberry
+  recruitee: []
+    # - sysmex
+  teamtailor: []
+    # - varma
