@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
+import httpx
 import pytest
 
+from atlas.collectors import base
 from atlas.collectors.base import HttpFetcher
 from atlas.collectors.recruitee import (
     API_ROOT,
     RecruiteeCollector,
     parse_recruitee_date,
 )
+from atlas.config import Secrets, _load_secrets
 from atlas.schemas import RemoteType
 from tests import replay
 
@@ -213,3 +217,83 @@ def test_collector_identity():
     collector = _collector()
     assert collector.name == "recruitee"
     assert collector.query_based is False
+
+
+# --- X-Careers-Sites-Token header (401 from 2027-02-10) -------------------------
+
+#: Stand-in value only; tests never touch a real credential.
+TEST_TOKEN = "unit-test-token"
+
+
+def _capture_request(monkeypatch, body: dict | None = None) -> dict[str, Any]:
+    """Patch the real ``httpx.get`` so one outgoing request's shape is captured.
+
+    Patching at the ``httpx`` layer (rather than ``base._http_get``) keeps the
+    header merge under the User-Agent exercised for real.
+    """
+    seen: dict[str, Any] = {}
+
+    def fake_get(url: str, params: dict | None, *, timeout: float, headers: dict) -> httpx.Response:
+        seen.update(url=url, params=params, timeout=timeout, headers=dict(headers))
+        payload = {"offers": []} if body is None else body
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(base.httpx, "get", fake_get)
+    return seen
+
+
+def test_configured_token_is_sent_as_the_careers_sites_header(monkeypatch):
+    seen = _capture_request(monkeypatch)
+    RecruiteeCollector(["sysmex"], careers_sites_token=TEST_TOKEN).fetch("")
+    assert seen["headers"]["X-Careers-Sites-Token"] == TEST_TOKEN
+    assert seen["headers"]["User-Agent"] == base.USER_AGENT
+    assert seen["url"] == API_ROOT.format(tenant="sysmex")
+
+
+def test_absent_token_sends_no_header_and_the_usual_request(monkeypatch):
+    """The default collector (no token) is exactly today's unauthenticated GET."""
+    seen = _capture_request(monkeypatch)
+    RecruiteeCollector(["sysmex"]).fetch("")
+    assert "X-Careers-Sites-Token" not in seen["headers"]
+    assert seen["headers"] == {"User-Agent": base.USER_AGENT}
+    assert seen["url"] == API_ROOT.format(tenant="sysmex")
+    assert seen["params"] == {}
+
+
+def test_explicitly_empty_token_sends_no_header(monkeypatch):
+    seen = _capture_request(monkeypatch)
+    RecruiteeCollector(["sysmex"], careers_sites_token="").fetch("")
+    assert "X-Careers-Sites-Token" not in seen["headers"]
+    assert seen["headers"] == {"User-Agent": base.USER_AGENT}
+
+
+def test_the_token_is_a_header_and_never_part_of_the_request_line(monkeypatch):
+    seen = _capture_request(monkeypatch)
+    RecruiteeCollector(["sysmex"], careers_sites_token=TEST_TOKEN).fetch("")
+    assert TEST_TOKEN not in seen["url"]
+    assert all(TEST_TOKEN not in str(value) for value in (seen["params"] or {}).values())
+    assert seen["headers"]["X-Careers-Sites-Token"] == TEST_TOKEN
+
+
+def test_injected_get_json_keeps_its_own_request_shape(monkeypatch):
+    """The token only shapes the default fetcher; an injected get_json is used as-is."""
+    seen = _capture_request(monkeypatch)
+    RecruiteeCollector(
+        ["sysmex"], get_json=HttpFetcher(replay.policy()), careers_sites_token=TEST_TOKEN
+    ).fetch("")
+    assert "X-Careers-Sites-Token" not in seen["headers"]
+    assert seen["headers"] == {"User-Agent": base.USER_AGENT}
+
+
+def test_careers_sites_token_secret_defaults_to_empty():
+    assert Secrets().recruitee_careers_sites_token == ""
+
+
+def test_empty_careers_sites_token_is_valid(monkeypatch):
+    monkeypatch.delenv("RECRUITEE_CAREERS_SITES_TOKEN", raising=False)
+    assert _load_secrets().recruitee_careers_sites_token == ""
+
+
+def test_careers_sites_token_loads_from_the_environment(monkeypatch):
+    monkeypatch.setenv("RECRUITEE_CAREERS_SITES_TOKEN", TEST_TOKEN)
+    assert _load_secrets().recruitee_careers_sites_token == TEST_TOKEN

@@ -151,7 +151,7 @@ Collectors are pluggable (`atlas/collectors/`) and enabled per-source in
 | We Work Remotely | RSS feed | opt-in (see below) |
 | SmartRecruiters | ATS board | token in `companies.yaml`, opt-in |
 | Workable | ATS board | token in `companies.yaml`, opt-in |
-| Recruitee | ATS board | token in `companies.yaml`, opt-in |
+| Recruitee | ATS board | tenant in `companies.yaml`, `RECRUITEE_CAREERS_SITES_TOKEN` (required from 2027-02-10), opt-in |
 | Teamtailor | ATS board | token in `companies.yaml`, opt-in |
 
 Jobs are stripped of HTML/boilerplate, given a stable dedupe key, merged across

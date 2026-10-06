@@ -87,7 +87,13 @@ def build_collectors(
     if sources.workable and companies.get("workable"):
         collectors.append(WorkableCollector(companies["workable"], get_json=get_json))
     if sources.recruitee and companies.get("recruitee"):
-        collectors.append(RecruiteeCollector(companies["recruitee"], get_json=get_json))
+        collectors.append(
+            RecruiteeCollector(
+                companies["recruitee"],
+                get_json=get_json,
+                careers_sites_token=settings.secrets.recruitee_careers_sites_token,
+            )
+        )
     if sources.teamtailor and companies.get("teamtailor"):
         collectors.append(TeamtailorCollector(companies["teamtailor"], get_json=get_json))
     return collectors
