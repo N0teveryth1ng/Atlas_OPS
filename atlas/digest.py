@@ -93,14 +93,15 @@ def _job_urls(job) -> list[str]:
 
 
 def _is_http_url(url: str) -> bool:
-    """True only for absolute ``http``/``https`` URLs.
+    """True only for absolute ``http``/``https`` URLs that name a host.
 
-    Those are the only schemes we are willing to turn into a clickable link in
-    a digest: a job URL arriving from a feed with any other scheme (``javascript:``,
-    ``data:``, a relative reference) is kept as data but never becomes a credit
-    link or a title href.
+    Those are the only URLs we are willing to turn into a clickable link in a
+    digest: a job URL arriving from a feed with any other scheme (`javascript:`,
+    `data:`) is kept as data but never becomes a credit link or a title href, and
+    a near-miss like ``https:job`` - right scheme, no host - is rejected too.
     """
-    return urlparse(url).scheme.lower() in ("http", "https")
+    parsed = urlparse(url)
+    return parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
 
 
 def _source_credits(urls: list[str]) -> list[SourceCredit]:
