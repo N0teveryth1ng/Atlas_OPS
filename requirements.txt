@@ -6,6 +6,7 @@ httpx==0.28.1
 tenacity==8.5.0
 groq==1.6.0
 pypdf==4.3.1
+defusedxml==0.7.1
 
 # --- observability (optional; no-ops without BRAINTRUST_API_KEY) ---
 braintrust==0.44.0
