@@ -251,7 +251,10 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     if sourcing_result is not None:
         from .sourcing import apply_pipeline_yields
 
-        apply_pipeline_yields(sourcing_result, results, set(digest.job_ids()))
+        # Only ids that were actually delivered may count as sent; with
+        # --no-email or a failed send the digest ids stay in the digest but
+        # must not be attributed to the source's `sent` column.
+        apply_pipeline_yields(sourcing_result, results, set(digest.job_ids()) if sent else set())
         for item in sourcing_result.source_yields:
             print(
                 f"  {item.source:<15} fetched={item.fetched:<5} kept={item.kept:<5} "
