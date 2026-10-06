@@ -1,8 +1,8 @@
 {
   "source": "himalayas",
-  "url": "https://himalayas.app/jobs/api/search?limit=20&offset=0",
-  "captured": "2026-10-05",
-  "notes": "Public API documented at https://himalayas.app/jobs/api. Maximum 20 jobs per request; 429 means rate limited. Requires attribution/link back to himalayas.app.",
+  "url": "https://himalayas.app/jobs/api/search?seniority=Entry-level&company=pairs&limit=20",
+  "captured": "2026-10-06",
+  "notes": "Public API documented at https://himalayas.app/jobs/api. The collector sends only ?limit=20&seniority=Entry-level; this recording adds &company=pairs purely to keep the file small (5 jobs instead of 19), all of them genuine Entry-level postings. The collector ignores any extra param, so the shape is identical. Verified live 2026-10-06: job objects have NO 'location' key - eligibility is 'locationRestrictions' (list of alternative countries, [] when unrestricted); 'seniority' is a list; there is no 'id'; 'query' is accepted but ignored by the API. Maximum 20 jobs per request; 429 means rate limited. Requires attribution/link back to himalayas.app.",
   "cases": {
     "normal": {
       "status": 200,
@@ -11,50 +11,248 @@
       },
       "provenance": "recorded",
       "body": {
+        "comments": "21/08/2026: Cursor pagination is now available and is the preferred way to page through the feed. Pass the nextCursor value from each response back as ?cursor=. It is faster than offset and will never return the same job twice. The offset parameter is deprecated and will be removed in a future release. 13/03/2026: The API has been updated to include the companySlug field in the response.",
+        "updatedAt": 1791262524,
+        "offset": 0,
+        "limit": 20,
+        "totalCount": 5,
         "jobs": [
           {
-            "id": "1031423",
-            "guid": "https://himalayas.app/jobs/1031423-kodland-python-developer-uk-remote",
-            "applicationLink": "https://himalayas.app/jobs/1031423-kodland-python-developer-uk-remote/apply",
-            "title": "Python Developer",
-            "companyName": "Kodland",
-            "companyLogo": "https://d2e7japv9k8e8q.cloudfront.net/logo.png",
-            "companyDescription": "Kodland teaches Python to kids and teens through live online classes.",
-            "companySize": "11-50",
-            "companyWebsite": "https://www.kodland.com",
-            "companyIndustry": "Education",
-            "companyRating": null,
-            "location": "UK",
+            "title": "Business Development Associate",
+            "excerpt": "We are hiring a Business Development Associate to bring growth-stage founders into Pairs, from the first call to the start of the engagement.",
+            "companyName": "Pairs",
+            "companySlug": "pairs",
+            "companyLogo": "",
+            "employmentType": "Full Time",
+            "minSalary": 110000,
+            "maxSalary": 160000,
+            "salaryPeriod": "annual",
+            "seniority": [
+              "Entry-level"
+            ],
+            "currency": "USD",
             "locationRestrictions": [
-              "United Kingdom",
-              "Europe",
-              "Worldwide"
+              "Canada",
+              "Germany",
+              "Ireland",
+              "United Arab Emirates",
+              "United Kingdom"
             ],
-            "remote": true,
-            "seniority": "Mid Level",
-            "experience": null,
-            "description": "You will help design and build learning experiences for young Python programmers.",
-            "jobType": "Full time",
-            "salary": null,
+            "timezoneRestrictions": [
+              -8,
+              -7,
+              -6,
+              -5,
+              -4,
+              -3.5,
+              0,
+              1,
+              4
+            ],
+            "categories": [
+              "Business-Development-Associate",
+              "Business-Development-Assistant",
+              "Business-Development-Coordinator",
+              "Business-Development"
+            ],
+            "parentCategories": [
+              "Sales"
+            ],
+            "description": "<p>We are hiring a Business Development Associate to bring growth-stage founders into <a href=\"https://himalayas.app/companies/pairs\">Pairs</a>, from the first call to the start of the engagement.</p><p><a href=\"https://himalayas.app/companies/pairs\">Pairs</a> is a global network of family offices, institutional investors, VCs and angels. We screen deal flow very tightly, and the opportunities that clear our diligence go out to the network. We invest alongside them too.</p><h3>THE ROLE</h3><p>Founders come to <a href=\"https://himalayas.app/companies/pairs\">Pairs</a> when they are raising. You run the first call: you read the business quickly, find out what is holding the raise back, and judge whether we can move it forward.</p><p>When the fit is real, you present our process and fees clearly and book the next step on the call. When it is not, you close the conversation cleanly and keep the door open.</p><p>Some founders are better served by our platform tier. For them, you run the demo and close it yourself.</p><p>The numbers matter on both sides. You weigh a company's revenue, burn and round structure in the first minutes, and you keep your own pipeline as precise as a financial model.</p><p>We sell access to investors, not promises. The expectations you set are the ones we deliver against, so you only commit to what we do.</p><p>You will work directly with the two co-founders and our closing team. The organisation is flat, so you will see first-hand how we screen companies, what we decline and why.</p><h3>WHAT YOU WILL OWN</h3><ul>\n<li><p>First calls. A sharp read of each company and a clear answer on whether we can help.</p></li>\n<li><p>Qualification. Who is raising, who decides, and what the raise actually needs.</p></li>\n<li><p>The handoff. A next step booked on the call, and a written read for the person who runs it.</p></li>\n<li><p>Your pipeline. Every founder you speak to, logged accurately and followed up until there is a clear outcome.</p></li>\n</ul><h3>YOU ARE A FIT IF YOU</h3><ul>\n<li><p>Have sold a financial, advisory or capital-markets service to founders or executives, and can walk us through a deal you won.</p></li>\n<li><p>Read a company's numbers quickly and know which questions follow: revenue, burn, runway, round structure and committed capital.</p></li>\n<li><p>Keep a disciplined pipeline. You can tell us your conversion rates from memory.</p></li>\n<li><p>Set expectations you can stand behind. You never promise an outcome, and you would rather lose a deal than oversell one.</p></li>\n<li><p>Handle objections on price and fit directly, once, without pressure.</p></li>\n<li><p>Use AI tools daily, with clear judgement about where they improve your work and where they would compromise its quality.</p></li>\n</ul><h3>WHAT WE OFFER</h3><ul>\n<li><p>A fully remote role, with working hours that overlap US Eastern time, where most of our founders are</p></li>\n<li><p>Direct access to the co-founders and our closing team</p></li>\n<li><p>Close collaboration with our internal team</p></li>\n<li><p>A sales process that already works, and recorded calls to learn it from</p></li>\n<li><p>Insight into how we screen companies and match them with investors</p></li>\n<li><h3>A base salary plus commission</h3></li>\n</ul><h3>Compensation Range: $110K - $160K</h3><p>Originally posted on <a href=\"https://himalayas.app\">Himalayas</a></p>",
+            "pubDate": 1791262524,
+            "expiryDate": 1796446522,
+            "applicationLink": "https://himalayas.app/companies/pairs/jobs/business-development-associate",
+            "guid": "https://himalayas.app/companies/pairs/jobs/business-development-associate"
+          },
+          {
+            "title": "VC Analyst",
+            "excerpt": "We are hiring a VC Analyst to open relationships with investors who back private companies directly, and to put the right opportunities in front of them.",
+            "companyName": "Pairs",
+            "companySlug": "pairs",
+            "companyLogo": "",
+            "employmentType": "Full Time",
+            "minSalary": 90000,
+            "maxSalary": 150000,
+            "salaryPeriod": "annual",
+            "seniority": [
+              "Entry-level",
+              "Mid-level"
+            ],
+            "currency": "USD",
+            "locationRestrictions": [
+              "Canada",
+              "Germany",
+              "Ireland",
+              "United Arab Emirates",
+              "United Kingdom"
+            ],
+            "timezoneRestrictions": [
+              -8,
+              -7,
+              -6,
+              -5,
+              -4,
+              -3.5,
+              0,
+              1,
+              4
+            ],
+            "categories": [
+              "VC-Analyst",
+              "Venture-Capital-Analyst",
+              "Venture-Capital-Analysis"
+            ],
+            "parentCategories": [],
+            "description": "<p>We are hiring a VC Analyst to open relationships with investors who back private companies directly, and to put the right opportunities in front of them.</p><p><a href=\"https://himalayas.app/companies/pairs\">Pairs</a> is a global network of family offices, institutional investors, VCs and angels. We screen deal flow very tightly, and the opportunities that clear our diligence go out to the network. We invest alongside them too.</p><h3>THE ROLE</h3><p>This role sits on the investor side of <a href=\"https://himalayas.app/companies/pairs\">Pairs</a>. You find investors who are active right now, learn what each of them backs, and introduce them to opportunities that fit.</p><p>Most of the work is first contact done well. You write to family offices, angels and early-stage funds in a way that earns a reply, turn those replies into calls, and book the right investors into meetings with founders.</p><p>We are not raising a fund. Our investors invest directly in companies, so the work is about direct investors, not fund LPs.</p><p>Our platform handles the pipeline, research and follow-up. Your time goes to the conversations, and to learning which investors are ready to commit capital.</p><p>You will work directly with the two co-founders and our investor team, on a process that already works. The organisation is flat, so you will see first-hand how we screen opportunities, what we decline and why.</p><p>This is an early-career role. Drive and judgement matter more to us than years in a seat.</p><h3>WHAT YOU WILL OWN</h3><ul>\n<li><p>Investor research. Who is investing right now, in what, at what stage and check size.</p></li>\n<li><p>First conversations. Messages that read like a person wrote them, and replies turned into calls.</p></li>\n<li><p>Investor meetings. Qualified investors booked with founders whose opportunity fits what they back.</p></li>\n<li><p>Your growing network. Every investor you open, kept current and qualified. The network you build here is yours.</p></li>\n</ul><h3>YOU ARE A FIT IF YOU</h3><ul>\n<li><p>Have worked around venture capital, as an analyst, a scout, at an accelerator or in a role close to deals, and can name rounds from this year you found interesting.</p></li>\n<li><p>Can write a short, specific message to a stranger that gets a reply.</p></li>\n<li><p>Keep your pace high without letting quality slip, and follow a process without needing a reminder.</p></li>\n<li><p>Understand the basics of a round: stage, check size, SAFE versus priced, and why an investor passes.</p></li>\n<li><p>Treat discretion as second nature. Please do not include any investor names in your application.</p></li>\n<li><p>Use AI tools daily, with clear judgement about where they improve your work and where they would compromise its quality.</p></li>\n</ul><h3>WHAT WE OFFER</h3><ul>\n<li><h3>A fully remote, asynchronous role</h3></li>\n<li><p>Direct access to the co-founders and our investor team</p></li>\n<li><p>Close collaboration with our internal team</p></li>\n<li><p>Live mandates from your first week, and access to the opportunities that clear our diligence</p></li>\n<li><p>Insight into our internal processes, including how we screen deal flow</p></li>\n<li><p>Room to grow into a senior investor-side role as your network grows</p></li>\n<li><h3>A base salary plus commission</h3></li>\n</ul><h3>Compensation Range: $90K - $150K</h3><p>Originally posted on <a href=\"https://himalayas.app\">Himalayas</a></p>",
+            "pubDate": 1791260049,
+            "expiryDate": 1796444048,
+            "applicationLink": "https://himalayas.app/companies/pairs/jobs/vc-analyst",
+            "guid": "https://himalayas.app/companies/pairs/jobs/vc-analyst"
+          },
+          {
+            "title": "Account Executive, Venture Capital",
+            "excerpt": "We are hiring an Account Executive, Venture Capital to run the first conversation founders have with Pairs, and to turn the right ones into clients.",
+            "companyName": "Pairs",
+            "companySlug": "pairs",
+            "companyLogo": "",
+            "employmentType": "Full Time",
+            "minSalary": 110000,
+            "maxSalary": 160000,
+            "salaryPeriod": "annual",
+            "seniority": [
+              "Entry-level",
+              "Mid-level"
+            ],
+            "currency": "USD",
+            "locationRestrictions": [
+              "Canada",
+              "Germany",
+              "Ireland",
+              "United Arab Emirates",
+              "United Kingdom"
+            ],
+            "timezoneRestrictions": [
+              -8,
+              -7,
+              -6,
+              -5,
+              -4,
+              -3.5,
+              0,
+              1,
+              4
+            ],
+            "categories": [
+              "Private-Equity-Account-Executive",
+              "Account-Executive",
+              "Financial-Services-Account-Executive",
+              "Sales"
+            ],
+            "parentCategories": [
+              "Sales"
+            ],
+            "description": "<p>We are hiring an Account Executive, Venture Capital to run the first conversation founders have with <a href=\"https://himalayas.app/companies/pairs\">Pairs</a>, and to turn the right ones into clients.</p><p><a href=\"https://himalayas.app/companies/pairs\">Pairs</a> is a global network of family offices, institutional investors, VCs and angels. We screen deal flow very tightly, and the opportunities that clear our diligence go out to the network. We invest alongside them too.</p><h3>THE ROLE</h3><p>You sell to founders, not to funds. Every call is with a founder in the middle of a raise.</p><p>You take that first call. You learn the round, the traction, the runway and what has not worked so far, and you decide whether we can genuinely help.</p><p>When we can, you explain how <a href=\"https://himalayas.app/companies/pairs\">Pairs</a> works, what it costs and what it does not do, and you book the next step before the call ends. When we cannot, you say so plainly.</p><p>Some founders are better served by our platform tier. For them, you run the demo and close it yourself.</p><p>We sell access to investors, not promises. The expectations you set on the first call are the ones we deliver against, so honesty is part of the job.</p><p>You will work directly with the two co-founders and our closing team. The organisation is flat, so you will see first-hand how we screen companies, what we decline and why.</p><h3>WHAT YOU WILL OWN</h3><ul>\n<li><p>First calls. Every founder you speak to leaves with a clear picture, whether or not they work with us.</p></li>\n<li><p>Qualification. The judgement on who is raising, who can decide, and who we can actually help.</p></li>\n<li><p>The handoff. A next step booked on the call, and a written read for the person who runs it.</p></li>\n<li><p>Your pipeline. Every founder you speak to, kept current until they sign, pass or come back.</p></li>\n</ul><h3>YOU ARE A FIT IF YOU</h3><ul>\n<li><p>Have carried a target and can walk us through a deal you won: the hesitation, what you said and what happened.</p></li>\n<li><p>Have sold to founders or executives, ideally in fundraising, finance or venture.</p></li>\n<li><p>Understand a round well enough to ask the second and third question, not just the first: structure, lead interest, runway, why investors pass.</p></li>\n<li><p>Set expectations you can stand behind. You never promise an outcome, and you would rather lose a deal than oversell one.</p></li>\n<li><p>Can tell a polite yes from a real one, and take a no without losing the relationship.</p></li>\n<li><p>Use AI tools daily, with clear judgement about where they improve your work and where they would compromise its quality.</p></li>\n</ul><h3>WHAT WE OFFER</h3><ul>\n<li><p>A fully remote role, with working hours that overlap US Eastern time, where most of our founders are</p></li>\n<li><p>Direct access to the co-founders and our closing team</p></li>\n<li><p>Close collaboration with our internal team</p></li>\n<li><p>A sales process that already works, and recorded calls to learn it from</p></li>\n<li><p>Insight into how we screen companies and match them with investors</p></li>\n<li><h3>A base salary plus commission</h3></li>\n</ul><h3>Compensation Range: $110K - $160K</h3><p>Originally posted on <a href=\"https://himalayas.app\">Himalayas</a></p>",
+            "pubDate": 1791259691,
+            "expiryDate": 1796443690,
+            "applicationLink": "https://himalayas.app/companies/pairs/jobs/account-executive-venture-capital",
+            "guid": "https://himalayas.app/companies/pairs/jobs/account-executive-venture-capital"
+          },
+          {
+            "title": "Venture Content Analyst",
+            "excerpt": "We are hiring a Venture Content Analyst to live in the venture corner of the internet and write about it every day.",
+            "companyName": "Pairs",
+            "companySlug": "pairs",
+            "companyLogo": "",
+            "employmentType": "Full Time",
+            "minSalary": null,
+            "maxSalary": null,
+            "salaryPeriod": "annual",
+            "seniority": [
+              "Entry-level"
+            ],
             "currency": null,
-            "benefits": [],
-            "skills": [
-              "Python",
-              "Django"
+            "locationRestrictions": [
+              "Canada",
+              "France",
+              "Germany",
+              "Ireland",
+              "Netherlands",
+              "Portugal",
+              "Spain",
+              "United Kingdom",
+              "United States"
             ],
-            "responsibilities": [
-              "Write clear, friendly code",
-              "Review student submissions"
+            "timezoneRestrictions": [
+              -10,
+              -9,
+              -8,
+              -7,
+              -6,
+              -5,
+              -4,
+              -3.5,
+              -1,
+              0,
+              1,
+              14
             ],
-            "qualifications": [
-              "Comfortable in Python"
+            "categories": [
+              "Venture-Capital-Analyst",
+              "New-Ventures-Analyst"
             ],
-            "pubDate": 1790326674
+            "parentCategories": [],
+            "description": "<p>We are hiring a Venture Content Analyst to live in the venture corner of the internet and write about it every day.</p><p><a href=\"https://himalayas.app/companies/pairs\">Pairs</a> is a global network of family offices, institutional investors, VCs and angels. We screen deal flow very tightly, and the ones that clear our diligence go out to the network. We invest alongside them too.</p><h3>The role</h3><p>What were the biggest rounds this week? Which funds moved, and which announcements actually mattered? What shifted in the market, and what went well inside our own company?</p><p>Based on that, our content goes deep on a few specific topics. Quality over quantity. It lands on our LinkedIn, the blog on our site, the newsletter and our X.</p><p>You report to our Head of Brand and to the co-founders directly. The org is very flat, so you learn straight from us what makes us unique, how the market is shifting, and which trends we catch early.</p><p>This seat is built to grow into a VC Analyst and content role of its own. We are looking for someone who genuinely loves the venture capital market, is obsessed with it as much as we are, and cannot wait to write longer pieces and go deeper on the areas that interest them.</p><h3>What you will own</h3><ul>\n<li><p>Being exceptionally well informed on new rounds, new funds, and what is happening in the market every single week.</p></li>\n<li><p>The longer posts. Blog articles on the portfolio companies we work with, the investments we make, whether those are LP positions in funds or angel checks into companies, the investors worth knowing, the trends we spot early and the bigger rounds.</p></li>\n<li><p>Working with the Head of Brand on the publishing, the scheduling and the distribution across all our channels.</p></li>\n<li><p>Learning further areas of brand building, and the research that sits behind all of it.</p></li>\n</ul><h3>You are a fit if you</h3><ul>\n<li><p>Already follow this space every day because you enjoy it. You can name the funds, the partners and the rounds from this quarter without looking them up.</p></li>\n<li><p>Already write and research in this space, and turn that into investment memos or articles yourself.</p></li>\n<li><p>Get the facts right. A wrong fund name or round size costs credibility we cannot buy back.</p></li>\n<li><p>Use AI every day, and know where it should go nowhere near your work. Good judgement and taste on where it makes you faster, and where it degrades what you put out.</p></li>\n</ul><h3>What we offer</h3><h3>Remote and async.</h3><ul>\n<li><p>Close contact with the co-founders and our Head of Brand directly.</p></li>\n<li><h3>Close contact with our internal team.</h3></li>\n<li><p>Our network of highly established investors and the top deals out there.</p></li>\n<li><h3>Access to our internal processes.</h3></li>\n<li><h3>Learning very closely from all of us.</h3></li>\n</ul><p>Originally posted on <a href=\"https://himalayas.app\">Himalayas</a></p>",
+            "pubDate": 1790793993,
+            "expiryDate": 1795977992,
+            "applicationLink": "https://himalayas.app/companies/pairs/jobs/venture-content-analyst",
+            "guid": "https://himalayas.app/companies/pairs/jobs/venture-content-analyst"
+          },
+          {
+            "title": "VC Analyst Intern",
+            "excerpt": "We are hiring a VC Analyst Intern to research the market and write what we find.",
+            "companyName": "Pairs",
+            "companySlug": "pairs",
+            "companyLogo": "",
+            "employmentType": "Intern",
+            "minSalary": null,
+            "maxSalary": null,
+            "salaryPeriod": "annual",
+            "seniority": [
+              "Entry-level"
+            ],
+            "currency": null,
+            "locationRestrictions": [
+              "Canada",
+              "United Kingdom",
+              "United States"
+            ],
+            "timezoneRestrictions": [
+              -10,
+              -9,
+              -8,
+              -7,
+              -6,
+              -5,
+              -4,
+              -3.5,
+              0,
+              14
+            ],
+            "categories": [
+              "Analyst-Intern",
+              "Investment-Analyst-Intern",
+              "VC-Analyst",
+              "Venture-Capital-Internships",
+              "Venture-Capital-Analyst"
+            ],
+            "parentCategories": [],
+            "description": "<p>We are hiring a VC Analyst Intern to research the market and write what we find.</p><p><a href=\"https://himalayas.app/companies/pairs\">Pairs</a> is a global network of family offices, institutional investors, VCs and angels. We screen deal flow very tightly, and the ones that clear our diligence go out to the network. We invest alongside them too.</p><h3>The role</h3><p>Why is this company worth a look, and why now? Is this sector heating up, or is everyone already late to it? Which investor actually belongs in this round, and which one is only circling?</p><p>You answer those in writing. Every piece of work here is a memo. A view, the reasoning underneath it, and the part you are not sure about said out loud. The ones that hold up get published on our LinkedIn, the blog on our site, the newsletter and our X.</p><p>You also write for the two audiences we sell to. A family office and a pre seed founder want different things from the same piece of news, and a lot of what you write goes out from the founders' own accounts, in their voice.</p><p>You work with the two co-founders directly, and with our Head of Brand once that seat is filled. The org is very flat, so you learn straight from us how we screen, what we pass on and why.</p><p>This is a paid internship built to grow into a full time seat. We are looking for someone who already follows this market closely, has opinions about it, and wants to spend the next few years writing about it properly.</p><h3>What you will own</h3><ul>\n<li><p>Company memos. Why a company is interesting, who belongs in the round, and what would have to be true for it to fail.</p></li>\n<li><p>Sector work. What is heating up, what is over owned, and the evidence behind both.</p></li>\n<li><p>Investor research. Who is actually active, in what, at what stage, and what they are known for.</p></li>\n<li><p>The published version of all of it, plus the pieces written for family offices and early stage founders that go out from the founders' accounts.</p></li>\n</ul><h3>You are a fit if you</h3><ul>\n<li><p>Already follow this market closely because you enjoy it. You can name the rounds from this quarter and say which ones you think are wrong.</p></li>\n<li><p>Already write and research in this space, and turn that into memos or articles yourself.</p></li>\n<li><p>Get the facts right. A wrong fund name, round size or attribution costs credibility we cannot buy back.</p></li>\n<li><p>Use AI every day, and know where it should go nowhere near your work. Good judgement and taste on where it makes you faster, and where it degrades what you put out.</p></li>\n</ul><h3>What we offer</h3><h3>Remote and async.</h3><ul>\n<li><p>Close contact with the co-founders and our Head of Brand directly.</p></li>\n<li><h3>Close contact with our internal team.</h3></li>\n<li><p>Our network of highly established investors and the top deals out there.</p></li>\n<li><p>Access to our internal processes, and to how we screen deal flow.</p></li>\n<li><h3>Learning very closely from all of us.</h3></li>\n</ul><p>Originally posted on <a href=\"https://himalayas.app\">Himalayas</a></p>",
+            "pubDate": 1790784232,
+            "expiryDate": 1795968231,
+            "applicationLink": "https://himalayas.app/companies/pairs/jobs/vc-analyst-intern",
+            "guid": "https://himalayas.app/companies/pairs/jobs/vc-analyst-intern"
           }
-        ],
-        "total": 1,
-        "nextPage": null,
-        "more": false
+        ]
       }
     },
     "empty": {
@@ -64,10 +262,12 @@
       },
       "provenance": "recorded",
       "body": {
-        "jobs": [],
-        "total": 0,
-        "nextPage": null,
-        "more": false
+        "comments": "21/08/2026: Cursor pagination is now available and is the preferred way to page through the feed. Pass the nextCursor value from each response back as ?cursor=. It is faster than offset and will never return the same job twice. The offset parameter is deprecated and will be removed in a future release. 13/03/2026: The API has been updated to include the companySlug field in the response.",
+        "updatedAt": 1791266465,
+        "offset": 0,
+        "limit": 20,
+        "totalCount": 0,
+        "jobs": []
       }
     },
     "malformed": {
