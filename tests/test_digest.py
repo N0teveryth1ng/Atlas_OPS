@@ -203,3 +203,23 @@ def test_title_link_is_only_made_for_http_urls():
     # The job still renders as a plain title rather than linking to the bad URL.
     assert "<strong>Junior Python Dev</strong>" in html
     assert f"<a href='{REMOTEOK_URL}'" in html
+
+
+NEAR_MISS_URL = "https:job"
+
+
+def test_scheme_without_a_host_is_not_a_link():
+    """Right scheme, no host: ``https:job`` must not become an href either."""
+    digest = build_digest(
+        [_merged_result(urls=[NEAR_MISS_URL, REMOTEOK_URL, HIMALAYAS_URL])], get_settings()
+    )
+    item = digest.sections[0].items[0]
+    assert [(c.name, c.url) for c in item.credits] == [
+        ("remoteok", REMOTEOK_URL),
+        ("himalayas", HIMALAYAS_URL),
+    ]
+    html = render_html(digest)
+    assert "href='https:job'" not in html
+    assert f"<a href='{REMOTEOK_URL}'" in html
+    # Still kept as data on the item - dropped as a link, never as a URL.
+    assert NEAR_MISS_URL in item.urls
