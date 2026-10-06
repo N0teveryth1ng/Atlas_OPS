@@ -77,6 +77,9 @@ class SourcesConfig(BaseModel):
     #: Opt-in: the API is public but api.smartrecruiters.com/robots.txt disallows
     #: all crawlers. Owner must confirm the conflict before enabling.
     smartrecruiters: bool = False
+    #: Opt-in: robots.txt allows crawling, but no clear third-party feed licence
+    #: was found in Workable's public terms.
+    workable: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 

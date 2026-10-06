@@ -15,6 +15,7 @@ from .jobicy import JobicyCollector
 from .lever import LeverCollector
 from .smartrecruiters import SmartRecruitersCollector
 from .weworkremotely import WeWorkRemotelyCollector
+from .workable import WorkableCollector
 
 __all__ = [
     "AdzunaCollector",
@@ -30,6 +31,7 @@ __all__ = [
     "RemotiveCollector",
     "SmartRecruitersCollector",
     "WeWorkRemotelyCollector",
+    "WorkableCollector",
     "build_collectors",
     "default_get_json",
     "parse_datetime",
@@ -78,4 +80,6 @@ def build_collectors(
         collectors.append(WeWorkRemotelyCollector())
     if sources.smartrecruiters and companies.get("smartrecruiters"):
         collectors.append(SmartRecruitersCollector(companies["smartrecruiters"], get_json=get_json))
+    if sources.workable and companies.get("workable"):
+        collectors.append(WorkableCollector(companies["workable"], get_json=get_json))
     return collectors
