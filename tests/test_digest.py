@@ -223,3 +223,20 @@ def test_scheme_without_a_host_is_not_a_link():
     assert f"<a href='{REMOTEOK_URL}'" in html
     # Still kept as data on the item - dropped as a link, never as a URL.
     assert NEAR_MISS_URL in item.urls
+
+
+MALFORMED_URL = "http://[::1"
+
+
+def test_malformed_url_stays_data_and_never_interrupts_rendering():
+    """urlparse raises on an unterminated IPv6 literal - that must not propagate."""
+    digest = build_digest([_merged_result(urls=[MALFORMED_URL, REMOTEOK_URL])], get_settings())
+    item = digest.sections[0].items[0]
+    assert [(c.name, c.url) for c in item.credits] == [("remoteok", REMOTEOK_URL)]
+    html = render_html(digest)
+    assert f"href='{MALFORMED_URL}'" not in html
+    assert f"<a href='{REMOTEOK_URL}'" in html
+    text = render_text(digest)
+    assert f"    via remoteok: {REMOTEOK_URL}" in text
+    # Kept as data, not dropped.
+    assert MALFORMED_URL in item.urls

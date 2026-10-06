@@ -99,8 +99,13 @@ def _is_http_url(url: str) -> bool:
     digest: a job URL arriving from a feed with any other scheme (`javascript:`,
     `data:`) is kept as data but never becomes a credit link or a title href, and
     a near-miss like ``https:job`` - right scheme, no host - is rejected too.
+    A malformed URL (``http://[::1``) makes :func:`urlparse` raise, so the parse
+    is guarded: it is data, not a link, and it must never interrupt rendering.
     """
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
     return parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
 
 
