@@ -1,0 +1,75 @@
+{
+  "source": "recruitee",
+  "url": "https://talent.recruitee.com/api/offers",
+  "captured": "2026-10-05",
+  "notes": "Careers Site API documented at https://docs.recruitee.com/reference/intro-to-careers-site-api. Jobs arrive under an 'offers' key (NOT a bare list). Each offer has id, slug, title, location, department, employment_type, remote, requirements, description, and a 'careers_url'/'url'. IMPORTANT: created_at is in a custom non-ISO format (e.g. '2026-09-25 10:30:00' without a timezone marker), so the collector parses it as UTC rather than via datetime.fromisoformat.",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "offers": [
+          {
+            "id": 1275477,
+            "slug": "sysmex-senior-backend-engineer-malta",
+            "title": "Senior Backend Engineer",
+            "company_name": "Sysmex",
+            "location": "Valletta, Malta",
+            "department": "Engineering",
+            "employment_type": "full-time",
+            "remote": true,
+            "requirements": "5+ years building distributed systems in Python or Go.",
+            "description": "You will own the services behind our clinical data platform.",
+            "benefits": "Private health cover, relocation support.",
+            "careers_url": "https://talent.recruitee.com/sysmex/jobs/1275477-senior-backend-engineer-malta",
+            "url": "https://talent.recruitee.com/api/offers/1275477",
+            "created_at": "2026-09-25 10:30:00",
+            "requisition_id": "SYS-BE-441"
+          }
+        ]
+      }
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "offers": []
+      }
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>Recruitee careers site unavailable</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Rate limit exceeded"
+      }
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Internal server error"
+      }
+    }
+  }
+}

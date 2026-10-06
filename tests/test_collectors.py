@@ -244,3 +244,17 @@ def test_workable_is_opt_in_and_skipped_without_companies():
         companies={"workable": ["huckberry"]},
     )
     assert "workable" in {c.name for c in with_tokens}
+
+
+def test_recruitee_is_opt_in_and_skipped_without_companies():
+    settings = Settings()
+    settings.sources.recruitee = True
+    without = build_collectors(settings, get_json=lambda url, params: {}, companies={})
+    assert "recruitee" not in {c.name for c in without}
+
+    with_tokens = build_collectors(
+        settings,
+        get_json=lambda url, params: {},
+        companies={"recruitee": ["sysmex"]},
+    )
+    assert "recruitee" in {c.name for c in with_tokens}
