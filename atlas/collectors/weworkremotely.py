@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from xml.etree import ElementTree
 
-from defusedxml import ElementTree as DefusedElementTree
+from defusedxml import ElementTree as DefusedElementTree  # type: ignore[import-untyped]
 
 from ..schemas import Job, RemoteType
 from .base import Collector, GetText, HttpFetcher, parse_http_date
