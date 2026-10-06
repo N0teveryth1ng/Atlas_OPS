@@ -6,8 +6,10 @@ Each careers site serves a public JSON Feed at::
 
 The document is a JSON Feed: ``items`` carries the feed-reader fields
 (``title``/``url``/``date_published``) plus an embedded ``_jobposting`` object
-with the real fields. ``_jobposting`` is preferred when present so the feed's
-own truncation of fields does not matter, with the top-level keys as fallback.
+which is a schema.org ``JobPosting``. ``_jobposting`` is preferred when present
+so the feed's own truncation of fields does not matter, with the top-level keys
+as fallback. The link lives at the item level (``url``); ``_jobposting`` has no
+``careers_url`` and no ``remote``/``location``/``requirements`` keys.
 
 The official ``api.teamtailor.com/v1/jobs`` endpoint requires an API key and is
 deliberately not used. No third-party licence for the public ``jobs.json`` feed
@@ -16,10 +18,49 @@ was verified, so this source stays opt-in pending owner confirmation.
 
 from __future__ import annotations
 
-from ..schemas import Job, RemoteType
+from ..schemas import Job
 from .base import Collector, GetJson, HttpFetcher, parse_datetime
 
 FEED_URL = "https://{subdomain}.teamtailor.com/jobs.json"
+
+
+def _source_id(posting: dict, item: dict) -> str | None:
+    """The feed item id is a uuid; the posting's identifier carries the stable
+    numeric job id used in URLs, and is preferred when present."""
+    identifier = posting.get("identifier")
+    if isinstance(identifier, dict) and identifier.get("value") not in (None, ""):
+        return str(identifier["value"])
+    value = posting.get("id") or item.get("id")
+    return str(value) if value not in (None, "") else None
+
+
+def _company(posting: dict, subdomain: str) -> str:
+    org = posting.get("hiringOrganization")
+    if isinstance(org, dict) and org.get("name"):
+        return str(org["name"])
+    return subdomain
+
+
+def _location(posting: dict) -> str | None:
+    """Compose the first jobLocation's PostalAddress fields into a string."""
+    locations = posting.get("jobLocation")
+    if not isinstance(locations, list):
+        return None
+    for place in locations:
+        if not isinstance(place, dict):
+            continue
+        address = place.get("address")
+        if not isinstance(address, dict):
+            continue
+        parts = [
+            address.get("addressLocality"),
+            address.get("addressRegion"),
+            address.get("addressCountry"),
+        ]
+        composed = ", ".join(part for part in parts if part)
+        if composed:
+            return composed
+    return None
 
 
 class TeamtailorCollector(Collector):
@@ -41,28 +82,21 @@ class TeamtailorCollector(Collector):
         for item in items or []:
             posting = item.get("_jobposting") if isinstance(item, dict) else None
             posting = posting if isinstance(posting, dict) else {}
-            link = posting.get("careers_url") or item.get("url") or ""
+            link = item.get("url") or posting.get("careers_url") or ""
             if not link:
                 continue
-            extra: dict = {}
-            if posting.get("remote"):
-                extra["remote_type"] = RemoteType.remote
-            description = "\n\n".join(
-                str(posting[key]) for key in ("description", "requirements") if posting.get(key)
-            )
             jobs.append(
                 Job(
                     source=self.name,
-                    source_id=str(posting.get("id") or item.get("id") or "") or None,
+                    source_id=_source_id(posting, item),
                     title=posting.get("title") or item.get("title"),
-                    company=posting.get("company_name") or subdomain,
-                    location=posting.get("location"),
+                    company=_company(posting, subdomain),
+                    location=_location(posting),
                     url=link,
-                    description_raw=description,
+                    description_raw=str(posting.get("description") or ""),
                     posted_at=parse_datetime(
-                        posting.get("created_at") or item.get("date_published")
+                        posting.get("datePosted") or item.get("date_published")
                     ),
-                    **extra,
                 )
             )
         self._cache[subdomain] = jobs

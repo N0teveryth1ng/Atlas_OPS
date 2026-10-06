@@ -21,15 +21,16 @@ def _collector(companies: list[str] | None = None, max_attempts: int = 3):
 
 def test_normal_case_maps_job(monkeypatch):
     log = replay.install(monkeypatch, replay.load("teamtailor")["normal"])
-    jobs = _collector().fetch("fullstack")
+    jobs = _collector().fetch("account")
     assert len(jobs) == 1
     job = jobs[0]
     assert job.source == "teamtailor"
-    assert job.title == "Senior Fullstack Developer"
-    assert job.company == "Varma"
-    assert job.location == "Stockholm, Sweden"
-    assert job.source_id == "4321987"
-    assert job.remote_type is RemoteType.remote
+    assert job.title == "UK Account Executive - SMB"
+    assert job.company == "Teamtailor"
+    assert job.location == "London, Europe, GB"
+    assert job.source_id == "8118064"
+    assert job.url == "https://career.teamtailor.com/jobs/8118064-uk-account-executive-smb"
+    assert job.remote_type is RemoteType.unknown
     assert job.posted_at is not None
     assert log == [FEED_URL.format(subdomain="varma")]
 
@@ -108,11 +109,11 @@ def test_items_without_any_url_are_skipped(monkeypatch):
     assert _collector().fetch("") == []
 
 
-def test_description_and_requirements_are_joined(monkeypatch):
+def test_description_comes_from_the_jobposting(monkeypatch):
     replay.install(monkeypatch, replay.load("teamtailor")["normal"])
     description = _collector().fetch("")[0].description_raw
-    assert "deploy" in description
-    assert "TypeScript" in description
+    assert "Account Executive" in description
+    assert "Farringdon office" in description
 
 
 def test_each_subdomain_is_a_separate_request(monkeypatch):
@@ -127,8 +128,8 @@ def test_each_subdomain_is_a_separate_request(monkeypatch):
 def test_board_is_cached_across_fetches(monkeypatch):
     log = replay.install(monkeypatch, replay.load("teamtailor")["normal"])
     collector = _collector()
-    collector.fetch("fullstack")
-    collector.fetch("python")
+    collector.fetch("account")
+    collector.fetch("executive")
     assert len(log) == 1
 
 
@@ -165,7 +166,7 @@ def test_429_recovers_when_the_limit_lifts(monkeypatch):
     log = replay.install_sequence(
         monkeypatch, [cases["http_429"], cases["normal"]], repeat_last=False
     )
-    assert len(_collector().fetch("fullstack")) == 1
+    assert len(_collector().fetch("account")) == 1
     assert len(log) == 2
 
 
@@ -177,7 +178,7 @@ def test_failure_cases_never_raise(monkeypatch, case_name):
 
 def test_query_filters_on_title(monkeypatch):
     replay.install(monkeypatch, replay.load("teamtailor")["normal"])
-    assert len(_collector().fetch("fullstack")) == 1
+    assert len(_collector().fetch("account")) == 1
     assert _collector().fetch("cobol") == []
 
 
