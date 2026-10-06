@@ -105,3 +105,71 @@ def test_render_contains_key_fields():
     assert "Docker" in text
     assert "Seniority:" in html
     assert "Risk:" in html
+
+
+REMOTEOK_URL = "https://remoteok.com/remote-jobs/123"
+HIMALAYAS_URL = "https://himalayas.app/jobs/python-dev"
+
+
+def _merged_result(i: int = 1, urls: list[str] | None = None):
+    """A result whose job carries the merged cross-source URLs of a deduped job.
+
+    The canonical ``job.url`` stays on RemoteOK even though Himalayas also
+    contributed - exactly the case where the required link-back used to vanish.
+    """
+    result = _result(i, Recommendation.apply)
+    merged = urls if urls is not None else [REMOTEOK_URL, HIMALAYAS_URL]
+    result.job = result.job.model_copy(update={"url": merged[0], "urls": list(merged)})
+    return result
+
+
+def test_credits_cover_every_contributing_source_in_order():
+    digest = build_digest([_merged_result()], get_settings())
+    item = digest.sections[0].items[0]
+    assert [(c.name, c.url) for c in item.credits] == [
+        ("remoteok", REMOTEOK_URL),
+        ("himalayas", HIMALAYAS_URL),
+    ]
+
+
+def test_text_renderer_links_every_contributing_source():
+    digest = build_digest([_merged_result()], get_settings())
+    text = render_text(digest)
+    # Existing lines intact: the canonical RemoteOK URL is still the first link.
+    assert f"    {REMOTEOK_URL}" in text
+    # Additive: Himalayas is credited with its own direct link even though the
+    # canonical job.url belongs to RemoteOK.
+    assert f"    via remoteok: {REMOTEOK_URL}" in text
+    assert f"    via himalayas: {HIMALAYAS_URL}" in text
+
+
+def test_html_renderer_links_every_contributing_source():
+    digest = build_digest([_merged_result()], get_settings())
+    html = render_html(digest)
+    assert f"<a href='{REMOTEOK_URL}'" in html
+    assert f"<a href='{HIMALAYAS_URL}'" in html
+    assert ">remoteok</a>" in html
+    assert ">himalayas</a>" in html
+
+
+def test_unknown_host_urls_are_still_credited():
+    unknown = "https://example.com/careers/9"
+    digest = build_digest([_merged_result(urls=[unknown])], get_settings())
+    item = digest.sections[0].items[0]
+    assert [(c.name, c.url) for c in item.credits] == [("example.com", unknown)]
+    assert f"    via example.com: {unknown}" in render_text(digest)
+    assert f"<a href='{unknown}'" in render_html(digest)
+
+
+def test_one_credit_per_source_keeps_the_first_url():
+    second = "https://remoteok.com/remote-jobs/456"
+    digest = build_digest(
+        [_merged_result(urls=[REMOTEOK_URL, second, HIMALAYAS_URL])], get_settings()
+    )
+    item = digest.sections[0].items[0]
+    assert [(c.name, c.url) for c in item.credits] == [
+        ("remoteok", REMOTEOK_URL),
+        ("himalayas", HIMALAYAS_URL),
+    ]
+    # No URL is ever lost: the uncredited duplicate is still on the item.
+    assert second in item.urls
