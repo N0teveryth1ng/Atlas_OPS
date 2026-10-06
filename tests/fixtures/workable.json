@@ -1,8 +1,8 @@
 {
   "source": "workable",
   "url": "https://apply.workable.com/api/v1/widget/accounts/huckberry?details=true",
-  "captured": "2026-10-05",
-  "notes": "The working endpoint is the v1 widget API (NOT v3 - /api/v3/accounts/{sub} returned 404). Jobs live under `jobs`, each with shortcode, title, department, location, url, description, requirements, benefits. robots.txt on apply.workable.com allows crawling and declares ai-input: yes, ai-train: no. CAVEAT: no clear third-party feed licence was found in Workable's public terms; owner must confirm before enabling.",
+  "captured": "2026-10-06",
+  "notes": "The working endpoint is the v1 widget API (NOT v3). Jobs live under `jobs`. Live keys: title, shortcode, url, application_url, city, state, country, locations[], description, created_at, published_on. NOTE: there is NO `location`, `requirements` or `benefits` key - location is derived from city/state/country (and the `locations` array), and description is one HTML string. robots.txt on apply.workable.com allows crawling and declares ai-input: yes, ai-train: no.",
   "cases": {
     "normal": {
       "status": 200,
@@ -13,22 +13,36 @@
       "body": {
         "jobs": [
           {
+            "title": "Associate Designer, Apparel",
             "shortcode": "62180FD5F9",
-            "title": "Associate Designer",
-            "department": "Design",
-            "location": "London, UK (Hybrid)",
-            "url": "https://apply.workable.com/huckberry/j/62180FD5F9/",
-            "application_url": "https://apply.workable.com/huckberry/j/62180FD5F9/apply/",
-            "experience": "Mid Level",
+            "code": "",
             "employment_type": "Full-time",
-            "remote": false,
-            "description": "<p>Own the end-to-end design of our product surfaces, from research to shipped UI.</p>",
-            "requirements": "<ul><li>Strong Figma craft</li><li>Comfort working with engineers</li></ul>",
-            "benefits": "<p>Private health cover and a generous learning budget.</p>",
-            "created_at": "2026-09-25T10:30:00Z"
+            "telecommuting": false,
+            "department": "Product & Merchandising",
+            "url": "https://apply.workable.com/j/62180FD5F9",
+            "shortlink": "https://apply.workable.com/j/62180FD5F9",
+            "application_url": "https://apply.workable.com/j/62180FD5F9/apply",
+            "published_on": "2026-09-17",
+            "created_at": "2026-09-17",
+            "country": "United States",
+            "city": "Austin",
+            "state": "Texas",
+            "education": "Unspecified",
+            "experience": "Associate",
+            "function": "Design",
+            "industry": "Retail",
+            "locations": [
+              {
+                "country": "United States",
+                "countryCode": "US",
+                "city": "Austin",
+                "region": "Texas",
+                "hidden": false
+              }
+            ],
+            "description": "<p></p><p>At Huckberry, we build apparel meant to be lived in - built for weekend escapes, daily routines, and everything in between. We need an Associate Designer with an uncompromising eye for menswear to help steer our in-house lines from inspiration to production. In this role, you’ll act as the glue between Merchandising, Tech, and Production, managing product lifecycles and keeping active seasons moving on or ahead of schedule. If you’re an entrepreneurial self-starter who gets fired up about fabric, fit, and functional design, we want to hear from you.</p><p><em><strong>This role is based out of our headquarters in Austin, TX; relocation support will be provided to a remote hire.</strong></em></p><p></p><p><strong>Responsibilities</strong></p><ul><li>Support seasonal development calendar in partnership with Designer/Technical Designers/Developers to hit all key milestone dates</li><li>Maintain awareness of the corporate calendar and support the design team with deadlines. Prioritize multiple overlapping tasks across active seasons to ensure all development milestones are met on or ahead of schedule</li><li>Manage specific categories through the product creation cycle. Prepare accurate development packages, including sketch, style details, construction call-outs, materials, trims, artwork, color information and relevant washes and finishing details&nbsp;&nbsp;</li><li>Create and update technical sketches, BOMs, PLM &amp; Miro board updates for assigned categories and products as needed</li><li>Manage follow-up and comments for proto samples, lab dips, trims, artwork, washes, and other key development submits</li><li>Manage in-season development through the organization of seasonal binders including all submits for lab dips, materials, trim development, etc.</li><li>Attend and participate in fit sessions. Taking detailed notes and follow up as needed with TD &amp; PD teams</li><li>Shop the market on a regular basis for ideas and inspiration. Research and identify trends that are relevant to the Huckberry customer</li><li>Support the design team with presentation prep for cross-functional and milestone meetings as needed</li></ul><p></p><p><strong>Requirements</strong></p><ul><li>2-4 years of experience in the apparel industry</li><li>Degree in Apparel/Fashion Design or equivalent industry experience</li><li>Excellent communication skills with the ability to effectively collaborate with cross-functional teams. Clear translation of creative ideas into functional technical designs&nbsp;</li><li>Strong organizational and time-management skills to navigate shifting priorities and tight deadlines smoothly</li><li>Ability to problem-solve and troubleshoot issues on the go</li><li>Can work independently while adhering to deadlines</li><li>Proficient in Illustrator and Photoshop, experience with PLM</li><li>Solid understanding of garment construction and fabric properties</li><li>Must have a strong passion for menswear, experience in menswear is a plus</li><li>Ability to treat missteps as learning opportunities, quickly applying constructive feedback to improve future processes</li></ul><p><strong>Benefits</strong></p><ul><li>Medical, Dental, Vision benefits</li><li>401(k) and employer match</li><li>Annual Huckberry shopping credits</li><li>Paid Sabbatical leave at 4 years</li><li>Summer Fridays</li><li>Weekly catered lunch </li><li>Monthly happy hours </li><li>Mental health resources</li><li>Paid Parental Leave</li><li>Paid Vacation &amp; Paid Sick Leave</li><li>Volunteer Time Off</li><li>Generous employee discount</li><li>Annual offsites</li></ul><p></p><h3>Company Description</h3><p>Huckberry is the ultimate one-stop men's shop for discovering the best gear and threads. Over a million guys trust us as their go-to resource for their closet, adventure inspiration, and a whole lot more. We were named one of IAB's most disruptive consumer brands, and we've collaborated with everyone from Matthew McConaughey and Leon Bridges to brands like Lululemon, Tacoma, and Coors. We look forward to meeting you.</p><p></p><p>Want to get to know us better? Check out our:</p><ul><li>Journal:<a href=\"http://huckberry.com/blog\" target=\"_blank\" rel=\"nofollow noreferrer noopener\" class=\"external\"> http://huckberry.com/blog</a> </li><li>Youtube: <a href=\"https://www.youtube.com/@Huckberryco\" target=\"_blank\" rel=\"nofollow noreferrer noopener\" class=\"external\">https://www.youtube.com/@Huckberryco</a> <a href=\"https://www.facebook.com/Huckberry\" target=\"_blank\" rel=\"nofollow noreferrer noopener\" class=\"external\"></a> </li><li>Instagram:<a href=\"http://instagram.com/huckberry\" target=\"_blank\" rel=\"nofollow noreferrer noopener\" class=\"external\"> http://instagram.com/huckberry</a> <a href=\"https://x.com/Huckberry\" target=\"_blank\" rel=\"nofollow noreferrer noopener\" class=\"external\"></a> </li></ul><p></p><p>Huckberry encourages candidates of all different backgrounds and identities to apply. We are always eager to further diversify our company, and we are committed to providing an inclusive environment of mutual respect where all can flourish. All of our employment decisions are based solely on merit and business need.<a href=\"https://privacy.huckberry.com/job-applicant-privacy-notice\" target=\"_blank\" rel=\"nofollow noreferrer noopener\" class=\"external\"></a></p>"
           }
-        ],
-        "total": 1
+        ]
       }
     },
     "empty": {
@@ -38,8 +52,7 @@
       },
       "provenance": "recorded",
       "body": {
-        "jobs": [],
-        "total": 0
+        "jobs": []
       }
     },
     "malformed": {
