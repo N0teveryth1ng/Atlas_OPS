@@ -56,6 +56,7 @@ sources:
   jobicy: false       # friendlyNotice: credit Jobicy, link the original URL
   weworkremotely: false  # RSS ok w/ attribution, but API terms forbid scraping
   smartrecruiters: false # public API, but robots.txt disallows all crawlers
+  workable: false      # v1 widget API, robots allow; third-party licence unverified
   adzuna_country: "in"
   results_per_page: 50
 

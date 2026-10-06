@@ -1,0 +1,75 @@
+{
+  "source": "workable",
+  "url": "https://apply.workable.com/api/v1/widget/accounts/huckberry?details=true",
+  "captured": "2026-10-05",
+  "notes": "The working endpoint is the v1 widget API (NOT v3 - /api/v3/accounts/{sub} returned 404). Jobs live under `jobs`, each with shortcode, title, department, location, url, description, requirements, benefits. robots.txt on apply.workable.com allows crawling and declares ai-input: yes, ai-train: no. CAVEAT: no clear third-party feed licence was found in Workable's public terms; owner must confirm before enabling.",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "jobs": [
+          {
+            "shortcode": "62180FD5F9",
+            "title": "Associate Designer",
+            "department": "Design",
+            "location": "London, UK (Hybrid)",
+            "url": "https://apply.workable.com/huckberry/j/62180FD5F9/",
+            "application_url": "https://apply.workable.com/huckberry/j/62180FD5F9/apply/",
+            "experience": "Mid Level",
+            "employment_type": "Full-time",
+            "remote": false,
+            "description": "<p>Own the end-to-end design of our product surfaces, from research to shipped UI.</p>",
+            "requirements": "<ul><li>Strong Figma craft</li><li>Comfort working with engineers</li></ul>",
+            "benefits": "<p>Private health cover and a generous learning budget.</p>",
+            "created_at": "2026-09-25T10:30:00Z"
+          }
+        ],
+        "total": 1
+      }
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "jobs": [],
+        "total": 0
+      }
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>Workable widget unavailable</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Rate limit exceeded"
+      }
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "message": "Internal server error"
+      }
+    }
+  }
+}
