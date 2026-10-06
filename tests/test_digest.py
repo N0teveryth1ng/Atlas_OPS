@@ -173,3 +173,33 @@ def test_one_credit_per_source_keeps_the_first_url():
     ]
     # No URL is ever lost: the uncredited duplicate is still on the item.
     assert second in item.urls
+
+
+DANGEROUS_URL = "javascript:alert(document.cookie)"
+
+
+def test_non_http_urls_never_become_credit_links():
+    """Only absolute http(s) URLs may be turned into a clickable credit."""
+    digest = build_digest(
+        [_merged_result(urls=[DANGEROUS_URL, REMOTEOK_URL, HIMALAYAS_URL])], get_settings()
+    )
+    item = digest.sections[0].items[0]
+    # Skipped before source lookup: no credit, no name, no href.
+    assert [(c.name, c.url) for c in item.credits] == [
+        ("remoteok", REMOTEOK_URL),
+        ("himalayas", HIMALAYAS_URL),
+    ]
+    assert "href='javascript:" not in render_html(digest)
+    # Kept as data - the URL is still on the item, it just never becomes a link.
+    assert DANGEROUS_URL in item.urls
+    assert f"    via himalayas: {HIMALAYAS_URL}" in render_text(digest)
+    assert f"<a href='{HIMALAYAS_URL}'" in render_html(digest)
+
+
+def test_title_link_is_only_made_for_http_urls():
+    digest = build_digest([_merged_result(urls=[DANGEROUS_URL, REMOTEOK_URL])], get_settings())
+    html = render_html(digest)
+    assert "href='javascript:" not in html
+    # The job still renders as a plain title rather than linking to the bad URL.
+    assert "<strong>Junior Python Dev</strong>" in html
+    assert f"<a href='{REMOTEOK_URL}'" in html

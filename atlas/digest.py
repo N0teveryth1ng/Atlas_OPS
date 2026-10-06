@@ -92,16 +92,31 @@ def _job_urls(job) -> list[str]:
     return seen
 
 
+def _is_http_url(url: str) -> bool:
+    """True only for absolute ``http``/``https`` URLs.
+
+    Those are the only schemes we are willing to turn into a clickable link in
+    a digest: a job URL arriving from a feed with any other scheme (``javascript:``,
+    ``data:``, a relative reference) is kept as data but never becomes a credit
+    link or a title href.
+    """
+    return urlparse(url).scheme.lower() in ("http", "https")
+
+
 def _source_credits(urls: list[str]) -> list[SourceCredit]:
     """One credit per contributing source, order preserved from ``urls``.
 
     Known sources deduplicate by name (first URL wins); an unknown host is kept
-    per URL under its hostname so no URL is ever lost from the digest.
+    per URL under its hostname so no URL is ever lost from the digest. URLs that
+    are not absolute HTTP(S) are skipped before any lookup, so only safe web URLs
+    become credit links.
     """
     credits: list[SourceCredit] = []
     seen_sources: set[str] = set()
     seen_unknown: set[str] = set()
     for url in urls:
+        if not _is_http_url(url):
+            continue
         source = source_for_url(url)
         if source is not None:
             if source in seen_sources:
@@ -292,7 +307,8 @@ def render_html(digest: Digest) -> str:
             f"{esc(section.title)}</h3>"
         )
         for item in section.items:
-            link = item.urls[0] if item.urls else ""
+            raw_link = item.urls[0] if item.urls else ""
+            link = raw_link if _is_http_url(raw_link) else ""
             title = esc(item.title or "Untitled role")
             title_html = f"<a href='{esc(link)}' style='color:#0b5'>{title}</a>" if link else title
             rows.append(
