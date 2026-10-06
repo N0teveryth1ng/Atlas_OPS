@@ -55,6 +55,7 @@ sources:
   arbeitnow: false     # free public API, please link back to arbeitnow.com
   jobicy: false       # friendlyNotice: credit Jobicy, link the original URL
   weworkremotely: false  # RSS ok w/ attribution, but API terms forbid scraping
+  smartrecruiters: false # public API, but robots.txt disallows all crawlers
   adzuna_country: "in"
   results_per_page: 50
 
