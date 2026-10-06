@@ -6,9 +6,10 @@ lives on its own subdomain::
 
     https://{tenant}.recruitee.com/api/offers
 
-``created_at`` is not ISO-8601 — the feed publishes ``2026-09-25 10:30:00`` with
-no timezone marker, and some tenants use ``25-09-2026``. Both are handled here
-and read as UTC rather than being handed to ``fromisoformat`` directly.
+``created_at`` is not ISO-8601 — the API publishes ``2026-09-25 10:30:00 UTC``
+with a trailing `` UTC`` marker and no ISO timezone token, and some tenants use
+``25-09-2026``. Both are handled here and read as UTC rather than being handed
+to ``fromisoformat`` directly.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ API_ROOT = "https://{tenant}.recruitee.com/api/offers"
 
 #: Formats seen in the wild, tried in order after ISO-8601 fails.
 CUSTOM_DATE_FORMATS = ("%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d")
+#: The API appends a literal UTC marker to the naive timestamp.
+_UTC_SUFFIX = " UTC"
 
 
 def parse_recruitee_date(value: object) -> datetime | None:
@@ -32,6 +35,9 @@ def parse_recruitee_date(value: object) -> datetime | None:
     if value in (None, ""):
         return None
     text = str(value).strip()
+    # In ISO-form the requests publish e.g. '2026-09-25 10:30:00 UTC'.
+    if text.endswith(_UTC_SUFFIX):
+        return parse_datetime(text[: -len(_UTC_SUFFIX)]) or None
     for fmt in CUSTOM_DATE_FORMATS:
         try:
             return datetime.strptime(text, fmt).replace(tzinfo=UTC)
