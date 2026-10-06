@@ -1,59 +1,96 @@
 {
   "source": "jobicy",
-  "url": "https://jobicy.com/api/v2/remote-jobs?count=50",
-  "captured": "2026-10-05",
-  "notes": "Public API. friendlyNotice requires crediting Jobicy and linking to the original application URL. robots.txt allows User-agent: *. No API key required. Query parameter is 'q'.",
+  "url": "https://jobicy.com/api/v2/remote-jobs?count=2",
+  "captured": "2026-10-06",
+  "notes": "Public API, no key; friendlyNotice requires crediting Jobicy and linking to the original job URL, so the listing url is kept on the Job. Verified live 2026-10-06: there is no 'q' parameter (sending one answers 400 \"Unexpected parameter 'q'\"); keyword search is 'tag' and must be 3-50 characters (400 outside that range). Job objects use jobTitle/companyName/jobGeo/jobDescription - there is no title, location, description or remote key. pubDate is ISO-8601, not epoch. The collector requests ?count=50 and adds tag only for 3-50 character queries; this recording uses count=2 (appliedFilters echoes it) purely to keep the file small. The 'empty' case is a real 200 zero-result response to a deliberately unmatchable tag. Every field round-trips against the live API on 2026-10-06 except nextCursor, an opaque per-request pagination token the collector never uses.",
   "cases": {
     "normal": {
       "status": 200,
       "headers": {
-        "content-type": "application/json"
+        "content-type": "application/json; charset=utf-8"
       },
       "provenance": "recorded",
       "body": {
-        "jobCount": 1,
-        "friendlyNotice": "Data provided by Jobicy. Please use the original application URL to apply, and credit Jobicy as the source.",
-        "message": "",
-        "success": true,
+        "apiVersion": "2.2.19",
+        "documentationUrl": "https://jobi.cy/apidocs",
+        "friendlyNotice": "Thanks for using Jobicy API! Please ensure Jobicy is clearly credited with a direct link to the source, and all application buttons redirect to the original job URL provided in this feed. That’s all! You might be building something amazing, we wish you the best of luck!",
+        "jobCount": 2,
+        "lastUpdate": "2026-10-05T18:58:00+00:00",
+        "nextCursor": "AgAAAABqxJJgAAAAAGrD8zcAAAAAAAJcK5GStyjVOt7ULMvdFdHp_0xjGsH--7hP_G6cSgT0AUpIb_oKwSzVJrGVGsdbnPIpmyU4nFj_n_zxiOjbpgIJQbc",
+        "hasMore": true,
+        "appliedFilters": {
+          "count": 2
+        },
         "jobs": [
           {
-            "id": 154612,
-            "url": "https://jobicy.com/jobs/154612-customer-success-engineer",
-            "title": "Customer Success Engineer",
-            "companyName": "Algolia",
-            "companyLogo": "https://jobicy.com/logo.png",
-            "companyDescription": "Algolia is a search engine for developers.",
-            "location": "Europe",
-            "industry": "Software",
-            "tags": [
-              "Customer Success"
+            "id": 154661,
+            "url": "https://jobicy.com/jobs/154661-strategic-account-executive-central-west",
+            "jobSlug": "154661-strategic-account-executive-central-west",
+            "jobTitle": "Strategic Account Executive - Central/West",
+            "companyName": "Dataiku",
+            "companyLogo": "https://jobicy.com/data/server-nyc0409/galaxy/mercury/2026/06/5a9d57bf-221.webp",
+            "jobIndustry": [
+              "Sales"
             ],
-            "jobType": "Full-time",
-            "pubDate": 1791000000,
-            "experienceLevel": "Mid",
-            "salary": "",
-            "currency": "",
-            "remote": true,
-            "description": "You will be the technical bridge between Algolia's customers and our product team.",
-            "requirements": [
-              "Solid technical communication skills"
-            ]
+            "jobType": [
+              "Full-Time"
+            ],
+            "jobGeo": "USA",
+            "jobLevel": "Director",
+            "jobExcerpt": "Dataiku is the Platform for AI Success, the enterprise orchestration layer for building, deploying, and governing AI. In a single environment, teams design and operate analytics, machine learning, and AI agents with the transparency, collaboration, and control enterprises require. Sitting above data platforms, cloud infrastructure, and AI services, Dataiku connects the full enterprise AI stack&hellip;",
+            "jobDescription": "<p><a href=\"https://www.dataiku.com/?utm_source=newswire&amp;utm_medium=press-release&amp;utm_campaign=PlatformforAISuccess\" rel=\"nofollow ugc noopener\" target=\"_blank\">Dataiku</a> is the Platform for AI Success, the enterprise orchestration layer for building, deploying, and governing AI. In a single environment, teams design and operate analytics, machine learning, and AI agents with the transparency, collaboration, and control enterprises require. Sitting above data platforms, cloud infrastructure, and AI services, <a href=\"https://jobicy.com/company/dataiku\" target=\"_blank\" rel=\"noopener\">Dataiku</a> connects the full enterprise AI stack - empowering organizations to run AI across multi-vendor environments with centralized governance.</p>\n<p>The world’s leading companies rely on Dataiku to operationalize AI and run it as a true business performance engine delivering measurable value. For more, visit the Dataiku <a href=\"https://blog.dataiku.com/?_gl=1*17edvf4*_ga*MjA1Mjk5NzY4OC4xNjY3MjMyMDUz*_ga_B3YXRYMY48*MTY2OTA1MDY5NS4xMi4xLjE2NjkwNTA2OTguNTcuMC4w\" rel=\"nofollow ugc noopener\" target=\"_blank\">blog</a>, <a href=\"https://www.linkedin.com/company/dataiku/\" rel=\"nofollow ugc noopener\" target=\"_blank\">LinkedIn</a>, <a href=\"https://x.com/dataiku\" rel=\"nofollow ugc noopener\" target=\"_blank\">X</a>, and <a href=\"https://www.youtube.com/dataiku\" rel=\"nofollow ugc noopener\" target=\"_blank\">YouTube</a>.</p>\n<p>Dataiku is looking for an experienced Strategic Account Executive to join our team. Since the launch of our company, we have experienced healthy growth and steady market demand. This is an individual contributor position, newly added due to business expansion.</p>\n<p>We’re looking for someone who can express passion about new technologies and the possibilities of Data and Advanced Analytics to enterprise customers across a range of industries within an extensive network. This role consists of engaging prospects and customers about their related initiatives to help them develop a more efficient approach, leveraging our platform, Dataiku.</p>\n<p>As a Strategic Account Executive at Dataiku, you’ll be responsible for managing the entire sales cycle and own a territory with prospects and customers across a variety of industries. We embrace a culture of accountable camaraderie, and this role will enable you to collaborate cross-functionally with colleagues in marketing, product management, and sales engineering. Together, you’ll showcase the business value of Dataiku’s platform, DSS.</p>\n<p>What you'll need to be successful -</p>\n<ul>\n<li>10+ years experience in software field sales</li>\n<li>Strong belief in a customer centric selling philosophy and applying a consultative approach in customer interactions</li>\n<li>Background in selling innovation and new concepts to large Enterprises</li>\n<li>Strong ability to develop a vision match with prospects and customers, to develop alignment across different groups and cultivate champions</li>\n<li>Good articulation of competitive positioning</li>\n<li>Comfortable traveling 30 to 50%</li>\n<li>Desired Skills Experience in ‘data’ – big data, analytics, data science, BI/DW, data integration</li>\n<li>Early start-up experience is a plus!</li>\n</ul>\n<p>#LI-LP1</p>\n<p>#LI-JR1</p>\n<p> #L1-AH1</p>\n<p><strong>Compensation and Benefits</strong></p>\n<p>The final compensation package for this role will be determined during the interview process and is based on a variety of factors, including, but not limited to, geographic location, internal equity, education, skill set, experience and training. Eligible roles may also be entitled to receive commission or other variable compensation through Dataiku's incentive compensation program. </p>\n<p>Dataiku also offers comprehensive benefits, including stock options, medical, dental, and vision plans, flexible spending accounts, pre-tax commuter benefits, a 401k company match, paid vacations and sick leave, paid parental leave, employer paid disability coverage, and additional health and wellbeing perks and benefits. Dataiku reserves the right to amend or modify employee perks and benefits at any time.</p>\n<p>US only national base pay ranges</p>\n<p>$160,000—$170,000 USD</p>\n<p><strong>What are you waiting for!</strong></p>\n<p>At Dataiku, you'll be part of a journey to shape the ever-evolving world of AI. We're not just building a product; we're crafting the future of AI. If you're ready to make a significant impact in a company that values innovation, collaboration, and your personal growth, we can't wait to welcome you to Dataiku! And if you’d like to learn even more about working here, you can visit our <a href=\"https://www.linkedin.com/company/dataiku/\" rel=\"nofollow ugc noopener\" target=\"_blank\">Dataiku LinkedIn page</a>.</p>\n<p><em>Our practices are rooted in the idea that everyone should be treated with dignity, decency and fairness. Dataiku also believes that a diverse identity is a source of strength and allows us to optimize across the many dimensions that are needed for our success. Therefore, we are proud to be an equal opportunity employer. All employment practices are based on business needs, without regard to race, ethnicity, gender identity or expression, sexual orientation, religion, age, neurodiversity, disability status, citizenship, veteran status or any other aspect which makes an individual unique or protected by laws and regulations in the locations where we operate. This applies to all policies and procedures related to recruitment and hiring, compensation, benefits, performance, promotion and termination and all other conditions and terms of employment. If you need assistance or an accommodation, please contact us at: </em><a href=\"http://reasonable-accommodations@dataiku.com/\" rel=\"nofollow ugc noopener\" target=\"_blank\">reasonable-accommodations@dataiku.com</a></p>\n<hr>\n<p><strong>Protect yourself from fraudulent recruitment activity</strong></p>\n<p><em>Dataiku will never ask you for payment of any type during the interview or hiring process. Other than our video-conference application, Zoom, we will also never ask you to make purchases or download third-party applications during the process. If you experience something out of the ordinary or suspect fraudulent activity, please review our page on identifying and reporting fraudulent activity <a href=\"https://www.dataiku.com/legal/dataiku-recruitment-scams/\" rel=\"nofollow ugc noopener\" target=\"_blank\">here.</a></em></p>",
+            "pubDate": "2026-10-05T18:58:00+00:00",
+            "salaryMin": 160000,
+            "salaryMax": 170000,
+            "salaryCurrency": "USD",
+            "salaryPeriod": "yearly"
+          },
+          {
+            "id": 154667,
+            "url": "https://jobicy.com/jobs/154667-technical-account-manager-uk",
+            "jobSlug": "154667-technical-account-manager-uk",
+            "jobTitle": "Technical Account Manager - UK",
+            "companyName": "Dataiku",
+            "companyLogo": "https://jobicy.com/data/server-nyc0409/galaxy/mercury/2026/06/5a9d57bf-221.webp",
+            "jobIndustry": [
+              "Technical Support"
+            ],
+            "jobType": [
+              "Full-Time"
+            ],
+            "jobGeo": "UK",
+            "jobLevel": "Director",
+            "jobExcerpt": "Dataiku is the Platform for AI Success, the enterprise orchestration layer for building, deploying, and governing AI. In a single environment, teams design and operate analytics, machine learning, and AI agents with the transparency, collaboration, and control enterprises require. Sitting above data platforms, cloud infrastructure, and AI services, Dataiku connects the full enterprise AI stack&hellip;",
+            "jobDescription": "<p><a href=\"https://www.dataiku.com/?utm_source=newswire&amp;utm_medium=press-release&amp;utm_campaign=PlatformforAISuccess\" rel=\"nofollow ugc noopener\" target=\"_blank\">Dataiku</a> is the Platform for AI Success, the enterprise orchestration layer for building, deploying, and governing AI. In a single environment, teams design and operate analytics, machine learning, and AI agents with the transparency, collaboration, and control enterprises require. Sitting above data platforms, cloud infrastructure, and AI services, <a href=\"https://jobicy.com/company/dataiku\" target=\"_blank\" rel=\"noopener\">Dataiku</a> connects the full enterprise AI stack - empowering organizations to run AI across multi-vendor environments with centralized governance.</p>\n<p>The world’s leading companies rely on Dataiku to operationalize AI and run it as a true business performance engine delivering measurable value. For more, visit the Dataiku <a href=\"https://blog.dataiku.com/?_gl=1*17edvf4*_ga*MjA1Mjk5NzY4OC4xNjY3MjMyMDUz*_ga_B3YXRYMY48*MTY2OTA1MDY5NS4xMi4xLjE2NjkwNTA2OTguNTcuMC4w\" rel=\"nofollow ugc noopener\" target=\"_blank\">blog</a>, <a href=\"https://www.linkedin.com/company/dataiku/\" rel=\"nofollow ugc noopener\" target=\"_blank\">LinkedIn</a>, <a href=\"https://x.com/dataiku\" rel=\"nofollow ugc noopener\" target=\"_blank\">X</a>, and <a href=\"https://www.youtube.com/dataiku\" rel=\"nofollow ugc noopener\" target=\"_blank\">YouTube</a>.</p>\n<p>Technical Account Managers are highly experienced Architects who bring both deep technical expertise and strong interpersonal skills to support a small portfolio of strategic clients (approximately 3 per TAM). They must be quick on their feet and able to put a positive spin on challenging customer situations, both in the boardroom with a client CTO and while sharing the command line with a client admin. They must be effective technically, both as communicators and doers. They must be capable of managing and maintaining a client relationship, while keeping a tight organizational watch over the technical aspects of their accounts.</p>\n\n<p><strong>How you'll make an impact</strong></p>\n<ul>\n<li>Collaborate with the customer and the internal account team to jointly identify short and long-term priorities and develop the associated engagement plan</li>\n<li>Manage project milestones in partnership with Customer Success Managers and clients, contribute to deliverables, provide regular status updates and proactively identify and mitigate issues and risks</li>\n<li>Serve as a central point for client technical information and contribute to the account strategy alongside the broader account team</li>\n<li>Support the growth and effectiveness of the Field Engineering team through documentation, process improvements, and knowledge sharing</li>\n<li>Act as the primary technical advisor for client teams, providing guidance and hands-on support across a range of areas, including:\n<ul>\n<li>Dataiku platform architecture and deployment</li>\n<li>Platform operations and upgrades</li>\n<li>Best practices for platform usage</li>\n<li>Security, data management, and compute resources</li>\n<li>ML-Ops, monitoring, and scaling strategies</li>\n</ul>\n</li>\n<li>Assist clients in integrating the product into their systems and troubleshoot technical challenges</li>\n<li>Capture client feedback and feature requests to inform the Product and Engineering teams</li>\n<li>Advise client tech leaders on complementary technologies and long-term technical strategy.</li>\n<li>Explore and support advanced use cases involving Dataiku, such as edge computing, deep learning, and MLOps</li>\n</ul>\n<p><strong>What you'll need to be successful</strong></p>\n<ul>\n<li>7+ years of experience in a customer-facing technical role</li>\n<li>Native or bilingual proficiency in English</li>\n<li>Strong communication and client relationship skills</li>\n<li>Experience supporting both pre- and post-sales engagements</li>\n<li>Proficiency in Linux system administration, including networking</li>\n<li>Experience with identity and access management tools (e.g., LDAP, Kerberos, Active Directory, IAM)</li>\n<li>Hands-on experience with cloud platforms (AWS, Azure, GCP)</li>\n<li>Hands-on experience with the Kubernetes ecosystem for setup, administration, troubleshooting and tuning</li>\n<li>Familiarity with the Hadoop and/or Spark ecosystems</li>\n</ul>\n<p><strong>How you'll stand out </strong></p>\n<ul>\n<li>Experience with Python</li>\n<li>Data-Science knowledge</li>\n<li>Basic knowledge of Java</li>\n<li>Familiarity with ML-Ops practices and tools</li>\n</ul>\n<p><strong>What does the hiring process look like? </strong><strong>#LI-Hybrid #LI-AN1</strong></p>\n<ul>\n<li>Initial call with a member of our Technical Recruiting team</li>\n<li>Video call with the TAM Hiring Manager</li>\n<li>Technical Assessment to show your skills (Home Test)</li>\n<li>Debrief of your Tech Assessment with TAM Team members</li>\n<li>Customer-facing situational peer interview</li>\n<li>Final Interview with the VP Field Engineering</li>\n</ul>\n<p>#LI-JR1 <br>#L1-AH1</p>\n<p><strong>What are you waiting for!</strong></p>\n<p>At Dataiku, you'll be part of a journey to shape the ever-evolving world of AI. We're not just building a product; we're crafting the future of AI. If you're ready to make a significant impact in a company that values innovation, collaboration, and your personal growth, we can't wait to welcome you to Dataiku! And if you’d like to learn even more about working here, you can visit our <a href=\"https://www.linkedin.com/company/dataiku/\" rel=\"nofollow ugc noopener\" target=\"_blank\">Dataiku LinkedIn page</a>.</p>\n<p><em>Our practices are rooted in the idea that everyone should be treated with dignity, decency and fairness. Dataiku also believes that a diverse identity is a source of strength and allows us to optimize across the many dimensions that are needed for our success. Therefore, we are proud to be an equal opportunity employer. All employment practices are based on business needs, without regard to race, ethnicity, gender identity or expression, sexual orientation, religion, age, neurodiversity, disability status, citizenship, veteran status or any other aspect which makes an individual unique or protected by laws and regulations in the locations where we operate. This applies to all policies and procedures related to recruitment and hiring, compensation, benefits, performance, promotion and termination and all other conditions and terms of employment. If you need assistance or an accommodation, please contact us at: </em><a href=\"http://reasonable-accommodations@dataiku.com/\" rel=\"nofollow ugc noopener\" target=\"_blank\">reasonable-accommodations@dataiku.com</a></p>\n<hr>\n<p><strong>Protect yourself from fraudulent recruitment activity</strong></p>\n<p><em>Dataiku will never ask you for payment of any type during the interview or hiring process. Other than our video-conference application, Zoom, we will also never ask you to make purchases or download third-party applications during the process. If you experience something out of the ordinary or suspect fraudulent activity, please review our page on identifying and reporting fraudulent activity <a href=\"https://www.dataiku.com/legal/dataiku-recruitment-scams/\" rel=\"nofollow ugc noopener\" target=\"_blank\">here.</a></em></p>",
+            "pubDate": "2026-10-05T18:57:59+00:00"
           }
-        ]
+        ],
+        "statusCode": 200,
+        "success": true
       }
     },
     "empty": {
       "status": 200,
       "headers": {
-        "content-type": "application/json"
+        "content-type": "application/json; charset=utf-8"
       },
       "provenance": "recorded",
       "body": {
+        "apiVersion": "2.2.19",
+        "documentationUrl": "https://jobi.cy/apidocs",
+        "friendlyNotice": "Thanks for using Jobicy API! Please ensure Jobicy is clearly credited with a direct link to the source, and all application buttons redirect to the original job URL provided in this feed. That’s all! You might be building something amazing, we wish you the best of luck!",
         "jobCount": 0,
-        "friendlyNotice": "Data provided by Jobicy. Please use the original application URL to apply, and credit Jobicy as the source.",
-        "message": "",
+        "lastUpdate": "",
+        "nextCursor": null,
+        "hasMore": false,
+        "appliedFilters": {
+          "count": 50,
+          "tag": "zzzzzunobtainiumqq"
+        },
+        "jobs": [],
+        "statusCode": 200,
         "success": true,
-        "jobs": []
+        "message": "No jobs found for the applied filters."
       }
     },
     "malformed": {
@@ -72,8 +109,8 @@
       },
       "provenance": "synthetic",
       "body": {
-        "success": false,
-        "message": "Rate limit exceeded"
+        "message": "Rate limit exceeded. Please retry in 60 seconds.",
+        "success": false
       }
     },
     "http_500": {
@@ -83,8 +120,8 @@
       },
       "provenance": "synthetic",
       "body": {
-        "success": false,
-        "message": "Internal server error"
+        "message": "Internal server error",
+        "success": false
       }
     }
   }
