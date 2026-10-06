@@ -18,6 +18,15 @@ API_ROOT = "https://api.smartrecruiters.com/v1/companies"
 PAGE_LIMIT = 100
 
 
+def _section_text(value: object) -> str | None:
+    """Extract the text of a ``jobAd.sections`` value, dict or legacy string."""
+    if isinstance(value, dict):
+        return value.get("text")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
 class SmartRecruitersCollector(Collector):
     name = "smartrecruiters"
     query_based = False
@@ -44,9 +53,10 @@ class SmartRecruitersCollector(Collector):
             if posting_id is None:
                 continue
             detail = self._detail(company, str(posting_id))
-            # The detail payload nests the description under `jobAd.sections`.
-            # Older/tenant-variant responses have been seen with it flattened at
-            # the top level, so accept either shape.
+            # The detail payload nests the description under `jobAd.sections`,
+            # where each section is {title, text}. Older/tenant-variant responses
+            # have been seen with bare-string sections flattened at the top
+            # level, so accept either shape.
             job_ad = detail.get("jobAd") or {}
             sections = job_ad.get("sections") or detail.get("sections") or {}
             url = detail.get("postingUrl") or detail.get("applyUrl") or item.get("postingUrl") or ""
@@ -54,26 +64,33 @@ class SmartRecruitersCollector(Collector):
                 continue
             location = detail.get("location") or item.get("location") or {}
             description = "\n\n".join(
-                str(sections[key])
-                for key in (
-                    "jobDescription",
-                    "additionalInformation",
-                    "qualifications",
-                    "responsibilities",
+                part
+                for part in (
+                    _section_text(sections[key])
+                    for key in (
+                        "jobDescription",
+                        "additionalInformation",
+                        "qualifications",
+                        "responsibilities",
+                    )
+                    if sections.get(key)
                 )
-                if sections.get(key)
+                if part
             )
+            company_obj = detail.get("company") or item.get("company") or {}
             jobs.append(
                 Job(
                     source=self.name,
                     source_id=str(posting_id),
-                    title=detail.get("title") or item.get("title"),
-                    company=detail.get("companyName") or company,
-                    location=location.get("displayName") or location.get("city"),
+                    title=detail.get("name") or item.get("name"),
+                    company=company_obj.get("name") or company,
+                    location=location.get("fullLocation") or location.get("city"),
                     url=url,
                     description_raw=description,
                     posted_at=parse_datetime(
-                        detail.get("modified") or detail.get("created") or item.get("created")
+                        detail.get("releasedDate")
+                        or detail.get("created")
+                        or item.get("releasedDate")
                     ),
                 )
             )

@@ -20,30 +20,47 @@ def _collector(companies: list[str] | None = None, max_attempts: int = 3):
 
 def test_normal_case_maps_job(monkeypatch):
     log = replay.install_two_step(monkeypatch, replay.load("smartrecruiters")["normal"])
-    jobs = _collector().fetch("backend")
+    jobs = _collector().fetch("machine")
     assert len(jobs) == 1
     job = jobs[0]
     assert job.source == "smartrecruiters"
-    assert job.title == "Software Engineer, Backend"
+    assert job.title == "Machine Learning Engineer (m/f/d)"
     assert job.company == "Sportradar"
-    assert job.location == "Valletta, Malta"
-    assert job.source_id == "744000153369739"
-    assert job.url == "https://jobs.sportradar.com/744000153369739-software-engineer-backend"
+    assert job.location == "Ljubljana, , Slovenia"
+    assert job.source_id == "744000153670469"
+    assert job.url == (
+        "https://jobs.smartrecruiters.com/Sportradar/"
+        "744000153670469-machine-learning-engineer-m-f-d-"
+    )
     assert job.posted_at is not None
     # listing, then detail
     assert log == [
         f"{API_ROOT}/sportradar/postings",
-        f"{API_ROOT}/sportradar/postings/744000153369739",
+        f"{API_ROOT}/sportradar/postings/744000153670469",
     ]
 
 
-def test_description_sections_are_joined(monkeypatch):
+def test_title_comes_from_name_key(monkeypatch):
+    """The API names the job posting `name`, not `title`."""
+    replay.install_two_step(monkeypatch, replay.load("smartrecruiters")["normal"])
+    assert _collector().fetch("")[0].title == "Machine Learning Engineer (m/f/d)"
+
+
+def test_company_comes_from_nested_object(monkeypatch):
+    """`company` is an object {name, identifier}, not a companyName string."""
+    case = replay.load("smartrecruiters")["normal"]
+    detail = dict(case.body)
+    assert detail["company"]["name"] == "Sportradar"
+    replay.install_two_step(monkeypatch, case)
+    assert _collector().fetch("")[0].company == "Sportradar"
+
+
+def test_description_section_text_is_joined(monkeypatch):
     replay.install_two_step(monkeypatch, replay.load("smartrecruiters")["normal"])
     description = _collector().fetch("")[0].description_raw
-    assert "live betting feeds" in description
-    assert "Remote-friendly within Europe" in description
-    assert "simple designs" in description
-    assert "on-call" in description
+    assert "Machine Learning Engineer" in description
+    assert "predictive analytics" in description
+    assert "equal access" in description
 
 
 def test_recorded_detail_nests_sections_under_job_ad():
@@ -51,6 +68,8 @@ def test_recorded_detail_nests_sections_under_job_ad():
     body = replay.load("smartrecruiters")["normal"].body
     assert "sections" not in body
     assert "sections" in body["jobAd"]
+    section = body["jobAd"]["sections"]["jobDescription"]
+    assert isinstance(section, dict) and "text" in section
 
 
 def test_flattened_sections_are_still_accepted(monkeypatch):
@@ -71,7 +90,7 @@ def test_flattened_sections_are_still_accepted(monkeypatch):
             provenance=case.provenance,
         ),
     )
-    assert "live betting feeds" in _collector().fetch("")[0].description_raw
+    assert "Machine Learning Engineer" in _collector().fetch("")[0].description_raw
 
 
 def test_apply_url_is_the_fallback_when_no_posting_url(monkeypatch):
@@ -90,31 +109,17 @@ def test_apply_url_is_the_fallback_when_no_posting_url(monkeypatch):
             provenance=case.provenance,
         ),
     )
-    assert _collector().fetch("")[0].url.endswith("/apply/744000153369739")
-
-
-def test_listing_only_url_is_used_if_detail_is_empty(monkeypatch):
-    case = replay.load("smartrecruiters")["normal"]
-    replay.install_two_step(
-        monkeypatch,
-        replay.Recorded(
-            source=case.source,
-            case=case.case,
-            status=case.status,
-            headers=case.headers,
-            body={},
-            listing=case.listing,
-            url=case.url,
-            provenance=case.provenance,
-        ),
+    assert (
+        _collector()
+        .fetch("")[0]
+        .url.endswith("/744000153670469-machine-learning-engineer-m-f-d-?oga=true")
     )
-    job = _collector().fetch("")[0]
-    assert job.url == case.listing["content"][0]["postingUrl"]
-    assert job.title == "Software Engineer, Backend"
 
 
-def test_listings_without_an_id_are_skipped(monkeypatch):
+def test_posting_without_any_url_is_skipped(monkeypatch):
+    """No postingUrl/applyUrl survives -> the posting is unusable and skipped."""
     case = replay.load("smartrecruiters")["normal"]
+    body = {k: v for k, v in case.body.items() if k not in ("postingUrl", "applyUrl")}
     replay.install_two_step(
         monkeypatch,
         replay.Recorded(
@@ -122,8 +127,8 @@ def test_listings_without_an_id_are_skipped(monkeypatch):
             case=case.case,
             status=case.status,
             headers=case.headers,
-            body=case.body,
-            listing={"content": [{"title": "No id"}], "total": 1},
+            body=body,
+            listing=case.listing,
             url=case.url,
             provenance=case.provenance,
         ),
@@ -182,7 +187,7 @@ def test_500_is_retried_then_yields_empty(monkeypatch):
 def test_429_recovers_when_the_limit_lifts(monkeypatch):
     cases = replay.load("smartrecruiters")
     log = replay.install_two_step(monkeypatch, cases["normal"], prefix=[cases["http_429"]])
-    assert len(_collector().fetch("backend")) == 1
+    assert len(_collector().fetch("machine")) == 1
     # one 429, then the listing, then the detail
     assert len(log) == 3
 
@@ -195,8 +200,8 @@ def test_failure_cases_never_raise(monkeypatch, case_name):
 
 def test_query_filters_on_title(monkeypatch):
     replay.install_two_step(monkeypatch, replay.load("smartrecruiters")["normal"])
-    assert len(_collector().fetch("backend")) == 1
-    assert _collector().fetch("cobol") == []
+    assert len(_collector().fetch("machine")) == 1
+    assert _collector().fetch("accountant") == []
 
 
 def test_collector_identity():
