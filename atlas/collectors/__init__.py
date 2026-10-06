@@ -11,6 +11,7 @@ from .base import Collector, GetJson, default_get_json, parse_datetime
 from .feeds import RemoteOKCollector, RemotiveCollector
 from .greenhouse import GreenhouseCollector
 from .himalayas import HimalayasCollector
+from .jobicy import JobicyCollector
 from .lever import LeverCollector
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "GetJson",
     "GreenhouseCollector",
     "HimalayasCollector",
+    "JobicyCollector",
     "LeverCollector",
     "RemoteOKCollector",
     "RemotiveCollector",
@@ -65,4 +67,6 @@ def build_collectors(
         collectors.append(HimalayasCollector(get_json=get_json))
     if sources.arbeitnow:
         collectors.append(ArbeitnowCollector(get_json=get_json))
+    if sources.jobicy:
+        collectors.append(JobicyCollector(get_json=get_json))
     return collectors

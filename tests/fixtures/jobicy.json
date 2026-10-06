@@ -1,0 +1,91 @@
+{
+  "source": "jobicy",
+  "url": "https://jobicy.com/api/v2/remote-jobs?count=50",
+  "captured": "2026-10-05",
+  "notes": "Public API. friendlyNotice requires crediting Jobicy and linking to the original application URL. robots.txt allows User-agent: *. No API key required. Query parameter is 'q'.",
+  "cases": {
+    "normal": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "jobCount": 1,
+        "friendlyNotice": "Data provided by Jobicy. Please use the original application URL to apply, and credit Jobicy as the source.",
+        "message": "",
+        "success": true,
+        "jobs": [
+          {
+            "id": 154612,
+            "url": "https://jobicy.com/jobs/154612-customer-success-engineer",
+            "title": "Customer Success Engineer",
+            "companyName": "Algolia",
+            "companyLogo": "https://jobicy.com/logo.png",
+            "companyDescription": "Algolia is a search engine for developers.",
+            "location": "Europe",
+            "industry": "Software",
+            "tags": [
+              "Customer Success"
+            ],
+            "jobType": "Full-time",
+            "pubDate": 1791000000,
+            "experienceLevel": "Mid",
+            "salary": "",
+            "currency": "",
+            "remote": true,
+            "description": "You will be the technical bridge between Algolia's customers and our product team.",
+            "requirements": [
+              "Solid technical communication skills"
+            ]
+          }
+        ]
+      }
+    },
+    "empty": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "recorded",
+      "body": {
+        "jobCount": 0,
+        "friendlyNotice": "Data provided by Jobicy. Please use the original application URL to apply, and credit Jobicy as the source.",
+        "message": "",
+        "success": true,
+        "jobs": []
+      }
+    },
+    "malformed": {
+      "status": 200,
+      "headers": {
+        "content-type": "text/html"
+      },
+      "provenance": "synthetic",
+      "body": "<html><body>Jobicy is down for maintenance</body></html>"
+    },
+    "http_429": {
+      "status": 429,
+      "headers": {
+        "content-type": "application/json",
+        "Retry-After": "60"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "success": false,
+        "message": "Rate limit exceeded"
+      }
+    },
+    "http_500": {
+      "status": 500,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "provenance": "synthetic",
+      "body": {
+        "success": false,
+        "message": "Internal server error"
+      }
+    }
+  }
+}

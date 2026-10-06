@@ -53,6 +53,7 @@ sources:
   # and the source's licence before enabling.
   himalayas: false      # public API, max 20/page, requires attribution
   arbeitnow: false     # free public API, please link back to arbeitnow.com
+  jobicy: false       # friendlyNotice: credit Jobicy, link the original URL
   adzuna_country: "in"
   results_per_page: 50
 
