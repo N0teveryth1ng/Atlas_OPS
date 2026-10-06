@@ -83,8 +83,39 @@ def normalize_job(job: Job, *, now: datetime | None = None) -> Job:
     return job
 
 
+#: Hosts whose pages are the employer's own ATS entry. When the same job is
+#: found both on an ATS and on an aggregator, the ATS URL is the canonical one to
+#: show a human: it is first-party, stable, and where you actually apply.
+#: Order is significant - first match wins.
+ATS_HOSTS = (
+    "boards.greenhouse.io",
+    "boards-api.greenhouse.io",
+    "job-boards.greenhouse.io",
+    "jobs.lever.co",
+    "jobs.ashbyhq.com",
+    "apply.workable.com",
+    "jobs.smartrecruiters.com",
+    "recruitee.com",
+    "teamtailor.com",
+    "hire.lever.co",
+)
+
+
+def is_ats_url(url: str | None) -> bool:
+    """True when the URL points at a known ATS board rather than an aggregator."""
+    if not url:
+        return False
+    lowered = url.lower()
+    return any(host in lowered for host in ATS_HOSTS)
+
+
 def _merge_into(target: Job, other: Job) -> None:
-    target.urls = sorted({target.url, other.url, *target.urls, *other.urls})
+    urls = {target.url, other.url, *target.urls, *other.urls}
+    target.urls = sorted(urls)
+    # Prefer an ATS URL as canonical. Equal on both sides (or neither) keeps
+    # whatever the target already had, so behaviour is unchanged there.
+    if not is_ats_url(target.url) and is_ats_url(other.url):
+        target.url = other.url
 
 
 def dedupe_jobs(jobs: list[Job]) -> list[Job]:
