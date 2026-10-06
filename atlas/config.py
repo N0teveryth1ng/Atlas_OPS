@@ -80,6 +80,8 @@ class SourcesConfig(BaseModel):
     #: Opt-in: robots.txt allows crawling, but no clear third-party feed licence
     #: was found in Workable's public terms.
     workable: bool = False
+    #: Opt-in: documented public careers-site API, no key required.
+    recruitee: bool = False
     adzuna_country: str = "in"
     results_per_page: int = 50
 

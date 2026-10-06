@@ -13,6 +13,7 @@ from .greenhouse import GreenhouseCollector
 from .himalayas import HimalayasCollector
 from .jobicy import JobicyCollector
 from .lever import LeverCollector
+from .recruitee import RecruiteeCollector
 from .smartrecruiters import SmartRecruitersCollector
 from .weworkremotely import WeWorkRemotelyCollector
 from .workable import WorkableCollector
@@ -27,6 +28,7 @@ __all__ = [
     "HimalayasCollector",
     "JobicyCollector",
     "LeverCollector",
+    "RecruiteeCollector",
     "RemoteOKCollector",
     "RemotiveCollector",
     "SmartRecruitersCollector",
@@ -82,4 +84,6 @@ def build_collectors(
         collectors.append(SmartRecruitersCollector(companies["smartrecruiters"], get_json=get_json))
     if sources.workable and companies.get("workable"):
         collectors.append(WorkableCollector(companies["workable"], get_json=get_json))
+    if sources.recruitee and companies.get("recruitee"):
+        collectors.append(RecruiteeCollector(companies["recruitee"], get_json=get_json))
     return collectors
