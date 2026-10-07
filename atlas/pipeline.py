@@ -100,22 +100,40 @@ def _parse_dt(value: str | None) -> datetime | None:
 
 
 def load_jobs(
-    conn: sqlite3.Connection, *, run_id: int | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    *,
+    run_id: int | None = None,
+    limit: int | None = None,
+    statuses: tuple[JobStatus, ...] | None = (JobStatus.new,),
 ) -> list[tuple[int, Job]]:
+    """Stored jobs to process, newest first.
+
+    ``statuses`` defaults to ``new`` only. A job that already finished (``rejected``,
+    ``needs_review``, ``sent``) or was left mid-pipeline by an interrupted run cannot
+    legally restart at ``parsed``, so selecting it would spend the run on
+    IllegalTransition warnings while the digest reported "no matches". Callers that
+    deliberately want every row pass ``statuses=None``.
+    """
     sql = (
         "SELECT id, source, source_id, dedupe_key, title, company, location, remote_type, "
         "url, urls_json, description_raw, posted_at, fetched_at FROM jobs"
     )
-    params: tuple = ()
+    clauses: list[str] = []
+    params: list = []
     if run_id is not None:
-        sql += " WHERE run_id = ?"
-        params = (run_id,)
+        clauses.append("run_id = ?")
+        params.append(run_id)
+    if statuses:
+        clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+        params.extend(status.value for status in statuses)
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY id DESC"
     if limit:
         sql += f" LIMIT {int(limit)}"
 
     out: list[tuple[int, Job]] = []
-    for row in conn.execute(sql, params).fetchall():
+    for row in conn.execute(sql, tuple(params)).fetchall():
         job = Job(
             source=row["source"],
             source_id=row["source_id"],
@@ -364,6 +382,12 @@ def run_pipeline(
     processed: list[ProcessedJob] = []
     jobs = load_jobs(conn, limit=limit)
     logger.info("Pipeline: processing %d job(s)", len(jobs))
+    stored = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    if stored > len(jobs):
+        logger.info(
+            "Pipeline: skipping %d stored job(s) that are already processed or mid-run",
+            stored - len(jobs),
+        )
     with traced_stage("pipeline.run", stage="run", run_id=run_id, jobs=len(jobs)) as run_span:
         for job_id, job in jobs:
             try:
