@@ -3,8 +3,9 @@ import json
 from fake_llm import make_client
 
 from atlas.config import get_settings
-from atlas.db import connect, init_db, save_profile, start_run, upsert_job
-from atlas.pipeline import process_job
+from atlas.db import connect, init_db, save_profile, set_job_status, start_run, upsert_job
+from atlas.job_status import JobStatus
+from atlas.pipeline import load_jobs, process_job, run_pipeline
 from atlas.schemas import CandidateProfile, Job, Proficiency, Recommendation, Skill
 
 PARSED = {
@@ -100,3 +101,63 @@ def test_process_job_filter_rejection_short_circuits(tmp_path):
     assert result.final_recommendation == Recommendation.skip
     rejection_rules = json.dumps([r.rule_id for r in result.filter_result.rejections])
     assert "senior_title" in rejection_rules
+
+
+def _client():
+    return make_client(parsed=PARSED, verdict=EVAL, verifier=VERIFY_OK)
+
+
+def _mark_rejected(conn, job_id: int) -> None:
+    """Drive the state machine to a terminal state the legal way."""
+    set_job_status(conn, job_id, JobStatus.parsed)
+    set_job_status(conn, job_id, JobStatus.rejected)
+
+
+def test_load_jobs_returns_only_unprocessed_jobs_by_default(tmp_path):
+    conn, run_id, _profile, job_id, job = _setup(tmp_path)
+    second_id, _ = upsert_job(
+        conn, run_id, job.model_copy(update={"url": "http://x/2", "dedupe_key": "k2"})
+    )
+    _mark_rejected(conn, job_id)
+
+    assert [jid for jid, _ in load_jobs(conn)] == [second_id]
+    # The default is a filter, not a deletion: every row stays reachable.
+    assert len(load_jobs(conn, statuses=None)) == 2
+    conn.close()
+
+
+def test_run_pipeline_skips_jobs_that_cannot_restart(tmp_path, caplog):
+    """A stored rejected job must not be re-fed to the state machine."""
+    conn, run_id, profile, job_id, _job = _setup(tmp_path)
+    _mark_rejected(conn, job_id)
+
+    results = run_pipeline(conn, run_id, profile, get_settings(), _client())
+
+    assert results == []
+    assert "failed" not in caplog.text
+    assert "illegal job transition" not in caplog.text
+    assert (
+        conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()["status"]
+        == "rejected"
+    )
+    conn.close()
+
+
+def test_run_limit_counts_unprocessed_jobs_only(tmp_path):
+    """`run --limit N` must mean N jobs it can actually start, not N newest rows."""
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    fresh: list[int] = []
+    for i in range(4):
+        jid, _ = upsert_job(
+            conn, run_id, job.model_copy(update={"url": f"http://x/{i}", "dedupe_key": f"k{i}"})
+        )
+        fresh.append(jid)
+    for jid in fresh[:2]:
+        _mark_rejected(conn, jid)
+
+    results = run_pipeline(conn, run_id, profile, get_settings(), _client(), limit=2)
+
+    processed_ids = {result.job_id for result in results}
+    assert len(processed_ids) == 2
+    assert processed_ids.isdisjoint(set(fresh[:2]))
+    conn.close()
