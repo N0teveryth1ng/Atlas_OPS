@@ -161,3 +161,21 @@ def test_run_limit_counts_unprocessed_jobs_only(tmp_path):
     assert len(processed_ids) == 2
     assert processed_ids.isdisjoint(set(fresh[:2]))
     conn.close()
+
+
+def test_skip_log_counts_only_non_new_rows(tmp_path, caplog):
+    """Jobs excluded by `--limit` are not "already processed"."""
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    stored: list[int] = []
+    for i in range(4):
+        jid, _ = upsert_job(
+            conn, run_id, job.model_copy(update={"url": f"http://x/{i}", "dedupe_key": f"k{i}"})
+        )
+        stored.append(jid)
+    for jid in stored[:2]:
+        _mark_rejected(conn, jid)
+
+    run_pipeline(conn, run_id, profile, get_settings(), _client(), limit=2)
+
+    assert "skipping 2 stored job(s)" in caplog.text
+    conn.close()

@@ -382,11 +382,13 @@ def run_pipeline(
     processed: list[ProcessedJob] = []
     jobs = load_jobs(conn, limit=limit)
     logger.info("Pipeline: processing %d job(s)", len(jobs))
-    stored = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-    if stored > len(jobs):
+    skipped = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE status != ?", (JobStatus.new.value,)
+    ).fetchone()[0]
+    if skipped:
         logger.info(
             "Pipeline: skipping %d stored job(s) that are already processed or mid-run",
-            stored - len(jobs),
+            skipped,
         )
     with traced_stage("pipeline.run", stage="run", run_id=run_id, jobs=len(jobs)) as run_span:
         for job_id, job in jobs:
