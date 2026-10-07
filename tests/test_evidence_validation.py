@@ -127,6 +127,45 @@ def test_wrong_source_rejected():
     assert validate_verdict_evidence(verdict, JD, PROFILE_TEXT)
 
 
+def test_unicode_hyphen_in_quote_matches_ascii_jd():
+    """Postings use U+2011 non-breaking hyphens; the model echoes ASCII ones."""
+    verdict = Verdict(
+        fit_score=80,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="0\u20112   YEARS experience", source=EvidenceSource.jd)],
+    )
+    assert validate_verdict_evidence(verdict, JD, PROFILE_TEXT) == []
+
+
+def test_ascii_quote_matches_unicode_hyphen_in_jd():
+    jd = "Requirements: multi\u2011GPU and multi\u2011node serving, fast\u2011paced environment."
+    verdict = Verdict(
+        fit_score=80,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="multi-GPU and multi-node serving", source=EvidenceSource.jd)],
+    )
+    assert validate_verdict_evidence(verdict, jd, PROFILE_TEXT) == []
+
+
+def test_non_breaking_space_matches_ordinary_space():
+    verdict = Verdict(
+        fit_score=80,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="Junior\u00a0Python Developer", source=EvidenceSource.jd)],
+    )
+    assert validate_verdict_evidence(verdict, JD, PROFILE_TEXT) == []
+
+
+def test_dash_folding_does_not_fuzzy_match_a_different_phrase():
+    """Fold codepoints only: a hyphen is not a space, and words still have to match."""
+    verdict = Verdict(
+        fit_score=80,
+        recommendation=Recommendation.apply,
+        reasons_for=[Evidence(quote="0 2 years experience", source=EvidenceSource.jd)],
+    )
+    assert validate_verdict_evidence(verdict, JD, PROFILE_TEXT)
+
+
 def test_verifier_evidence_validation():
     good = VerifierVerdict(
         veto=True,

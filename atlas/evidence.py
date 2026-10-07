@@ -2,11 +2,18 @@
 
 Every evaluator/verifier evidence item must cite a verbatim quote from either
 the raw job description (``jd``) or the rendered candidate profile
-(``profile``). Matching is whitespace- and case-insensitive only — no fuzzy
-matching, no stemming — and quotes shorter than ``MIN_QUOTE_LEN`` are rejected.
+(``profile``). Matching is whitespace-, case- and Unicode-variant-insensitive —
+``NFKC`` plus dash folding, so a quote that differs only in codepoint (a U+2011
+non-breaking hyphen in the posting versus an ASCII ``-`` echoed by the model,
+an en dash, a non-breaking space) still counts as the same text — but there is
+no fuzzy matching and no stemming, and quotes shorter than ``MIN_QUOTE_LEN``
+are rejected. Live runs without dash folding burned all three retry attempts
+on such posts and routed the job to needs_review.
 """
 
 from __future__ import annotations
+
+import unicodedata
 
 from .schemas import (
     DecisionCritic,
@@ -19,6 +26,18 @@ from .schemas import (
 
 MIN_QUOTE_LEN = 8
 
+#: Unicode hyphens and dashes that must compare equal to a plain ASCII hyphen.
+_DASHES = str.maketrans(
+    {
+        "\u2010": "-",  # HYPHEN
+        "\u2011": "-",  # NON-BREAKING HYPHEN
+        "\u2012": "-",  # FIGURE DASH
+        "\u2013": "-",  # EN DASH
+        "\u2014": "-",  # EM DASH
+        "\u2212": "-",  # MINUS SIGN
+    }
+)
+
 
 class EvidenceValidationError(RuntimeError):
     """Raised when a verdict cites evidence not present in the source."""
@@ -29,7 +48,8 @@ class EvidenceValidationError(RuntimeError):
 
 
 def _normalize(text: str) -> str:
-    return " ".join((text or "").split()).lower()
+    cleaned = unicodedata.normalize("NFKC", text or "").translate(_DASHES)
+    return " ".join(cleaned.split()).lower()
 
 
 def _is_valid(evidence: Evidence, jd_text: str, profile_text: str) -> bool:
@@ -103,7 +123,8 @@ def validation_retry_message(errors: list[str]) -> str:
         "Your previous answer was REJECTED: every quote in reasons_for, reasons_against, "
         "and seniority_assessment must be a verbatim substring of the cited source (the raw "
         "job posting for source=jd, the candidate profile for source=profile), at least "
-        f"{MIN_QUOTE_LEN} characters, whitespace/case differences allowed. Offending items:\n"
+        f"{MIN_QUOTE_LEN} characters, whitespace/case/dash-variant differences allowed. "
+        "Offending items:\n"
         f"{joined}\n"
         "Return corrected JSON only."
     )
