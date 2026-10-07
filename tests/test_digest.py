@@ -240,3 +240,20 @@ def test_malformed_url_stays_data_and_never_interrupts_rendering():
     assert f"    via remoteok: {REMOTEOK_URL}" in text
     # Kept as data, not dropped.
     assert MALFORMED_URL in item.urls
+
+
+CREDENTIAL_URL = "https://remoteok.com@evil.example/1"
+
+
+def test_credentialed_url_is_never_linked():
+    """userinfo makes a host read like a trusted source while pointing elsewhere."""
+    digest = build_digest([_merged_result(urls=[CREDENTIAL_URL, HIMALAYAS_URL])], get_settings())
+    item = digest.sections[0].items[0]
+    # No credit: the userinfo would be rendered as the display name of a link.
+    assert [(c.name, c.url) for c in item.credits] == [("himalayas", HIMALAYAS_URL)]
+    html = render_html(digest)
+    assert f"href='{CREDENTIAL_URL}'" not in html
+    assert "<strong>Junior Python Dev</strong>" in html
+    assert f"<a href='{HIMALAYAS_URL}'" in html
+    # Still on the item as data.
+    assert CREDENTIAL_URL in item.urls

@@ -93,7 +93,7 @@ def _job_urls(job) -> list[str]:
 
 
 def _is_http_url(url: str) -> bool:
-    """True only for absolute ``http``/``https`` URLs that name a host.
+    """True only for absolute ``http``/``https`` URLs that are safe to link.
 
     Those are the only URLs we are willing to turn into a clickable link in a
     digest: a job URL arriving from a feed with any other scheme (`javascript:`,
@@ -101,12 +101,17 @@ def _is_http_url(url: str) -> bool:
     a near-miss like ``https:job`` - right scheme, no host - is rejected too.
     A malformed URL (``http://[::1``) makes :func:`urlparse` raise, so the parse
     is guarded: it is data, not a link, and it must never interrupt rendering.
+    A URL carrying credentials (``https://remoteok.com@evil.example/1``) is
+    rejected as well: the userinfo would let a host read like a trusted source
+    while pointing somewhere else entirely.
     """
     try:
         parsed = urlparse(url)
     except ValueError:
         return False
-    return parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
+    if parsed.scheme.lower() not in ("http", "https"):
+        return False
+    return bool(parsed.hostname) and parsed.username is None and parsed.password is None
 
 
 def _source_credits(urls: list[str]) -> list[SourceCredit]:
