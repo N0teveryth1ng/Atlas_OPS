@@ -131,6 +131,41 @@ def test_status_update_rejects_unknown_status_and_job(tmp_path):
     assert client.post("/jobs/9999/status/APLD").status_code == 404
 
 
+def test_status_update_rejects_cross_origin_post(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id = _add_job(conn, run_id, url="http://x/1", passed=True)
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.post(
+        f"/jobs/{job_id}/status/APLD",
+        headers={"origin": "http://evil.example"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 403
+
+    conn = connect(tmp_path / "dash.db")
+    row = conn.execute("SELECT application_status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    conn.close()
+    assert row["application_status"] == "PEND"
+
+
+def test_status_update_allows_same_origin_post(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id = _add_job(conn, run_id, url="http://x/1", passed=True)
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.post(
+        f"/jobs/{job_id}/status/NTAPLD",
+        headers={"origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
 def test_api_matched_returns_json(tmp_path):
     conn = _connect(tmp_path)
     run_id = start_run(conn, "test")
