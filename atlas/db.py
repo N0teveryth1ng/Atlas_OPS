@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     posted_at       TEXT,
     fetched_at      TEXT,
     emailed_at      TEXT,
-    status          TEXT NOT NULL DEFAULT 'new'
+    status          TEXT NOT NULL DEFAULT 'new',
+    application_status TEXT NOT NULL DEFAULT 'PEND'
 );
 
 CREATE TABLE IF NOT EXISTS parsed_jds (
@@ -177,6 +178,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN emailed_at TEXT")
     if "status" not in job_cols:
         conn.execute("ALTER TABLE jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'new'")
+    if "application_status" not in job_cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN application_status TEXT NOT NULL DEFAULT 'PEND'")
     digest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(digests)")}
     if "text" not in digest_cols:
         conn.execute("ALTER TABLE digests ADD COLUMN text TEXT")
@@ -304,6 +307,41 @@ def set_job_status(conn: sqlite3.Connection, job_id: int, new_status: JobStatus)
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (resolved.value, job_id))
     conn.commit()
     return resolved
+
+
+# --------------------------------------------------------------------------- #
+# Application status (manual dashboard bookkeeping)
+# --------------------------------------------------------------------------- #
+
+#: Allowed values of ``jobs.application_status``: applied, not applied, pending.
+APPLICATION_STATUSES: tuple[str, ...] = ("APLD", "NTAPLD", "PEND")
+
+
+def matched_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Jobs that passed the hard filter at least once — the dashboard's list."""
+    return conn.execute("""
+        SELECT j.id, j.title, j.company, j.location, j.url, j.status,
+               j.application_status
+        FROM jobs j
+        WHERE EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 1
+        )
+        ORDER BY j.id DESC
+        """).fetchall()
+
+
+def set_application_status(conn: sqlite3.Connection, job_id: int, status: str) -> None:
+    """Set the human-tracked application status of one job.
+
+    Raises ``ValueError`` for an unknown status and ``KeyError`` for a
+    missing job.
+    """
+    if status not in APPLICATION_STATUSES:
+        raise ValueError(f"unknown application status: {status!r}")
+    cur = conn.execute("UPDATE jobs SET application_status = ? WHERE id = ?", (status, job_id))
+    if cur.rowcount == 0:
+        raise KeyError(f"job {job_id} not found")
+    conn.commit()
 
 
 # --------------------------------------------------------------------------- #

@@ -92,7 +92,7 @@ def _job_urls(job) -> list[str]:
     return seen
 
 
-def _is_http_url(url: str) -> bool:
+def is_http_url(url: str) -> bool:
     """True only for absolute ``http``/``https`` URLs that are safe to link.
 
     Those are the only URLs we are willing to turn into a clickable link in a
@@ -126,7 +126,7 @@ def _source_credits(urls: list[str]) -> list[SourceCredit]:
     seen_sources: set[str] = set()
     seen_unknown: set[str] = set()
     for url in urls:
-        if not _is_http_url(url):
+        if not is_http_url(url):
             continue
         source = source_for_url(url)
         if source is not None:
@@ -319,7 +319,7 @@ def render_html(digest: Digest) -> str:
         )
         for item in section.items:
             raw_link = item.urls[0] if item.urls else ""
-            link = raw_link if _is_http_url(raw_link) else ""
+            link = raw_link if is_http_url(raw_link) else ""
             title = esc(item.title or "Untitled role")
             title_html = f"<a href='{esc(link)}' style='color:#0b5'>{title}</a>" if link else title
             rows.append(

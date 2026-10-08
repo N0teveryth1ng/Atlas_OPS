@@ -11,6 +11,10 @@ defusedxml==0.7.1
 # --- observability (optional; no-ops without BRAINTRUST_API_KEY) ---
 braintrust==0.44.0
 
+# --- dashboard (local web UI) ---
+fastapi==0.133.1
+uvicorn==0.41.0
+
 # --- deferred: browser automation for Phase 8 auto-apply ---
 # Kept because auto_applications/ is retained for later; not used by the pipeline.
 playwright==1.62.0
