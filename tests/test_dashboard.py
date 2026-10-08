@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from argparse import Namespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -159,3 +161,19 @@ def test_dashboard_parser_exposes_host_and_port():
     assert args.func is cli.cmd_dashboard
     assert args.host == "0.0.0.0"
     assert args.port == 9001
+
+
+def test_dashboard_warns_only_for_non_loopback_hosts(monkeypatch, capsys):
+    import uvicorn
+
+    started = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.update(kwargs))
+
+    rc = cli.cmd_dashboard(Namespace(host="0.0.0.0", port=9000))
+    assert rc == 0
+    assert "no authentication" in capsys.readouterr().err
+    assert started["host"] == "0.0.0.0"
+
+    rc = cli.cmd_dashboard(Namespace(host="127.0.0.1", port=8000))
+    assert rc == 0
+    assert "no authentication" not in capsys.readouterr().err
