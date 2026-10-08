@@ -327,6 +327,12 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
     from .dashboard import create_app
 
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        print(
+            "WARNING: dashboard has no authentication; binding to a non-loopback "
+            "host exposes it to the network.",
+            file=sys.stderr,
+        )
     print(f"Dashboard: http://{args.host}:{args.port}/ (Ctrl+C to stop)")
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
     return 0
