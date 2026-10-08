@@ -29,3 +29,7 @@ extend-exclude = ["auto_applications", "resend_mail.py"]
 
 [tool.mypy]
 python_version = "3.11"
+
+[[tool.mypy.overrides]]
+module = "sentence_transformers"
+ignore_missing_imports = true
