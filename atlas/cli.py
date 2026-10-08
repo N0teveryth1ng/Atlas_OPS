@@ -4,7 +4,7 @@ Usage::
 
     python -m atlas.cli profile --resume resume.pdf --describe "..." --out profile.json
     python -m atlas.cli review profile.json
-    python -m atlas.cli run            # full pipeline + digest + email
+    python -m atlas.cli run            # full pipeline + digest (never emails)
     python -m atlas.cli schedule       # run now, then daily
     python -m atlas.cli decide       # run the decision engine over stored jobs
     python -m atlas.cli explain <job_id>
@@ -179,9 +179,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
-    from .db import emailed_job_ids, mark_digest_sent, mark_jobs_emailed, save_digest
+    from .db import emailed_job_ids, mark_digest_sent, save_digest
     from .digest import build_digest, render_html, render_text
-    from .emailer import EmailError, send_digest
     from .feedback import load_and_apply
     from .pipeline import run_pipeline
 
@@ -213,7 +212,7 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
 
     needs_review = [r for r in results if r.status == JobStatus.needs_review]
     if needs_review:
-        print(f"{len(needs_review)} job(s) need review and were not ranked or emailed.")
+        print(f"{len(needs_review)} job(s) need review and were not ranked or shipped.")
     shippable_results = [r for r in results if r.status != JobStatus.needs_review]
 
     already_sent = emailed_job_ids(conn)
@@ -227,34 +226,21 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     try:
         assert_sent_subset(passed_ids, set(digest.job_ids()))
     except InvariantViolation as exc:
-        logger.error("shipping invariant violated, aborting email: %s", exc)
+        logger.error("shipping invariant violated, aborting digest: %s", exc)
         digest = build_digest([], settings, run_id=run_id)
-
-    sent = False
-    if getattr(args, "email", False):
-        if digest.is_empty():
-            print("No new matches; skipping email.")
-        else:
-            try:
-                send_digest(digest, settings)
-                mark_jobs_emailed(conn, digest.job_ids())
-                sent = True
-                print(f"Emailed {digest.item_count} job(s).")
-            except EmailError as exc:
-                print(f"Email not sent: {exc}", file=sys.stderr)
 
     digest_id = save_digest(
         conn, run_id, settings.filters.top_k, render_html(digest), render_text(digest)
     )
-    if sent:
-        mark_digest_sent(conn, digest_id)
+    # Email delivery was cancelled: the digest is only printed and served by
+    # the dashboard, so it counts as published the moment it is persisted.
+    mark_digest_sent(conn, digest_id)
     if sourcing_result is not None:
         from .sourcing import apply_pipeline_yields
 
-        # Only ids that were actually delivered may count as sent; with
-        # --no-email or a failed send the digest ids stay in the digest but
-        # must not be attributed to the source's `sent` column.
-        apply_pipeline_yields(sourcing_result, results, set(digest.job_ids()) if sent else set())
+        # Nothing is emailed any more, so a source's `sent` column must stay 0
+        # even though the digest ids are in it.
+        apply_pipeline_yields(sourcing_result, results, set())
         for item in sourcing_result.source_yields:
             print(
                 f"  {item.source:<15} fetched={item.fetched:<5} kept={item.kept:<5} "
@@ -323,9 +309,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     settings = get_settings()
     hour = args.hour if args.hour is not None else settings.schedule.daily_hour
 
-    run_args = argparse.Namespace(
-        collect=not args.no_collect, limit=args.limit, email=not args.no_email
-    )
+    run_args = argparse.Namespace(collect=not args.no_collect, limit=args.limit)
 
     def run_once() -> None:
         code = _execute_run(run_args, run_kind="scheduled")
@@ -510,10 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run", help="Run the pipeline")
     p_run.add_argument("--collect", action="store_true", help="Fetch new jobs first (Phase 4)")
     p_run.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
-    p_run.add_argument(
-        "--no-email", dest="email", action="store_false", help="Do not email the digest"
-    )
-    p_run.set_defaults(func=cmd_run, email=True)
+    p_run.set_defaults(func=cmd_run)
 
     p_decide = sub.add_parser(
         "decide", help="Run the decision engine over stored jobs (dry-run, no email)"
@@ -540,11 +521,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_sched.add_argument("--hour", type=int, default=None, help="Local hour 0-23 (default: config)")
     p_sched.add_argument("--no-collect", action="store_true", help="Do not fetch new jobs")
     p_sched.add_argument("--limit", type=int, default=None, help="Process at most N stored jobs")
-    p_sched.add_argument("--no-email", dest="email", action="store_false", help="Do not email")
     p_sched.add_argument(
         "--no-immediate", dest="immediate", action="store_false", help="Wait until the next hour"
     )
-    p_sched.set_defaults(func=cmd_schedule, email=True, immediate=True)
+    p_sched.set_defaults(func=cmd_schedule, immediate=True)
 
     sub.add_parser("collect", help="Fetch + normalize + dedupe jobs (Phase 4)").set_defaults(
         func=cmd_collect

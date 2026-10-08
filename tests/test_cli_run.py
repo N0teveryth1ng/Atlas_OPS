@@ -56,7 +56,7 @@ def _shippable_result() -> ProcessedJob:
     )
 
 
-def _run(tmp_path, monkeypatch, *, email: bool):
+def _run(tmp_path, monkeypatch, *, email: bool, send_stub=None):
     dbfile = tmp_path / "t.db"
     setup = connect(dbfile)
     init_db(setup)
@@ -72,15 +72,29 @@ def _run(tmp_path, monkeypatch, *, email: bool):
     monkeypatch.setattr(sourcing, "run_sourcing", lambda *args, **kwargs: result)
     monkeypatch.setattr(pipeline, "run_pipeline", lambda *args, **kwargs: [_shippable_result()])
     if email:
+        if send_stub is None:
 
-        def _boom(*args, **kwargs):
-            raise EmailError("resend down")
+            def _boom(*args, **kwargs):
+                raise EmailError("resend down")
 
-        monkeypatch.setattr(emailer, "send_digest", _boom)
+            send_stub = _boom
+        monkeypatch.setattr(emailer, "send_digest", send_stub)
 
     args = Namespace(collect=True, limit=None, email=email)
     rc = cli._execute_run(args, run_kind="run")
     return rc, result
+
+
+def test_run_never_calls_send_digest_despite_email_flag(tmp_path, monkeypatch):
+    calls = []
+
+    def _record(*args, **kwargs):
+        calls.append(args)
+
+    rc, result = _run(tmp_path, monkeypatch, email=True, send_stub=_record)
+    assert rc == 0
+    assert calls == []
+    assert result.source_yields[0].sent == 0
 
 
 def test_no_email_leaves_sent_at_zero_but_counts_passed(tmp_path, monkeypatch):

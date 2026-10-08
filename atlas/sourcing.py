@@ -56,9 +56,10 @@ def apply_pipeline_yields(
     affect the counts: older stored jobs from earlier runs share the DB and are
     re-processed by the pipeline, but they must never inflate a current source.
 
-    ``sent_ids`` is the set of job ids that made it into the digest. Anything not
-    in it (``--no-email``, an aborted send, an invariant violation) counts as not
-    sent.
+    ``sent_ids`` is the set of job ids that made it into the digest; anything
+    not in it (an aborted send, an invariant violation) counts as not sent.
+    Email delivery was cancelled, so ``_execute_run`` passes an empty set and
+    ``sent`` stays 0 for every source.
     """
     yields = {item.source: item for item in result.source_yields}
     for entry in processed:

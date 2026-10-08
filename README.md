@@ -1,7 +1,7 @@
 # Atlas_OPS
 
 Personal, single-user job-matching tool. Given a resume and a set of
-preferences, it finds, filters, ranks, and emails only jobs that are a
+preferences, it finds, filters, and ranks only jobs that are a
 **genuine fit** — with strict seniority/experience filtering (the author is a
 fresher).
 
@@ -13,11 +13,11 @@ Optimised for **precision and accuracy**, not scale or latency.
 
 ## Goal / success metrics
 
-- **Precision@10 >= 80%** — of the top 10 jobs emailed, at least 8 are
-  applications worth making.
+- **Precision@10 >= 80%** — of the top 10 jobs surfaced in the digest, at
+  least 8 are applications worth making.
 - **Seniority false-positive rate ~= 0%** — no role requiring more experience
   than the candidate qualifies for gets through.
-- Every emailed job carries a reason it matched; every rejected job logs a
+- Every surfaced job carries a reason it matched; every rejected job logs a
   rejection reason.
 
 ## Architecture (target)
@@ -33,7 +33,7 @@ Resume/description -> Profile Agent -> profile.json (human-approved once)
                     -> Query Planner -> Collectors -> Normalize + Dedupe (SQLite)
                     -> JD Parser (regex + LLM) -> Hard Filter (code)
                     -> Skill Match -> Evaluator (LLM) -> Verifier (adversarial)
-                    -> Ranker -> Decision Engine -> Digest + Email -> Feedback
+                    -> Ranker -> Decision Engine -> Digest -> Feedback
 ```
 
 Design rules:
@@ -54,7 +54,7 @@ Design rules:
 - **Phase 3** — skill ontology / alias map + weighted matching. *(done)*
 - **Phase 4** — collectors, query planner, normalize, dedupe. *(done)*
 - **Phase 5** — evaluator + adversarial verifier. *(done)*
-- **Phase 6** — ranker, digest, email, scheduling. *(done)*
+- **Phase 6** — ranker, digest, scheduling. *(done; email delivery cancelled)*
 - **Phase 7** — feedback loop + tuning. *(done)*
 - **Decision Engine** — explicit `apply`/`review`/`skip` with vetoes, confidence,
   and a full audit trail (`atlas/decision.py`, `atlas.cli decide/explain`). *(done)*
@@ -76,9 +76,9 @@ cp .env.example .env              # fill in real values, never commit .env
 |---|---|
 | `GROQ_API_KEY` | Groq LLM API key |
 | `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | Adzuna job API (planned) |
-| `RESEND_API_KEY` | Resend email API key |
-| `RESEND_FROM_EMAIL` | From address for digests |
-| `RESEND_TO_EMAIL` | Digest recipient |
+| `RESEND_API_KEY` | Resend API key (legacy — email delivery is cancelled; unused by `run`) |
+| `RESEND_FROM_EMAIL` | From address (legacy, see above) |
+| `RESEND_TO_EMAIL` | Recipient (legacy, see above) |
 | `BRAINTRUST_API_KEY` | Optional. Enables Braintrust tracing; leave empty to disable |
 | `BRAINTRUST_PROJECT` | Braintrust project/org for traces (default `atlasops`) |
 | `BRAINTRUST_PROJECT_ID` | Braintrust project id that receives traces and eval scores (default `3c5416f9-…`) |
@@ -263,7 +263,7 @@ veto/downgrade, and adds only two LLM judgements: **`project_relevance`**
 Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
 `filter_results`, `evaluations`, `verifications`, `decisions`).
 
-## Digest, email, scheduling (Phase 6)
+## Digest and scheduling (Phase 6)
 
 - **Digest** (`atlas/digest.py`) — one digest per run, grouped into **Strong
   matches**, **Worth a look**, and **Needs review** (low-confidence parse). Each
@@ -271,11 +271,12 @@ Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
   main risk, missing skills, and the seniority assessment. It also carries the
   funnel summary: processed → filtered out (with per-rule rejection counts) →
   evaluated → sent.
-- **Email** (`atlas/emailer.py`) — sent via the [Resend](https://resend.com) API.
-  Requires `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TO_EMAIL`. If not
-  configured, the digest is printed to the console and nothing is sent.
-- **Idempotency** — every emailed job is stamped in `jobs.emailed_at`; a job is
-  never emailed twice. Re-running is safe and prints “no new matches”.
+- **Email delivery — cancelled** — `atlas.cli run` never sends mail. The digest
+  is printed to the console and served by the dashboard (`atlas dashboard`).
+  `atlas/emailer.py` and the `jobs.emailed_at` stamp are retained only for
+  historical idempotency and tests; no run path invokes the Resend API.
+- **Idempotency** — a job stamped in `jobs.emailed_at` (historical sends only)
+  is never put in a digest twice. Re-running is safe.
 - **Scheduling** (`atlas/scheduler.py`) — `atlas schedule` runs once immediately
   then daily at `schedule.daily_hour` (default 09:00 local). For unattended
   operation, prefer Windows Task Scheduler, cron/systemd, or GitHub Actions.
@@ -306,9 +307,8 @@ python -m atlas.cli profile --resume resume.pdf --describe "target roles..." --o
 python -m atlas.cli review profile.json     # review + approve
 python -m atlas.cli status
 python -m atlas.cli collect                   # fetch + normalize + dedupe (Phase 4)
-python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank -> email
+python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank -> digest
 python -m atlas.cli run --collect --limit 50  # fetch first, then process
-python -m atlas.cli run --no-email            # build + print the digest only
 python -m atlas.cli decide                    # default: decision engine dry-run (no email)
 python -m atlas.cli decide --limit 25         # dry-run decision engine over <=25 jobs
 python -m atlas.cli explain <job_id>          # show the latest stored decision for a job
