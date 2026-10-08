@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fake_llm import make_client
 
@@ -175,7 +176,11 @@ def test_skip_log_counts_only_non_new_rows(tmp_path, caplog):
     for jid in stored[:2]:
         _mark_rejected(conn, jid)
 
-    run_pipeline(conn, run_id, profile, get_settings(), _client(), limit=2)
+    # The assertion below inspects INFO logs, so force the level on for the
+    # duration of the call: otherwise this test only passes when an earlier
+    # test happened to lower the global logging level (order-dependent).
+    with caplog.at_level(logging.INFO, logger="atlas.pipeline"):
+        run_pipeline(conn, run_id, profile, get_settings(), _client(), limit=2)
 
     assert "skipping 2 stored job(s)" in caplog.text
     conn.close()
