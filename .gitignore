@@ -33,3 +33,4 @@ selfcheck_report.json
 # --- os / editor ---
 .DS_Store
 Thumbs.db
+.vercel

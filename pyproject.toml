@@ -1,11 +1,22 @@
-# Project tooling config (audit D-1/D-2).
-#
-# The shipped application is the `atlas` package plus its test suite. The
-# Playwright "auto-apply" scripts under `auto_applications/` and the standalone
-# `resend_mail.py` are deliberately NOT part of the pipeline (see selfcheck
-# checks A1/A2/A3: they are never imported and auto-apply is disabled). They are
-# kept for reference only, so linting them is not part of the quality gate.
+[project]
+name = "atlas-ops"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic==2.12.5",
+    "PyYAML==6.0.3",
+    "python-dotenv==1.2.2",
+    "httpx==0.28.1",
+    "tenacity==8.5.0",
+    "groq==1.6.0",
+    "pypdf==4.3.1",
+    "defusedxml==0.7.1",
+    "braintrust==0.44.0",
+    "fastapi==0.133.1",
+    "uvicorn==0.41.0",
+]
 
+# Project tooling config (audit D-1/D-2).
 [tool.black]
 line-length = 100
 target-version = ["py311"]
