@@ -13,8 +13,9 @@ from __future__ import annotations
 import html
 import sqlite3
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .db import APPLICATION_STATUSES, connect, init_db, matched_jobs, set_application_status
@@ -113,6 +114,18 @@ def _open(database: Path | None) -> sqlite3.Connection:
     return conn
 
 
+def _same_origin(request: Request) -> bool:
+    """CSRF guard: reject POSTs whose Origin/Referer points at another site.
+
+    A request without either header (curl, the test client) carries no
+    ambient browser authority and is allowed.
+    """
+    candidate = request.headers.get("origin") or request.headers.get("referer")
+    if candidate is None:
+        return True
+    return urlparse(candidate).netloc == request.url.netloc
+
+
 def create_app(database: Path | None = None) -> FastAPI:
     """Build the dashboard ASGI app (``database`` defaults to ``ATLAS_DB``)."""
     app = FastAPI(title="Atlas dashboard", version="0.1.0")
@@ -134,7 +147,9 @@ def create_app(database: Path | None = None) -> FastAPI:
         return HTMLResponse(_page(rows))
 
     @app.post("/jobs/{job_id}/status/{status}")
-    def update_status(job_id: int, status: str) -> Response:
+    def update_status(request: Request, job_id: int, status: str) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         try:
             conn = _open(database)
         except sqlite3.Error as exc:
