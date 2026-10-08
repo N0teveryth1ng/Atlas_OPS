@@ -33,7 +33,7 @@ Resume/description -> Profile Agent -> profile.json (human-approved once)
                     -> Query Planner -> Collectors -> Normalize + Dedupe (SQLite)
                     -> JD Parser (regex + LLM) -> Hard Filter (code)
                     -> Skill Match -> Evaluator (LLM) -> Verifier (adversarial)
-                    -> Ranker -> Decision Engine -> Digest -> Feedback
+                    -> Ranker -> Decision Engine -> Digest + Dashboard -> Feedback
 ```
 
 Design rules:
@@ -55,6 +55,8 @@ Design rules:
 - **Phase 4** — collectors, query planner, normalize, dedupe. *(done)*
 - **Phase 5** — evaluator + adversarial verifier. *(done)*
 - **Phase 6** — ranker, digest, scheduling. *(done; email delivery cancelled)*
+- **Dashboard** — local matched-jobs table with `APLD`/`NTAPLD`/`PEND`
+  bookkeeping (`atlas dashboard`). *(done)*
 - **Phase 7** — feedback loop + tuning. *(done)*
 - **Decision Engine** — explicit `apply`/`review`/`skip` with vetoes, confidence,
   and a full audit trail (`atlas/decision.py`, `atlas.cli decide/explain`). *(done)*
@@ -282,6 +284,21 @@ Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
   operation, prefer Windows Task Scheduler, cron/systemd, or GitHub Actions.
   Sending nothing when nothing clears the bar is a valid, expected outcome.
 
+## Matched-jobs dashboard
+
+`atlas dashboard` (or `uvicorn app:app`) serves a local page listing every job
+that passed the hard filter, with its pipeline status and a human-set
+application status:
+
+- `APLD` — you applied
+- `NTAPLD` — you decided not to apply
+- `PEND` — not decided yet (the default)
+
+Status is stored in `jobs.application_status` (SQLite) and changes only when
+you click a button — the dashboard never applies anywhere. `GET /api/matched`
+returns the same list as JSON; `GET /health` is the deploy probe. The Vercel
+deploy keeps serving `/health` only: the SQLite database is not deployed.
+
 ## Feedback loop (Phase 7)
 
 Record a judgement for any job and the pipeline adapts on the next run:
@@ -309,6 +326,7 @@ python -m atlas.cli status
 python -m atlas.cli collect                   # fetch + normalize + dedupe (Phase 4)
 python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank -> digest
 python -m atlas.cli run --collect --limit 50  # fetch first, then process
+python -m atlas.cli dashboard --port 8000     # local matched-jobs dashboard (APLD/NTAPLD/PEND)
 python -m atlas.cli decide                    # default: decision engine dry-run (no email)
 python -m atlas.cli decide --limit 25         # dry-run decision engine over <=25 jobs
 python -m atlas.cli explain <job_id>          # show the latest stored decision for a job

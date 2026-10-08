@@ -5,6 +5,7 @@ Usage::
     python -m atlas.cli profile --resume resume.pdf --describe "..." --out profile.json
     python -m atlas.cli review profile.json
     python -m atlas.cli run            # full pipeline + digest (never emails)
+    python -m atlas.cli dashboard      # local matched-jobs dashboard (APLD/NTAPLD/PEND)
     python -m atlas.cli schedule       # run now, then daily
     python -m atlas.cli decide       # run the decision engine over stored jobs
     python -m atlas.cli explain <job_id>
@@ -321,6 +322,16 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    from .dashboard import create_app
+
+    print(f"Dashboard: http://{args.host}:{args.port}/ (Ctrl+C to stop)")
+    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def cmd_collect(args: argparse.Namespace) -> int:
     from .sourcing import run_sourcing
 
@@ -525,6 +536,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-immediate", dest="immediate", action="store_false", help="Wait until the next hour"
     )
     p_sched.set_defaults(func=cmd_schedule, immediate=True)
+
+    p_dash = sub.add_parser("dashboard", help="Serve the matched-jobs dashboard (local)")
+    p_dash.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    p_dash.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    p_dash.set_defaults(func=cmd_dashboard)
 
     sub.add_parser("collect", help="Fetch + normalize + dedupe jobs (Phase 4)").set_defaults(
         func=cmd_collect
