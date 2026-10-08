@@ -44,7 +44,7 @@ ALLOWED: dict[JobStatus, frozenset[JobStatus]] = {
     JobStatus.sent: frozenset(),
 }
 
-# States from which a job is allowed to be rendered / emailed.
+# States from which a job is allowed to be rendered / shipped.
 SHIPPABLE: frozenset[JobStatus] = frozenset({JobStatus.verified, JobStatus.ranked})
 
 

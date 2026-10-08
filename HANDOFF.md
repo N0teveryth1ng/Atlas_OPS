@@ -49,7 +49,7 @@ Gate counts above were taken from a real run; re-run the commands in "How to run
 
 ## Owner decisions
 - Fresher, about 3 months internship; experience tolerance 1 year.
-- Interface: CLI + scheduled run + email (FastAPI/Jinja UI dropped).
+- Interface: CLI + scheduled run (email delivery cancelled; FastAPI/Jinja UI dropped).
 - auto_applications/ bots disabled from the pipeline, kept for Phase 8.
 - History purge + key rotation chosen; rotation NOT yet confirmed (G1 stays BLOCKED).
 - Sources: existing feeds + Adzuna + Greenhouse/Lever/Ashby; second Groq model as verifier.
@@ -68,11 +68,11 @@ Commands and their flags (from `python -m atlas.cli --help` and per-command `--h
 - `profile [--resume RESUME] [--describe DESCRIBE] [--describe-file DESCRIBE_FILE] [--out OUT] [--yes]`
 - `review [--yes] [path]`
 - `status`
-- `run [--collect] [--limit LIMIT] [--no-email]`
+- `run [--collect] [--limit LIMIT]`
 - `decide [--limit LIMIT]`
 - `explain job_id`
 - `label-check [--labels LABELS] [--pool POOL]`
-- `schedule [--hour HOUR] [--no-collect] [--limit LIMIT] [--no-email] [--no-immediate]`
+- `schedule [--hour HOUR] [--no-collect] [--limit LIMIT] [--no-immediate]`
 - `collect`
 - `eval [--golden GOLDEN] [--with-llm]`
 - `selfcheck [--fast] [--full] [--report REPORT]`
