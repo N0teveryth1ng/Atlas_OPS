@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: python -m ruff check atlas tests
+
+      - name: Format check (black)
+        run: python -m black --check atlas tests
+
+      - name: Type check (mypy)
+        run: python -m mypy atlas
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Eval
+        run: python -X utf8 -m atlas.cli eval
+
+      - name: Selfcheck (fast)
+        run: python -X utf8 -m atlas.cli selfcheck --fast
+        continue-on-error: true
