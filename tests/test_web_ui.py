@@ -22,37 +22,35 @@ def _reset_pipeline():
     dashboard._sessions.clear()
 
 
-def _client(tmp_path, *, password: str | None):
-    import os
-
+def _client(monkeypatch, tmp_path, *, password: str | None):
     if password is None:
-        os.environ.pop("DASHBOARD_PASSWORD", None)
+        monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
     else:
-        os.environ["DASHBOARD_PASSWORD"] = password
+        monkeypatch.setenv("DASHBOARD_PASSWORD", password)
     return TestClient(create_app(tmp_path / "dash.db"))
 
 
-def _logged_in(tmp_path, password="pw"):
-    client = _client(tmp_path, password=password)
+def _logged_in(monkeypatch, tmp_path, password="pw"):
+    client = _client(monkeypatch, tmp_path, password=password)
     client.post("/login", data={"password": password})
     return client
 
 
-def test_login_required_on_every_route(tmp_path):
-    client = _client(tmp_path, password="pw")
+def test_login_required_on_every_route(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path, password="pw")
     for path in ("/", "/setup", "/profile", "/rejected", "/status"):
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 303, path
         assert response.headers["location"] == "/login", path
 
 
-def test_health_needs_no_login(tmp_path):
-    client = _client(tmp_path, password="pw")
+def test_health_needs_no_login(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path, password="pw")
     assert client.get("/health").status_code == 200
 
 
-def test_upload_requires_login(tmp_path):
-    client = _client(tmp_path, password="pw")
+def test_upload_requires_login(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path, password="pw")
     response = client.post(
         "/setup",
         files={"resume": ("x.pdf", b"%PDF-1.4", "application/pdf")},
@@ -63,8 +61,8 @@ def test_upload_requires_login(tmp_path):
     assert response.headers["location"] == "/login"
 
 
-def test_upload_size_limit(tmp_path):
-    client = _client(tmp_path, password="pw")
+def test_upload_size_limit(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path, password="pw")
     client.post("/login", data={"password": "pw"})
     big = b"%PDF-1.4" + b"x" * (dashboard.MAX_UPLOAD_BYTES + 1)
     response = client.post(
@@ -75,8 +73,8 @@ def test_upload_size_limit(tmp_path):
     assert "too large" in response.text
 
 
-def test_upload_type_limit(tmp_path):
-    client = _client(tmp_path, password="pw")
+def test_upload_type_limit(tmp_path, monkeypatch):
+    client = _client(monkeypatch, tmp_path, password="pw")
     client.post("/login", data={"password": "pw"})
     response = client.post(
         "/setup",
@@ -88,6 +86,9 @@ def test_upload_type_limit(tmp_path):
 
 def test_upload_ignores_supplied_filename(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(dashboard, "DATA_DIR", data_dir)
     captured = {}
 
     def fake_build(*, resume_path=None, description=None, database=None):
