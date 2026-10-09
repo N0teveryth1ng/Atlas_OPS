@@ -278,7 +278,22 @@ def create_app(database: Path | None = None) -> FastAPI:
             rows = matched_jobs(conn)
         finally:
             conn.close()
-        body = _page(rows)
+        # filter to APPLY or REVIEW
+        filtered = []
+        for r in rows:
+            dec = str(r["decision"] or "").upper() if "decision" in r.keys() else ""
+            if dec in ("APPLY", "REVIEW"):
+                filtered.append(r)
+        body = _HEAD + _nav() + "<h1>Atlas — matched jobs</h1>"
+        body += "<p><form method='post' action='/find'><button type='submit'>Find jobs</button></form></p>"
+        body += "<p>Showing only jobs with decision APPLY or REVIEW.</p>"
+        body += _TABLE_HEAD
+        if filtered:
+            for fr in filtered:
+                body += _row_html(fr)
+        else:
+            body += '<tr><td colspan="14">No matched jobs yet.</td></tr>\n'
+        body += _TABLE_FOOT
         return HTMLResponse(body)
 
     @app.post("/jobs/{job_id}/status/{status}")
