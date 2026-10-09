@@ -222,9 +222,12 @@ def _same_origin(request: Request) -> bool:
     return urlparse(candidate).netloc == request.url.netloc
 
 
-def create_app(database: Path | None = None) -> FastAPI:
+def create_app(database: Path | None = None, host: str | None = None) -> FastAPI:
     """Build the dashboard ASGI app (``database`` defaults to ``ATLAS_DB``)."""
     pwd = _get_password()
+    if host and not host.startswith("127.0.0.1") and not host.startswith("localhost") and not host.startswith("::1"):
+        if pwd is None:
+            raise RuntimeError("DASHBOARD_PASSWORD must be set when binding non-loopback address")
     app = FastAPI(title="Atlas dashboard", version="0.1.0")
 
     @app.get("/health")
