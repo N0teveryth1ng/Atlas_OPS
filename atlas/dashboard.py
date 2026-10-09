@@ -323,4 +323,50 @@ def create_app(database: Path | None = None) -> FastAPI:
         )
         return HTMLResponse(content)
 
+    @app.post("/setup")
+    async def setup_post(request: Request, resume: UploadFile | None = File(None), description: str = Form("")) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        auth = _require_auth(request)
+        if auth:
+            return auth
+        desc = (description or "").strip()
+        resume_path = None
+        try:
+            if resume is not None and resume.filename:
+                name = Path(resume.filename).name
+                if not name.lower().endswith(".pdf"):
+                    return HTMLResponse(_HEAD + _nav() + "<h1>Setup</h1><p class='error'>PDF only.</p>" + _TABLE_FOOT)
+                data = await resume.read()
+                if len(data) > MAX_UPLOAD_BYTES:
+                    return HTMLResponse(_HEAD + _nav() + "<h1>Setup</h1><p class='error'>File too large (max 5MB).</p>" + _TABLE_FOOT)
+                resume_path = DATA_DIR / "resume.pdf"
+                with open(resume_path, "wb") as f:
+                    f.write(data)
+            if not desc and resume_path is None:
+                return HTMLResponse(_HEAD + _nav() + "<h1>Setup</h1><p class='error'>Provide resume or description.</p>" + _TABLE_FOOT)
+            if build_profile is not None:
+                try:
+                    build_profile(resume_path=str(resume_path) if resume_path else None, description=desc or None, yes=True, database=database)
+                except Exception as e:
+                    if resume_path and resume_path.exists():
+                        try:
+                            resume_path.unlink()
+                        except Exception:
+                            pass
+                    return HTMLResponse(_HEAD + _nav() + f"<h1>Setup</h1><p class='error'>Profile build failed: {html.escape(str(e))}</p>" + _TABLE_FOOT)
+            if resume_path and resume_path.exists():
+                try:
+                    resume_path.unlink()
+                except Exception:
+                    pass
+            return RedirectResponse(url="/profile", status_code=303)
+        except Exception as e:
+            if resume_path and resume_path.exists():
+                try:
+                    resume_path.unlink()
+                except Exception:
+                    pass
+            return HTMLResponse(_HEAD + _nav() + f"<h1>Setup</h1><p class='error'>Error: {html.escape(str(e))}</p>" + _TABLE_FOOT)
+
     return app
