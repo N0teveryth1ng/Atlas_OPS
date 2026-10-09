@@ -153,7 +153,12 @@ def _row_html(row: sqlite3.Row) -> str:
         if is_http_url(url)
         else "-"
     )
-    current = str(row.get("application_status") or "PEND")
+    def g(r, k, d="-"):
+        try:
+            return r[k] if k in r.keys() else d
+        except Exception:
+            return d
+    current = str(g(row, "application_status", "PEND") or "PEND")
     if current not in _LABELS:
         current = "PEND"
     actions = "".join(
@@ -164,17 +169,22 @@ def _row_html(row: sqlite3.Row) -> str:
         )
         for code in APPLICATION_STATUSES
     )
-    score = row.get("score") if "score" in row.keys() else row.get("fit_score")
-    decision = row.get("decision") if "decision" in row.keys() else "-"
-    reasons = row.get("reasons_for") if "reasons_for" in row.keys() else row.get("reasons")
-    risk = row.get("main_risk") if "main_risk" in row.keys() else "-"
-    missing = row.get("missing_skills") if "missing_skills" in row.keys() else "-"
-    seniority = row.get("seniority_assessment") if "seniority_assessment" in row.keys() else "-"
+    def g(r, k, d="-"):
+        try:
+            return r[k] if k in r.keys() else d
+        except Exception:
+            return d
+    score = g(row, "score") or g(row, "fit_score")
+    decision = g(row, "decision", "-")
+    reasons = g(row, "reasons_for") or g(row, "reasons")
+    risk = g(row, "main_risk")
+    missing = g(row, "missing_skills")
+    seniority = g(row, "seniority_assessment")
     return (
         f"<tr><td>{job_id}</td><td>{title}</td>"
-        f"<td>{html.escape(str(row.get('company') or '-'))}</td>"
-        f"<td>{html.escape(str(row.get('location') or '-'))}</td>"
-        f"<td>{html.escape(str(row.get('source') or '-'))}</td>"
+        f"<td>{html.escape(str(g(row, 'company')))}</td>"
+        f"<td>{html.escape(str(g(row, 'location')))}</td>"
+        f"<td>{html.escape(str(g(row, 'source')))}</td>"
         f"<td>{apply_link}</td>"
         f"<td>{html.escape(str(score or '-'))}</td>"
         f"<td>{html.escape(str(decision or '-'))}</td>"
