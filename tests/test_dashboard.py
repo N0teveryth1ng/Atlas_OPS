@@ -202,13 +202,24 @@ def test_dashboard_warns_only_for_non_loopback_hosts(monkeypatch, capsys):
     import uvicorn
 
     started = {}
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
     monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.update(kwargs))
 
     rc = cli.cmd_dashboard(Namespace(host="0.0.0.0", port=9000))
     assert rc == 0
-    assert "no authentication" in capsys.readouterr().err
+    assert "WARNING" in capsys.readouterr().err
     assert started["host"] == "0.0.0.0"
 
     rc = cli.cmd_dashboard(Namespace(host="127.0.0.1", port=8000))
     assert rc == 0
-    assert "no authentication" not in capsys.readouterr().err
+    assert "WARNING" not in capsys.readouterr().err
+
+
+def test_dashboard_refuses_non_loopback_without_password(monkeypatch):
+    import uvicorn
+
+    monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError):
+        cli.cmd_dashboard(Namespace(host="0.0.0.0", port=9000))
