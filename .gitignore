@@ -29,6 +29,8 @@ eval/feedback.jsonl
 # raw third-party JD text: kept local, never committed
 eval/labeling_pool.jsonl
 selfcheck_report.json
+# personal resume: never committed
+resume.pdf
 
 # --- os / editor ---
 .DS_Store
