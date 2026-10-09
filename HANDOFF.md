@@ -50,11 +50,13 @@ atlas/observability.py, and eval metrics published as named scores
 Braintrust project atlasops (3c5416f9-ff13-4c16-9a07-71d0e5a8c090).
 
 ## Not done this session
-- README.md + HANDOFF.md updates and the Procfile guard are edited but NOT yet
-  committed (commit them first thing next session).
-- Groq model names in config.yaml NOT yet cross-checked against the live model
-  list (next step).
-- "claims not verified with a command" final list NOT yet produced.
+- Groq models API call is blocked from the sandbox (Cloudflare `error code: 1010`);
+  model ids were cross-checked against Groq's published catalogue instead
+  (`openai/gpt-oss-120b` and `qwen/qwen3.8-27b` both live on Groq; verifier is a
+  different family from the evaluator). Re-run the /models check on a real
+  network before relying on it.
+- "claims not verified with a command" final list: see the end of the session
+  transcript that produced commit 651426f.
 
 ## Not done/hold
 Phase 8/PR B on hold.
