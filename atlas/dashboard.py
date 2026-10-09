@@ -202,14 +202,52 @@ def _same_origin(request: Request) -> bool:
 
 def create_app(database: Path | None = None) -> FastAPI:
     """Build the dashboard ASGI app (``database`` defaults to ``ATLAS_DB``)."""
+    pwd = _get_password()
     app = FastAPI(title="Atlas dashboard", version="0.1.0")
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/login", response_class=HTMLResponse)
+    def login_get(request: Request) -> HTMLResponse:
+        if _check_auth(request):
+            return RedirectResponse(url="/", status_code=303)
+        return HTMLResponse(_login_form())
+
+    @app.post("/login")
+    def login_post(request: Request, password: str = Form(...)) -> Response:
+        pwd = _get_password()
+        if pwd is None:
+            return RedirectResponse(url="/login", status_code=303)
+        if _constant_time_equal(password, pwd):
+            sid = secrets.token_urlsafe(32)
+            _sessions[sid] = time.time()
+            resp = RedirectResponse(url="/", status_code=303)
+            resp.set_cookie("atlas_session", sid, httponly=True, secure=False, samesite="lax", max_age=_SESSION_TTL)
+            return resp
+        return HTMLResponse(_login_form("Invalid password"), status_code=401)
+
+    @app.get("/logout")
+    def logout(request: Request) -> Response:
+        sid = request.cookies.get("atlas_session")
+        if sid in _sessions:
+            _sessions.pop(sid, None)
+        resp = RedirectResponse(url="/login", status_code=303)
+        resp.delete_cookie("atlas_session")
+        return resp
+
+    def _require_auth(request: Request) -> Response | None:
+        pwd = _get_password()
+        if pwd is not None and not _check_auth(request):
+            return RedirectResponse(url="/login", status_code=303)
+        return None
+
     @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
+    def index(request: Request) -> Response:
+        auth = _require_auth(request)
+        if auth:
+            return auth
         try:
             conn = _open(database)
         except sqlite3.Error as exc:
@@ -218,12 +256,16 @@ def create_app(database: Path | None = None) -> FastAPI:
             rows = matched_jobs(conn)
         finally:
             conn.close()
-        return HTMLResponse(_page(rows))
+        body = _page(rows)
+        return HTMLResponse(body)
 
     @app.post("/jobs/{job_id}/status/{status}")
     def update_status(request: Request, job_id: int, status: str) -> Response:
         if not _same_origin(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        auth = _require_auth(request)
+        if auth:
+            return auth
         try:
             conn = _open(database)
         except sqlite3.Error as exc:
@@ -239,7 +281,10 @@ def create_app(database: Path | None = None) -> FastAPI:
         return RedirectResponse(url="/", status_code=303)
 
     @app.get("/api/matched")
-    def api_matched() -> Response:
+    def api_matched(request: Request) -> Response:
+        auth = _require_auth(request)
+        if auth:
+            return auth
         try:
             conn = _open(database)
         except sqlite3.Error as exc:
