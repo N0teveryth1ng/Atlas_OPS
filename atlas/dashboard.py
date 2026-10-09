@@ -25,6 +25,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from .db import APPLICATION_STATUSES, connect, init_db, matched_jobs, set_application_status
 from .digest import is_http_url
+try:
+    from .profile_agent import build_profile
+except Exception:  # pragma: no cover
+    build_profile = None
+try:
+    from .pipeline import run_pipeline
+except Exception:  # pragma: no cover
+    run_pipeline = None
 
 _LABELS = {"APLD": "Applied", "NTAPLD": "Not applied", "PEND": "Pending"}
 _COLORS = {"APLD": "#1a7f37", "NTAPLD": "#cf222e", "PEND": "#9a6700"}
