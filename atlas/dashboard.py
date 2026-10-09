@@ -68,6 +68,25 @@ _TABLE_FOOT = """</tbody>
 </html>
 """
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = REPO_ROOT / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+MAX_UPLOAD_MB = 5
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
+_pipeline_lock = threading.Lock()
+_pipeline_status: dict[str, Any] = {
+    "running": False,
+    "stage": "idle",
+    "counts": {"collected": 0, "parsed": 0, "filtered": 0, "evaluated": 0, "verified": 0, "ranked": 0, "decided": 0},
+    "errors": {},
+    "started_at": None,
+    "finished_at": None,
+    "result": None,
+}
+
+
 
 def _row_html(row: sqlite3.Row) -> str:
     job_id = int(row["id"])
