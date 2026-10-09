@@ -148,12 +148,12 @@ def _row_html(row: sqlite3.Row) -> str:
     job_id = int(row["id"])
     url = str(row["url"] or "")
     title = html.escape(str(row["title"] or url or f"job {job_id}"))
-    job_cell = (
-        f'<a href="{html.escape(url, quote=True)}" rel="noreferrer">{title}</a>'
+    apply_link = (
+        f'<a href="{html.escape(url, quote=True)}" rel="noreferrer">Apply</a>'
         if is_http_url(url)
-        else title
+        else "-"
     )
-    current = str(row["application_status"] or "PEND")
+    current = str(row.get("application_status") or "PEND")
     if current not in _LABELS:
         current = "PEND"
     actions = "".join(
@@ -164,13 +164,25 @@ def _row_html(row: sqlite3.Row) -> str:
         )
         for code in APPLICATION_STATUSES
     )
+    score = row.get("score") if "score" in row.keys() else row.get("fit_score")
+    decision = row.get("decision") if "decision" in row.keys() else "-"
+    reasons = row.get("reasons_for") if "reasons_for" in row.keys() else row.get("reasons")
+    risk = row.get("main_risk") if "main_risk" in row.keys() else "-"
+    missing = row.get("missing_skills") if "missing_skills" in row.keys() else "-"
+    seniority = row.get("seniority_assessment") if "seniority_assessment" in row.keys() else "-"
     return (
-        f"<tr><td>{job_id}</td><td>{job_cell}</td>"
-        f"<td>{html.escape(str(row['company'] or '-'))}</td>"
-        f"<td>{html.escape(str(row['location'] or '-'))}</td>"
-        f"<td>{html.escape(str(row['status'] or '-'))}</td>"
-        f'<td><span class="badge" style="background:{_COLORS[current]}">'
-        f"{_LABELS[current]}</span></td>"
+        f"<tr><td>{job_id}</td><td>{title}</td>"
+        f"<td>{html.escape(str(row.get('company') or '-'))}</td>"
+        f"<td>{html.escape(str(row.get('location') or '-'))}</td>"
+        f"<td>{html.escape(str(row.get('source') or '-'))}</td>"
+        f"<td>{apply_link}</td>"
+        f"<td>{html.escape(str(score or '-'))}</td>"
+        f"<td>{html.escape(str(decision or '-'))}</td>"
+        f"<td>{html.escape(str(reasons or '-'))}</td>"
+        f"<td>{html.escape(str(risk or '-'))}</td>"
+        f"<td>{html.escape(str(missing or '-'))}</td>"
+        f"<td>{html.escape(str(seniority or '-'))}</td>"
+        f'<td><span class="badge" style="background:{_COLORS[current]}">{_LABELS[current]}</span></td>'
         f'<td class="actions">{actions}</td></tr>\n'
     )
 
