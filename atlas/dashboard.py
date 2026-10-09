@@ -281,11 +281,11 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
             rows = matched_jobs(conn)
         finally:
             conn.close()
-        # filter to APPLY or REVIEW
+        # filter to APPLY or REVIEW; if no decision set, show for backward compat
         filtered = []
         for r in rows:
             dec = str(r["decision"] or "").upper() if "decision" in r.keys() else ""
-            if dec in ("APPLY", "REVIEW"):
+            if dec in ("APPLY", "REVIEW") or dec == "":
                 filtered.append(r)
         body = _HEAD + _nav() + "<h1>Atlas — matched jobs</h1>"
         body += "<p><form method='post' action='/find'><button type='submit'>Find jobs</button></form></p>"
