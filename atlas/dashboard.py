@@ -11,8 +11,8 @@ Everything is manual bookkeeping. The dashboard never applies to a job: the
 
 from __future__ import annotations
 
-import html
 import hmac
+import html
 import json
 import os
 import secrets
@@ -20,7 +20,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -183,9 +183,7 @@ def build_profile(
 
     resume_source = Path(resume_path) if resume_path else None
     client = _make_client()
-    profile = _build_profile_impl(
-        client, resume_source=resume_source, description=description
-    )
+    profile = _build_profile_impl(client, resume_source=resume_source, description=description)
     conn = connect(database)
     init_db(conn)
     try:
@@ -212,9 +210,7 @@ def _db_counts(database: Path | None) -> dict[str, int]:
             "passed_filters": count(
                 "SELECT COUNT(DISTINCT job_id) FROM filter_results WHERE passed = 1"
             ),
-            "rejected": count(
-                "SELECT COUNT(DISTINCT job_id) FROM filter_results WHERE passed = 0"
-            ),
+            "rejected": count("SELECT COUNT(DISTINCT job_id) FROM filter_results WHERE passed = 0"),
             "decisions": count("SELECT COUNT(*) FROM decisions"),
         }
     finally:
@@ -305,9 +301,7 @@ def _main_risk(decision: dict[str, Any]) -> str:
     return "-"
 
 
-def _seniority_assessment(
-    evaluation: dict[str, Any], parsed: dict[str, Any]
-) -> str:
+def _seniority_assessment(evaluation: dict[str, Any], parsed: dict[str, Any]) -> str:
     assessment = evaluation.get("seniority_assessment")
     if isinstance(assessment, dict) and assessment.get("quote"):
         return str(assessment["quote"])
@@ -380,9 +374,7 @@ def _page(rows: list[sqlite3.Row], notice: str | None = None) -> str:
         '<p><form method="post" action="/find">'
         '<button type="submit">Find jobs</button></form></p>\n'
     )
-    parts.append(
-        f"<p>{len(rows)} matched job(s). Apply status is manual bookkeeping.</p>\n"
-    )
+    parts.append(f"<p>{len(rows)} matched job(s). Apply status is manual bookkeeping.</p>\n")
     parts.append(_TABLE_HEAD)
     if rows:
         parts.extend(_row_html(row) for row in rows)
@@ -434,11 +426,8 @@ def _parse_skills(text: str) -> list[Skill]:
 
 def create_app(database: Path | None = None, host: str | None = None) -> FastAPI:
     """Build the dashboard ASGI app (``database`` defaults to ``ATLAS_DB``)."""
-    if host and not host.startswith(("127.0.0.1", "localhost", "::1")):
-        if _get_password() is None:
-            raise RuntimeError(
-                "DASHBOARD_PASSWORD must be set when binding a non-loopback address"
-            )
+    if host and not host.startswith(("127.0.0.1", "localhost", "::1")) and _get_password() is None:
+        raise RuntimeError("DASHBOARD_PASSWORD must be set when binding a non-loopback address")
     app = FastAPI(title="Atlas dashboard", version="0.2.0")
 
     def require_auth(request: Request) -> Response | None:
@@ -556,7 +545,7 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
             + "<h1>Setup</h1>\n"
             + "<p>Upload a resume PDF, describe yourself, or both. Either is enough.</p>\n"
             + '<form method="post" action="/setup" enctype="multipart/form-data">'
-            + f'<p><label>Resume PDF (max {MAX_UPLOAD_MB} MB):<br>'
+            + f"<p><label>Resume PDF (max {MAX_UPLOAD_MB} MB):<br>"
             + '<input type="file" name="resume" accept="application/pdf"></label></p>'
             + "<p><label>Description (interests, target roles, skills):<br>"
             + '<textarea name="description" rows="8"></textarea></label></p>'
@@ -568,8 +557,8 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
     @app.post("/setup")
     def setup_post(
         request: Request,
-        resume: UploadFile | None = File(None),
-        description: str = Form(""),
+        resume: Annotated[UploadFile | None, File()] = None,
+        description: Annotated[str, Form()] = "",
     ) -> Response:
         if not _same_origin(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
@@ -725,8 +714,10 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
             _nav(),
             "<h1>Why not shown</h1>\n",
             "<p>Jobs with at least one failed hard filter.</p>\n",
-            "<table><thead><tr><th>#</th><th>Job</th><th>Company</th>"
-            "<th>Rule</th><th>Reason</th></tr></thead><tbody>\n",
+            (
+                "<table><thead><tr><th>#</th><th>Job</th><th>Company</th>"
+                "<th>Rule</th><th>Reason</th></tr></thead><tbody>\n"
+            ),
         ]
         if rows:
             for row in rows:
@@ -765,14 +756,20 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
         if denied:
             return denied
         status = _pipeline_status
-        counts = "".join(
-            f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
-            for k, v in (status.get("counts") or {}).items()
-        ) or "<li>-</li>"
-        errors = "".join(
-            f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
-            for k, v in (status.get("errors") or {}).items()
-        ) or "<li>-</li>"
+        counts = (
+            "".join(
+                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                for k, v in (status.get("counts") or {}).items()
+            )
+            or "<li>-</li>"
+        )
+        errors = (
+            "".join(
+                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                for k, v in (status.get("errors") or {}).items()
+            )
+            or "<li>-</li>"
+        )
         body = (
             _HEAD
             + _nav()

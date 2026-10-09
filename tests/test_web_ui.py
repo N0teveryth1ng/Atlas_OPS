@@ -7,9 +7,9 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-import atlas.dashboard as dashboard
-from atlas.db import connect, init_db, log_stage, start_run, upsert_job
+from atlas import dashboard
 from atlas.dashboard import create_app
+from atlas.db import connect, init_db, log_stage, start_run, upsert_job
 from atlas.schemas import Job
 
 
@@ -92,7 +92,6 @@ def test_upload_ignores_supplied_filename(tmp_path, monkeypatch):
 
     def fake_build(*, resume_path=None, description=None, database=None):
         captured["resume_path"] = resume_path
-        return None
 
     monkeypatch.setattr(dashboard, "build_profile", fake_build)
     client = TestClient(create_app(tmp_path / "dash.db"))
@@ -171,7 +170,14 @@ def test_rejected_page_shows_reason(tmp_path, monkeypatch):
     job_id, _ = upsert_job(
         conn, run_id, Job(source="s", url="http://a/9", dedupe_key="a9", title="Too Senior")
     )
-    log_stage(conn, "filter_results", job_id=job_id, passed=False, rule_id="seniority", evidence="7+ years")
+    log_stage(
+        conn,
+        "filter_results",
+        job_id=job_id,
+        passed=False,
+        rule_id="seniority",
+        evidence="7+ years",
+    )
     conn.commit()
     conn.close()
 
