@@ -436,25 +436,96 @@ def create_app(database: Path | None = None) -> FastAPI:
         auth = _require_auth(request)
         if auth:
             return auth
-        # simple view: jobs that are decided SKIP or not passed - we just list from decisions
         try:
             conn = _open(database)
-            rows = conn.execute("SELECT d.*, j.title, j.company, j.url FROM decisions d LEFT JOIN jobs j ON j.id=d.job_id ORDER BY d.id DESC LIMIT 200").fetchall()
+            rows = conn.execute("SELECT d.*, j.title, j.company, j.url FROM decisions d LEFT JOIN jobs j ON j.id=d.job_id ORDER BY d.id DESC LIMIT 500").fetchall()
             conn.close()
         except Exception as e:
             return HTMLResponse(_HEAD + _nav() + f"<h1>Rejected</h1><p class='error'>{html.escape(str(e))}</p>" + _TABLE_FOOT)
         items = []
         for r in rows:
-            items.append(f"<tr><td>{r['job_id']}</td><td>{html.escape(str(r['title'] or '-'))}</td><td>{html.escape(str(r['company'] or '-'))}</td><td>{html.escape(str(r['decision'] or ''))}</td><td>{html.escape(str(r['reason'] or ''))}</td></tr>")
+            decision = str(r["decision"] or "")
+            title = html.escape(str(r["title"] or "-"))
+            company = html.escape(str(r["company"] or "-"))
+            reason = html.escape(str(r["reason"] or "-"))
+            items.append(f"<tr><td>{r['job_id']}</td><td>{title}</td><td>{company}</td><td>{decision}</td><td>{reason}</td></tr>")
         content = (
             _HEAD
             + _nav()
-            + "<h1>Rejected/Decisions</h1>"
+            + "<h1>Why not shown</h1><p>Rejected jobs with reasons.</p>"
             + "<table><thead><tr><th>Job ID</th><th>Title</th><th>Company</th><th>Decision</th><th>Reason</th></tr></thead><tbody>"
             + "".join(items)
             + "</tbody></table>"
             + _TABLE_FOOT
         )
         return HTMLResponse(content)
+
+    @app.post("/find")
+    def find_jobs(request: Request) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        auth = _require_auth(request)
+        if auth:
+            return auth
+
+        def _run():
+            global _pipeline_status
+            with _pipeline_lock:
+                if _pipeline_status["running"]:
+                    return
+                _pipeline_status = {
+                    "running": True,
+                    "stage": "starting",
+                    "counts": {"collected": 0, "parsed": 0, "filtered": 0, "evaluated": 0, "verified": 0, "ranked": 0, "decided": 0},
+                    "errors": {},
+                    "started_at": time.time(),
+                    "finished_at": None,
+                    "result": None,
+                }
+            try:
+                if run_pipeline is not None:
+                    try:
+                        run_pipeline(database=database, collect_limit=20)
+                    except Exception as e:
+                        _pipeline_status["errors"]["pipeline"] = str(e)
+                _pipeline_status["stage"] = "done"
+            except Exception as e:
+                _pipeline_status["errors"]["fatal"] = str(e)
+                _pipeline_status["stage"] = "error"
+            finally:
+                _pipeline_status["running"] = False
+                _pipeline_status["finished_at"] = time.time()
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return RedirectResponse(url="/status", status_code=303)
+
+    @app.get("/status", response_class=HTMLResponse)
+    def status_get(request: Request) -> Response:
+        auth = _require_auth(request)
+        if auth:
+            return auth
+        ps = _pipeline_status
+        errs = "".join(f"<li>{html.escape(k)}: {html.escape(str(v))}</li>" for k, v in ps["errors"].items()) or "<li>None</li>"
+        content = (
+            _HEAD
+            + _nav()
+            + "<h1>Pipeline status</h1>"
+            + f"<p>Running: {ps['running']}</p>"
+            + f"<p>Stage: {html.escape(str(ps['stage']))}</p>"
+            + f"<p>Counts: {html.escape(str(ps['counts']))}</p>"
+            + "<p>Errors per source:</p><ul>" + errs + "</ul>"
+            + '<form method="post" action="/find"><button type="submit">Find jobs</button></form>'
+            + '<script>setTimeout(function(){window.location.reload();}, 2000);</script>'
+            + _TABLE_FOOT
+        )
+        return HTMLResponse(content)
+
+    @app.get("/status.json")
+    def status_json(request: Request) -> Response:
+        auth = _require_auth(request)
+        if auth:
+            return auth
+        return JSONResponse(_pipeline_status)
 
     return app
