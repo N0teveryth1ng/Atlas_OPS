@@ -329,8 +329,8 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         print(
-            "WARNING: dashboard has no authentication; binding to a non-loopback "
-            "host exposes it to the network.",
+            "WARNING: binding a non-loopback host exposes the dashboard to the "
+            "network; it is protected by DASHBOARD_PASSWORD.",
             file=sys.stderr,
         )
     print(f"Dashboard: http://{args.host}:{args.port}/ (Ctrl+C to stop)")

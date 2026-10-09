@@ -330,6 +330,52 @@ def matched_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         """).fetchall()
 
 
+def shippable_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Jobs that passed EVERY hard filter, with their latest decision/eval.
+
+    Read-only helper for the dashboard results table. It never changes filter
+    or decision behaviour: it only excludes jobs with a failed filter result
+    and attaches the latest stored decision, evaluation, and parsed JD.
+    """
+    return conn.execute("""
+        SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.status,
+               j.application_status,
+               (SELECT d.data_json FROM decisions d WHERE d.job_id = j.id
+                ORDER BY d.id DESC LIMIT 1) AS decision_json,
+               (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id
+                ORDER BY e.id DESC LIMIT 1) AS evaluation_json,
+               (SELECT p.data_json FROM parsed_jds p WHERE p.job_id = j.id
+                ORDER BY p.id DESC LIMIT 1) AS parsed_json
+        FROM jobs j
+        WHERE EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 1
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 0
+        )
+        ORDER BY j.id DESC
+        """).fetchall()
+
+
+def rejected_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Jobs with at least one failed hard filter, plus the rejection reason.
+
+    Read-only helper for the dashboard "why not shown" page.
+    """
+    return conn.execute("""
+        SELECT j.id, j.title, j.company, j.location, j.source, j.url,
+               (SELECT f.rule_id FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS rule_id,
+               (SELECT f.evidence FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS evidence
+        FROM jobs j
+        WHERE EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 0
+        )
+        ORDER BY j.id DESC
+        """).fetchall()
+
+
 def set_application_status(conn: sqlite3.Connection, job_id: int, status: str) -> None:
     """Set the human-tracked application status of one job.
 

@@ -175,6 +175,7 @@ class CandidateProfile(BaseModel):
     internships: list[Experience] = Field(default_factory=list)
     work: list[Experience] = Field(default_factory=list)
     target_roles: list[str] = Field(default_factory=list)
+    locations: list[str] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
     # Fields that could not be determined and need human confirmation.
     ambiguities: list[str] = Field(default_factory=list)
