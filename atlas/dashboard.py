@@ -86,6 +86,52 @@ _pipeline_status: dict[str, Any] = {
     "result": None,
 }
 
+_sessions: dict[str, float] = {}
+_SESSION_TTL = 3600 * 24 * 7
+
+
+def _get_password() -> str | None:
+    return os.environ.get("DASHBOARD_PASSWORD")
+
+
+def _constant_time_equal(a: str, b: str) -> bool:
+    if len(a) != len(b):
+        return False
+    try:
+        return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+    except Exception:
+        return a == b
+
+
+def _login_form(error: str | None = None) -> str:
+    err = f'<p class="error">{html.escape(error)}</p>\n' if error else ""
+    return (
+        _HEAD
+        + "<h1>Atlas — login</h1>\n"
+        + err
+        + '<form method="post" action="/login">'
+        + '<input type="password" name="password" placeholder="Password" required>'
+        + '<button type="submit">Login</button>'
+        + "</form>"
+        + _TABLE_FOOT.replace("</table></body></html>", "</body></html>")
+    )
+
+
+def _nav() -> str:
+    return (
+        '<nav><a href="/">Home</a><a href="/setup">Setup</a><a href="/profile">Profile</a>'
+        '<a href="/rejected">Rejected</a><a href="/status">Status</a></nav>'
+    )
+
+
+def _check_auth(request: Request) -> bool:
+    session = request.cookies.get("atlas_session")
+    if session and session in _sessions:
+        _sessions[session] = time.time()
+        return True
+    return False
+
+
 
 
 def _row_html(row: sqlite3.Row) -> str:
