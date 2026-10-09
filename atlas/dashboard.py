@@ -303,4 +303,24 @@ def create_app(database: Path | None = None) -> FastAPI:
             conn.close()
         return JSONResponse([dict(row) for row in rows])
 
+    @app.get("/setup", response_class=HTMLResponse)
+    def setup_get(request: Request) -> Response:
+        auth = _require_auth(request)
+        if auth:
+            return auth
+        content = (
+            _HEAD
+            + _nav()
+            + "<h1>Setup</h1>"
+            + "<form method='post' action='/setup' enctype='multipart/form-data'>"
+            + "<label>Upload resume PDF (max 5MB, pdf only):</label><br>"
+            + "<input type='file' name='resume' accept='.pdf,application/pdf'><br><br>"
+            + "<label>Description (either or both):</label><br>"
+            + "<textarea name='description' rows='6'></textarea><br><br>"
+            + "<button type='submit'>Build profile</button>"
+            + "</form>"
+            + _TABLE_FOOT
+        )
+        return HTMLResponse(content)
+
     return app
