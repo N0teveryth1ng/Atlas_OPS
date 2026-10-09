@@ -65,8 +65,10 @@ textarea { width: 100%; }
 """
 
 _TABLE_HEAD = """<table>
-<thead><tr><th>#</th><th>Job</th><th>Company</th><th>Location</th>
-<th>Pipeline</th><th>Apply status</th><th>Set</th></tr></thead>
+<thead><tr><th>#</th><th>Title</th><th>Company</th><th>Location</th><th>Source</th>
+<th>Apply link</th><th>Score</th><th>Decision</th><th>Top 2 reasons for</th>
+<th>Main risk</th><th>Missing skills</th><th>Seniority assessment</th>
+<th>Application status</th><th>Set</th></tr></thead>
 <tbody>
 """
 
