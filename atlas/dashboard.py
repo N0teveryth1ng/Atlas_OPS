@@ -11,11 +11,16 @@ stores what a human clicked, it never applies to a job anywhere.
 from __future__ import annotations
 
 import html
+import hmac
+import os
+import secrets
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .db import APPLICATION_STATUSES, connect, init_db, matched_jobs, set_application_status
@@ -29,7 +34,7 @@ _HEAD = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Atlas — matched jobs</title>
+<title>Atlas — dashboard</title>
 <style>
 body { font-family: system-ui, sans-serif; margin: 2rem; color: #1f2328; }
 table { border-collapse: collapse; width: 100%; }
@@ -39,9 +44,13 @@ a { color: #0969da; }
 .badge { color: #fff; border: 0; border-radius: 999px; padding: 0.15rem 0.6rem;
          font-size: 0.8rem; display: inline-block; }
 .actions form { display: inline-block; margin-right: 0.25rem; }
-button.badge { cursor: pointer; opacity: 0.5; }
+button { cursor: pointer; }
+button.badge { opacity: 0.5; }
 button.badge:hover { opacity: 1; }
 .notice { background: #fff8c5; border: 1px solid #d4a72c; padding: 0.75rem; }
+.error { background: #ffeef0; border: 1px solid #cf222e; padding: 0.75rem; }
+nav a { margin-right: 1rem; }
+textarea { width: 100%; }
 </style>
 </head>
 <body>
