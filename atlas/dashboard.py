@@ -369,4 +369,92 @@ def create_app(database: Path | None = None) -> FastAPI:
                     pass
             return HTMLResponse(_HEAD + _nav() + f"<h1>Setup</h1><p class='error'>Error: {html.escape(str(e))}</p>" + _TABLE_FOOT)
 
+    @app.get("/profile", response_class=HTMLResponse)
+    def profile_get(request: Request) -> Response:
+        auth = _require_auth(request)
+        if auth:
+            return auth
+        try:
+            conn = _open(database)
+            row = conn.execute("SELECT * FROM profiles ORDER BY id DESC LIMIT 1").fetchone()
+            conn.close()
+        except Exception as e:
+            return HTMLResponse(_HEAD + _nav() + f"<h1>Profile</h1><p class='error'>{html.escape(str(e))}</p>" + _TABLE_FOOT)
+        if not row:
+            return HTMLResponse(_HEAD + _nav() + "<h1>Profile</h1><p>No profile found. Go to <a href='/setup'>Setup</a>.</p>" + _TABLE_FOOT)
+        skills = row["skills"] if "skills" in row.keys() else ""
+        skill_count = len([s for s in str(skills).split(",") if s.strip()]) if skills else 0
+        warn = ""
+        if skill_count < 5:
+            warn = "<p class='notice'>Warning: fewer than 5 skills extracted. Add skills manually below.</p>"
+        content = (
+            _HEAD
+            + _nav()
+            + "<h1>Profile</h1>"
+            + warn
+            + "<form method='post' action='/profile'>"
+            + f"<label>Level:</label><br><input name='level' value='{html.escape(str(row['level'] or ''))}'><br>"
+            + f"<label>Years:</label><br><input name='years' value='{html.escape(str(row['years'] or ''))}'><br>"
+            + f"<label>Skills (comma separated):</label><br><input name='skills' value='{html.escape(str(skills))}' style='width:100%'><br>"
+            + f"<label>Target roles:</label><br><input name='target_roles' value='{html.escape(str(row['target_roles'] or ''))}' style='width:100%'><br>"
+            + f"<label>Locations:</label><br><input name='locations' value='{html.escape(str(row['locations'] or ''))}' style='width:100%'><br>"
+            + f"<label>Ambiguities:</label><br><input name='ambiguities' value='{html.escape(str(row['ambiguities'] or ''))}' style='width:100%'><br><br>"
+            + "<button type='submit'>Approve</button>"
+            + "</form>"
+            + _TABLE_FOOT
+        )
+        return HTMLResponse(content)
+
+    @app.post("/profile")
+    def profile_post(request: Request, level: str = Form(""), years: str = Form(""), skills: str = Form(""), target_roles: str = Form(""), locations: str = Form(""), ambiguities: str = Form("")) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        auth = _require_auth(request)
+        if auth:
+            return auth
+        try:
+            conn = _open(database)
+            row = conn.execute("SELECT id FROM profiles ORDER BY id DESC LIMIT 1").fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE profiles SET level=?, years=?, skills=?, target_roles=?, locations=?, ambiguities=?, approved_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (level, years, skills, target_roles, locations, ambiguities, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO profiles (level, years, skills, target_roles, locations, ambiguities, approved_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (level, years, skills, target_roles, locations, ambiguities),
+                )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            return HTMLResponse(_HEAD + _nav() + f"<h1>Profile</h1><p class='error'>{html.escape(str(e))}</p>" + _TABLE_FOOT)
+        return RedirectResponse(url="/", status_code=303)
+
+    @app.get("/rejected", response_class=HTMLResponse)
+    def rejected_get(request: Request) -> Response:
+        auth = _require_auth(request)
+        if auth:
+            return auth
+        # simple view: jobs that are decided SKIP or not passed - we just list from decisions
+        try:
+            conn = _open(database)
+            rows = conn.execute("SELECT d.*, j.title, j.company, j.url FROM decisions d LEFT JOIN jobs j ON j.id=d.job_id ORDER BY d.id DESC LIMIT 200").fetchall()
+            conn.close()
+        except Exception as e:
+            return HTMLResponse(_HEAD + _nav() + f"<h1>Rejected</h1><p class='error'>{html.escape(str(e))}</p>" + _TABLE_FOOT)
+        items = []
+        for r in rows:
+            items.append(f"<tr><td>{r['job_id']}</td><td>{html.escape(str(r['title'] or '-'))}</td><td>{html.escape(str(r['company'] or '-'))}</td><td>{html.escape(str(r['decision'] or ''))}</td><td>{html.escape(str(r['reason'] or ''))}</td></tr>")
+        content = (
+            _HEAD
+            + _nav()
+            + "<h1>Rejected/Decisions</h1>"
+            + "<table><thead><tr><th>Job ID</th><th>Title</th><th>Company</th><th>Decision</th><th>Reason</th></tr></thead><tbody>"
+            + "".join(items)
+            + "</tbody></table>"
+            + _TABLE_FOOT
+        )
+        return HTMLResponse(content)
+
     return app
