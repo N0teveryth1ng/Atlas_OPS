@@ -1,3 +1,4 @@
+import time
 from datetime import UTC, datetime, timedelta
 
 from atlas.collectors.base import Collector
@@ -85,3 +86,66 @@ def test_run_sourcing_defined_exactly_once():
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run_sourcing"
     ]
     assert len(defs) == 1
+
+
+class HangingCollector(Collector):
+    query_based = True
+
+    def __init__(self, name):
+        super().__init__(get_json=lambda url, params: None)
+        self.name = name
+
+    def fetch(self, query):
+        time.sleep(30)
+        return []
+
+
+class RaisingCollector(Collector):
+    query_based = True
+
+    def __init__(self, name):
+        super().__init__(get_json=lambda url, params: None)
+        self.name = name
+
+    def fetch(self, query):
+        raise RuntimeError("boom")
+
+
+def test_source_timeout_is_recorded_and_the_run_continues():
+    slow = HangingCollector("slow")
+    good = FakeCollector("good", [_job(source="good")])
+
+    started = time.monotonic()
+    result = collect([slow, good], [""], settings=Settings(), now=NOW, source_timeout=0.2)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5, "a hung source must not hold up the run"
+    assert "timed out" in result.source_errors["slow"]
+    assert [item.source for item in result.source_yields] == ["slow", "good"]
+    assert result.source_yields[1].fetched == 1
+    assert len(result.jobs) == 1
+
+
+def test_source_exception_is_recorded_and_the_run_continues():
+    bad = RaisingCollector("bad")
+    good = FakeCollector("good", [_job(source="good")])
+
+    result = collect([bad, good], [""], settings=Settings(), now=NOW, source_timeout=5.0)
+
+    assert result.source_errors["bad"] == "RuntimeError: boom"
+    assert result.source_yields[0].fetched == 0
+    assert result.source_yields[1].fetched == 1
+    assert len(result.jobs) == 1
+
+
+def test_whole_collection_timeout_skips_the_remaining_sources():
+    a = HangingCollector("a")
+    b = FakeCollector("b", [_job(source="b")])
+
+    result = collect(
+        [a, b], [""], settings=Settings(), now=NOW, source_timeout=5.0, run_timeout=0.15
+    )
+
+    assert "timed out" in result.source_errors["a"]
+    assert result.source_errors["b"] == "collection run timed out"
+    assert result.jobs == []

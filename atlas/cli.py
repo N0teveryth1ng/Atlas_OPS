@@ -186,6 +186,8 @@ def _execute_run(
     *,
     run_kind: str = "run",
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    on_source: Callable[[dict[str, Any]], None] | None = None,
+    database: Path | None = None,
 ) -> int:
     from .db import emailed_job_ids, mark_digest_sent, save_digest
     from .digest import build_digest, render_html, render_text
@@ -193,11 +195,12 @@ def _execute_run(
     from .pipeline import run_pipeline
 
     def emit(stage: str, **fields: Any) -> None:
+        logger.info("stage %s %s", stage, fields or "")
         if on_event is not None:
             on_event({"stage": stage, **fields})
 
     settings = get_settings()
-    conn = connect()
+    conn = connect(database)
     init_db(conn)
     profile = get_latest_profile(conn)
     if profile is None:
@@ -219,12 +222,15 @@ def _execute_run(
         from .sourcing import run_sourcing
 
         emit("collecting")
-        sourcing_result = run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
+        sourcing_result = run_sourcing(
+            profile, settings=settings, conn=conn, run_id=run_id, on_source=on_source
+        )
         emit(
             "collected",
             collected=len(sourcing_result.jobs),
             new_jobs=sourcing_result.new_jobs,
             queries=len(sourcing_result.queries),
+            source_errors=dict(sourcing_result.source_errors),
         )
 
     results = run_pipeline(
@@ -391,6 +397,10 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
     from .dashboard import create_app
 
+    # Configure logging for the dashboard process too, so a background run's
+    # per-stage and per-source lines reach the terminal (the worker thread logs
+    # through the same root logger the CLI uses).
+    setup_logging()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         print(
             "WARNING: binding a non-loopback host exposes the dashboard to the "

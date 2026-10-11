@@ -14,6 +14,7 @@ from __future__ import annotations
 import hmac
 import html
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -72,6 +73,8 @@ MAX_UPLOAD_MB = 5
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 _SESSION_TTL = 3600 * 24 * 7
 
+logger = logging.getLogger(__name__)
+
 _pipeline_lock = threading.Lock()
 _sessions: dict[str, float] = {}
 
@@ -85,6 +88,7 @@ def _blank_pipeline_status() -> dict[str, Any]:
         "sources": [],
         "progress": {},
         "errors": {},
+        "current_source": None,
         "started_at": None,
         "finished_at": None,
         "result": None,
@@ -242,7 +246,14 @@ def _db_counts(database: Path | None) -> dict[str, int]:
 
 
 def _run_pipeline_worker(database: Path | None = None) -> None:
-    """Collect and process jobs using the exact CLI run path, reporting progress."""
+    """Collect and process jobs using the exact CLI run path, reporting progress.
+
+    The worker never holds ``_pipeline_lock`` (that lock only guards the
+    running-check in :func:`start_pipeline`), catches every failure so a dead
+    thread cannot leave the page stuck, and always clears ``running`` in a
+    ``finally`` block. Per-stage and per-source results land in shared state as
+    the run goes, so ``/status`` moves without waiting for the run to finish.
+    """
     try:
         conn = connect(database)
         init_db(conn)
@@ -262,6 +273,7 @@ def _run_pipeline_worker(database: Path | None = None) -> None:
         _pipeline_status["stages"] = {}
         _pipeline_status["sources"] = []
         _pipeline_status["progress"] = {}
+        _pipeline_status["current_source"] = None
 
         def on_event(event: dict[str, Any]) -> None:
             stage = str(event.get("stage") or "")
@@ -273,6 +285,9 @@ def _run_pipeline_worker(database: Path | None = None) -> None:
                     "collected": event.get("collected", 0),
                     "new_jobs": event.get("new_jobs", 0),
                 }
+                for name, message in (event.get("source_errors") or {}).items():
+                    _pipeline_status["errors"][name] = message
+                _pipeline_status["counts"] = _db_counts(database)
             elif stage == "processing":
                 _pipeline_status["stage"] = "processing"
                 _pipeline_status["stages"] = {
@@ -282,8 +297,57 @@ def _run_pipeline_worker(database: Path | None = None) -> None:
             elif stage == "sources":
                 _pipeline_status["sources"] = list(event.get("sources") or [])
 
+        def on_source(event: dict[str, Any]) -> None:
+            name = str(event.get("source") or "")
+            phase = str(event.get("phase") or "")
+            if phase == "start":
+                _pipeline_status["current_source"] = name
+                logger.info("dashboard: collecting source %s", name)
+            elif phase == "end":
+                _pipeline_status["current_source"] = None
+                _pipeline_status["sources"].append(
+                    {
+                        "source": name,
+                        "fetched": event.get("fetched"),
+                        "kept": event.get("kept"),
+                        "passed_filters": 0,
+                        "sent": 0,
+                        "error": None,
+                        "elapsed": event.get("elapsed"),
+                    }
+                )
+                logger.info(
+                    "dashboard: source %s done (fetched=%s, kept=%s, %.2fs)",
+                    name,
+                    event.get("fetched"),
+                    event.get("kept"),
+                    event.get("elapsed") or 0.0,
+                )
+            elif phase == "error":
+                _pipeline_status["current_source"] = None
+                message = str(event.get("error") or "failed")
+                _pipeline_status["errors"][name] = message
+                _pipeline_status["sources"].append(
+                    {
+                        "source": name,
+                        "fetched": 0,
+                        "kept": 0,
+                        "passed_filters": 0,
+                        "sent": 0,
+                        "error": message,
+                        "elapsed": event.get("elapsed"),
+                    }
+                )
+                logger.error("dashboard: source %s errored: %s", name, message)
+
         args = argparse.Namespace(collect=True, limit=50)
-        code = _execute_run(args, run_kind="dashboard", on_event=on_event)
+        code = _execute_run(
+            args,
+            run_kind="dashboard",
+            on_event=on_event,
+            on_source=on_source,
+            database=database,
+        )
         _pipeline_status["counts"] = _db_counts(database)
         if code == 0:
             _pipeline_status["stage"] = "done"
@@ -291,11 +355,13 @@ def _run_pipeline_worker(database: Path | None = None) -> None:
         else:
             _pipeline_status["stage"] = "error"
             _pipeline_status["errors"]["pipeline"] = f"exit code {code}"
-    except Exception as exc:  # noqa: BLE001 - surface any failure to the page
+    except Exception as exc:
+        logger.exception("dashboard: pipeline worker failed")
         _pipeline_status["stage"] = "error"
         _pipeline_status["errors"]["pipeline"] = str(exc)
     finally:
         _pipeline_status["running"] = False
+        _pipeline_status["current_source"] = None
         _pipeline_status["finished_at"] = time.time()
 
 
@@ -1202,12 +1268,21 @@ def create_app(
             )
             or "<li>-</li>"
         )
+        started = status.get("started_at")
+        if started:
+            end = status.get("finished_at") or time.time()
+            elapsed = f"{end - started:.0f}s"
+        else:
+            elapsed = "-"
+        current = status.get("current_source") or "-"
         body = (
             _HEAD
             + _nav()
             + "<h1>Pipeline status</h1>\n"
             + f"<p>Running: {html.escape(str(status['running']))} &nbsp; "
-            + f"Stage: {html.escape(str(status['stage']))}</p>\n"
+            + f"Stage: {html.escape(str(status['stage']))} &nbsp; "
+            + f"Current source: {html.escape(str(current))} &nbsp; "
+            + f"Elapsed: {html.escape(elapsed)}</p>\n"
             + f"<p>Per-stage counts:</p><ul>{stages}</ul>\n"
             + f"<p>Per-source results:</p><ul>{sources}</ul>\n"
             + f"<p>Totals in database:</p><ul>{counts}</ul>\n"
