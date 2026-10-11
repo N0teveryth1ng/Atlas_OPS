@@ -7,10 +7,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from atlas import dashboard
+from atlas import cli, dashboard
 from atlas.dashboard import create_app
-from atlas.db import connect, init_db, log_stage, start_run, upsert_job
-from atlas.schemas import Job
+from atlas.db import connect, init_db, log_stage, save_profile, start_run, upsert_job
+from atlas.schemas import CandidateProfile, Job
 
 
 @pytest.fixture(autouse=True)
@@ -198,3 +198,70 @@ def test_refuse_non_loopback_without_password(tmp_path, monkeypatch):
 def test_non_loopback_with_password_starts(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
     assert create_app(tmp_path / "dash.db", host="0.0.0.0") is not None
+
+
+def test_find_reports_per_stage_and_per_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    save_profile(conn, CandidateProfile(full_name="A", target_roles=["x"], approved=True))
+    conn.close()
+
+    def fake_execute(args, *, run_kind="run", on_event=None):
+        assert on_event is not None
+        on_event({"stage": "collecting"})
+        on_event({"stage": "collected", "collected": 3, "new_jobs": 2})
+        on_event(
+            {
+                "stage": "processing",
+                "total": 3,
+                "done": 3,
+                "parsed": 3,
+                "filtered_out": 1,
+                "needs_review": 0,
+                "evaluated": 2,
+                "verified": 2,
+                "decided": 2,
+            }
+        )
+        on_event(
+            {
+                "stage": "sources",
+                "sources": [
+                    {
+                        "source": "remotive",
+                        "fetched": 5,
+                        "kept": 3,
+                        "passed_filters": 2,
+                        "sent": 0,
+                    }
+                ],
+            }
+        )
+        return 0
+
+    monkeypatch.setattr(cli, "_execute_run", fake_execute)
+    dashboard._run_pipeline_worker(db)
+
+    status = dashboard._pipeline_status
+    assert status["stage"] == "done"
+    assert status["stages"]["decided"] == 2
+    assert status["stages"]["filtered_out"] == 1
+    assert status["sources"][0]["source"] == "remotive"
+
+
+def test_find_status_page_shows_stages_and_sources(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    dashboard._pipeline_status["stage"] = "processing"
+    dashboard._pipeline_status["stages"] = {"decided": 2, "filtered_out": 1}
+    dashboard._pipeline_status["sources"] = [
+        {"source": "remotive", "fetched": 5, "kept": 3, "passed_filters": 2, "sent": 0}
+    ]
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    client.post("/login", data={"password": "pw"})
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert "Per-stage counts" in response.text
+    assert "Per-source results" in response.text
+    assert "remotive" in response.text

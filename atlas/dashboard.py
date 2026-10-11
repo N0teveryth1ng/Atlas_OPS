@@ -67,6 +67,9 @@ def _blank_pipeline_status() -> dict[str, Any]:
         "running": False,
         "stage": "idle",
         "counts": {},
+        "stages": {},
+        "sources": [],
+        "progress": {},
         "errors": {},
         "started_at": None,
         "finished_at": None,
@@ -225,7 +228,7 @@ def _db_counts(database: Path | None) -> dict[str, int]:
 
 
 def _run_pipeline_worker(database: Path | None = None) -> None:
-    """Collect and process jobs using the exact CLI run path."""
+    """Collect and process jobs using the exact CLI run path, reporting progress."""
     try:
         conn = connect(database)
         init_db(conn)
@@ -242,8 +245,31 @@ def _run_pipeline_worker(database: Path | None = None) -> None:
 
         _pipeline_status["stage"] = "collecting"
         _pipeline_status["errors"] = {}
+        _pipeline_status["stages"] = {}
+        _pipeline_status["sources"] = []
+        _pipeline_status["progress"] = {}
+
+        def on_event(event: dict[str, Any]) -> None:
+            stage = str(event.get("stage") or "")
+            if stage == "collecting":
+                _pipeline_status["stage"] = "collecting"
+            elif stage == "collected":
+                _pipeline_status["stage"] = "processing"
+                _pipeline_status["progress"] = {
+                    "collected": event.get("collected", 0),
+                    "new_jobs": event.get("new_jobs", 0),
+                }
+            elif stage == "processing":
+                _pipeline_status["stage"] = "processing"
+                _pipeline_status["stages"] = {
+                    key: value for key, value in event.items() if key != "stage"
+                }
+                _pipeline_status["progress"] = _pipeline_status["stages"]
+            elif stage == "sources":
+                _pipeline_status["sources"] = list(event.get("sources") or [])
+
         args = argparse.Namespace(collect=True, limit=50)
-        code = _execute_run(args, run_kind="dashboard")
+        code = _execute_run(args, run_kind="dashboard", on_event=on_event)
         _pipeline_status["counts"] = _db_counts(database)
         if code == 0:
             _pipeline_status["stage"] = "done"
@@ -863,6 +889,27 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
             )
             or "<li>-</li>"
         )
+        stages = (
+            "".join(
+                f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                for k, v in (status.get("stages") or {}).items()
+            )
+            or "<li>-</li>"
+        )
+        source_items = status.get("sources") or []
+        if source_items:
+            sources = "".join(
+                "<li>"
+                + html.escape(str(item.get("source")))
+                + f": fetched={html.escape(str(item.get('fetched')))}"
+                + f" kept={html.escape(str(item.get('kept')))}"
+                + f" passed={html.escape(str(item.get('passed_filters')))}"
+                + f" sent={html.escape(str(item.get('sent')))}"
+                + "</li>"
+                for item in source_items
+            )
+        else:
+            sources = "<li>-</li>"
         errors = (
             "".join(
                 f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
@@ -876,7 +923,9 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
             + "<h1>Pipeline status</h1>\n"
             + f"<p>Running: {html.escape(str(status['running']))} &nbsp; "
             + f"Stage: {html.escape(str(status['stage']))}</p>\n"
-            + f"<p>Counts:</p><ul>{counts}</ul>\n"
+            + f"<p>Per-stage counts:</p><ul>{stages}</ul>\n"
+            + f"<p>Per-source results:</p><ul>{sources}</ul>\n"
+            + f"<p>Totals in database:</p><ul>{counts}</ul>\n"
             + f"<p>Errors per source:</p><ul>{errors}</ul>\n"
             + '<p><form method="post" action="/find">'
             + '<button type="submit">Find jobs</button></form></p>\n'

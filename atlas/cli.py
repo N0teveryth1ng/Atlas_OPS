@@ -21,7 +21,9 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .config import REPO_ROOT, get_settings
@@ -179,11 +181,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     return _execute_run(args, run_kind="run")
 
 
-def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
+def _execute_run(
+    args: argparse.Namespace,
+    *,
+    run_kind: str = "run",
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> int:
     from .db import emailed_job_ids, mark_digest_sent, save_digest
     from .digest import build_digest, render_html, render_text
     from .feedback import load_and_apply
     from .pipeline import run_pipeline
+
+    def emit(stage: str, **fields: Any) -> None:
+        if on_event is not None:
+            on_event({"stage": stage, **fields})
 
     settings = get_settings()
     conn = connect()
@@ -204,10 +215,24 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     if getattr(args, "collect", False):
         from .sourcing import run_sourcing
 
+        emit("collecting")
         sourcing_result = run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
+        emit(
+            "collected",
+            collected=len(sourcing_result.jobs),
+            new_jobs=sourcing_result.new_jobs,
+            queries=len(sourcing_result.queries),
+        )
 
     results = run_pipeline(
-        conn, run_id, profile, settings, client, limit=getattr(args, "limit", None)
+        conn,
+        run_id,
+        profile,
+        settings,
+        client,
+        limit=getattr(args, "limit", None),
+        resume=True,
+        on_progress=lambda progress: emit("processing", **progress),
     )
     from .job_status import InvariantViolation, JobStatus, assert_sent_subset
 
@@ -247,6 +272,19 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
                 f"  {item.source:<15} fetched={item.fetched:<5} kept={item.kept:<5} "
                 f"passed={item.passed_filters:<5} sent={item.sent}"
             )
+        emit(
+            "sources",
+            sources=[
+                {
+                    "source": item.source,
+                    "fetched": item.fetched,
+                    "kept": item.kept,
+                    "passed_filters": item.passed_filters,
+                    "sent": item.sent,
+                }
+                for item in sourcing_result.source_yields
+            ],
+        )
     finish_run(conn, run_id, "ok", summary=digest.summary.model_dump())
     conn.close()
     return 0

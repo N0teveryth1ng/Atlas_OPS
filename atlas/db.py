@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import REPO_ROOT
-from .job_status import JobStatus, transition
+from .job_status import JobStatus, reset_for_retry, transition
 from .schemas import CandidateProfile, Job
 
 DEFAULT_DB_PATH = REPO_ROOT / "atlas.db"
@@ -306,6 +306,20 @@ def set_job_status(conn: sqlite3.Connection, job_id: int, new_status: JobStatus)
     resolved = transition(current, new_status)
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (resolved.value, job_id))
     conn.commit()
+    return resolved
+
+
+def reset_job_for_retry(conn: sqlite3.Connection, job_id: int) -> JobStatus:
+    """Rewind a decision-free, pre-decision job to ``new`` so a run can finish it.
+
+    Uses the explicit retry helper (not the forward graph) so a stalled job does
+    not trip the state machine. Terminal states raise ``IllegalTransition``.
+    """
+    current = get_job_status(conn, job_id)
+    resolved = reset_for_retry(current)
+    if resolved is not current:
+        conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (resolved.value, job_id))
+        conn.commit()
     return resolved
 
 

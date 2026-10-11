@@ -15,12 +15,13 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from .config import Settings, get_settings
-from .db import log_stage, set_job_status
+from .db import log_stage, reset_job_for_retry, set_job_status
 from .decision import evaluate_decision
 from .evaluator import evaluate_job
 from .evidence import EvidenceValidationError
@@ -45,6 +46,18 @@ from .skills import SkillMatch, match_skills
 from .verifier import verify_job
 
 logger = logging.getLogger(__name__)
+
+#: States a job can legally be *resumed* from in a later run. Every other state
+#: is terminal: ``rejected`` (filter decided skip), ``needs_review`` (flagged for
+#: a human), ``ranked``/``sent`` (already decided and shipped). Selecting these
+#: would either re-burn LLM quota forever or violate the state machine.
+RESUMABLE_STATUSES: tuple[JobStatus, ...] = (
+    JobStatus.new,
+    JobStatus.parsed,
+    JobStatus.passed_filters,
+    JobStatus.evaluated,
+    JobStatus.verified,
+)
 
 
 def _job_fields(job_id: int | None, job: Job) -> dict[str, Any]:
@@ -105,6 +118,7 @@ def load_jobs(
     run_id: int | None = None,
     limit: int | None = None,
     statuses: tuple[JobStatus, ...] | None = (JobStatus.new,),
+    undecided: bool = False,
 ) -> list[tuple[int, Job]]:
     """Stored jobs to process, newest first.
 
@@ -113,6 +127,10 @@ def load_jobs(
     legally restart at ``parsed``, so selecting it would spend the run on
     IllegalTransition warnings while the digest reported "no matches". Callers that
     deliberately want every row pass ``statuses=None``.
+
+    ``undecided=True`` additionally drops any job that already has a row in
+    ``decisions``: the decision engine has already ruled on it, so re-running would
+    only overwrite a stable verdict (and burn quota).
     """
     sql = (
         "SELECT id, source, source_id, dedupe_key, title, company, location, remote_type, "
@@ -126,6 +144,8 @@ def load_jobs(
     if statuses:
         clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
         params.extend(status.value for status in statuses)
+    if undecided:
+        clauses.append("NOT EXISTS (SELECT 1 FROM decisions d WHERE d.job_id = jobs.id)")
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY id DESC"
@@ -163,6 +183,11 @@ def process_job(
     conn: sqlite3.Connection | None = None,
 ) -> ProcessedJob:
     result = ProcessedJob(job_id=job_id, job=job)
+    if conn is not None and job_id is not None:
+        # A job left mid-pipeline by an interrupted run has no decision to
+        # preserve; rewind it to `new` via the explicit retry path so it can be
+        # finished instead of tripping the (strict) forward state machine.
+        reset_job_for_retry(conn, job_id)
     result.advance(JobStatus.parsed, conn)
 
     job_fields = _job_fields(job_id, job)
@@ -376,11 +401,17 @@ def run_pipeline(
     *,
     limit: int | None = None,
     cache: dict | None = None,
+    resume: bool = False,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[ProcessedJob]:
     settings = settings or get_settings()
     cache = cache if cache is not None else {}
     processed: list[ProcessedJob] = []
-    jobs = load_jobs(conn, limit=limit)
+    if resume:
+        # Process every job no decision has ruled on yet, not just brand-new rows.
+        jobs = load_jobs(conn, limit=limit, statuses=RESUMABLE_STATUSES, undecided=True)
+    else:
+        jobs = load_jobs(conn, limit=limit)
     logger.info("Pipeline: processing %d job(s)", len(jobs))
     skipped = conn.execute(
         "SELECT COUNT(*) FROM jobs WHERE status != ?", (JobStatus.new.value,)
@@ -390,14 +421,45 @@ def run_pipeline(
             "Pipeline: skipping %d stored job(s) that are already processed or mid-run",
             skipped,
         )
+
+    progress: dict[str, Any] = {
+        "total": len(jobs),
+        "done": 0,
+        "parsed": 0,
+        "filtered_out": 0,
+        "needs_review": 0,
+        "evaluated": 0,
+        "verified": 0,
+        "decided": 0,
+    }
+
+    def _report() -> None:
+        if on_progress is not None:
+            on_progress(dict(progress))
+
+    _report()
     with traced_stage("pipeline.run", stage="run", run_id=run_id, jobs=len(jobs)) as run_span:
         for job_id, job in jobs:
             try:
-                processed.append(
-                    process_job(client, job_id, job, profile, settings, cache=cache, conn=conn)
-                )
+                result = process_job(client, job_id, job, profile, settings, cache=cache, conn=conn)
+                processed.append(result)
             except Exception as exc:  # noqa: BLE001 - one bad job must not kill the run
                 logger.warning("job %s failed: %s", job_id, exc)
+                continue
+            progress["done"] += 1
+            if result.parsed is not None:
+                progress["parsed"] += 1
+            if result.filter_result is not None and not result.filter_result.passed:
+                progress["filtered_out"] += 1
+            if result.needs_review:
+                progress["needs_review"] += 1
+            if result.verdict is not None:
+                progress["evaluated"] += 1
+            if result.verifier is not None:
+                progress["verified"] += 1
+            if result.decision is not None:
+                progress["decided"] += 1
+            _report()
         run_span.set_metadata(
             processed=len(processed),
             filtered_out=sum(
