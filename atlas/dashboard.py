@@ -35,6 +35,7 @@ from .db import (
     rejected_jobs,
     save_profile,
     set_application_status,
+    shippable_job,
     shippable_jobs,
 )
 from .digest import is_http_url
@@ -414,6 +415,10 @@ def _row_html(row: sqlite3.Row) -> str:
         )
         for code in APPLICATION_STATUSES
     )
+    prepare = (
+        f'<a class="badge" style="background:#8250df" href="/jobs/{job_id}/kit">'
+        "Prepare application</a> "
+    )
     return (
         f"<tr><td>{job_id}</td><td>{job_cell}</td>"
         f"<td>{html.escape(str(row['company'] or '-'))}</td>"
@@ -427,7 +432,7 @@ def _row_html(row: sqlite3.Row) -> str:
         f"<td>{html.escape(_seniority_text(evaluation, parsed))}</td>"
         f'<td><span class="badge" style="background:{_COLORS[current]}">'
         f"{_LABELS[current]}</span></td>"
-        f'<td class="actions">{actions}</td></tr>\n'
+        f'<td class="actions">{prepare}{actions}</td></tr>\n'
     )
 
 
@@ -465,6 +470,39 @@ def _undecided_row_html(row: sqlite3.Row) -> str:
         f"<td>{html.escape(_seniority_text(evaluation, parsed))}</td>"
         "<td>passed all filters, no decision stored yet</td></tr>\n"
     )
+
+
+def _kit_page(row: sqlite3.Row, notice: str | None = None) -> str:
+    """Application-kit page for one job: posting info plus a generate form.
+
+    The kit itself (summary/cover/responses) is generated and stored in later
+    Phase 8a steps; this page owns the navigation and the generate trigger.
+    """
+    job_id = int(row["id"])
+    url = str(row["url"] or "")
+    title = html.escape(str(row["title"] or url or f"job {job_id}"))
+    company = html.escape(str(row["company"] or "-"))
+    location = html.escape(str(row["location"] or "-"))
+    source = html.escape(str(row["source"] or "-"))
+    apply_link = (
+        f'<a href="{html.escape(url, quote=True)}" rel="noreferrer">Open posting</a>'
+        if is_http_url(url)
+        else html.escape(url or "-")
+    )
+    parts = [_HEAD, _nav(), "<h1>Application kit</h1>\n"]
+    if notice:
+        parts.append(f'<p class="notice">{html.escape(notice)}</p>\n')
+    parts.append(
+        f"<p>{title}<br>Company: {company}<br>Location: {location}<br>"
+        f"Source: {source}<br>Posting: {apply_link}</p>\n"
+    )
+    parts.append(
+        f'<form method="post" action="/jobs/{job_id}/kit">'
+        '<button type="submit">Generate application kit</button></form>\n'
+    )
+    parts.append('<p><a href="/">Back to results</a></p>\n')
+    parts.append(_TABLE_FOOT)
+    return "".join(parts)
 
 
 def _page(
@@ -675,6 +713,57 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
         finally:
             conn.close()
         return RedirectResponse(url="/", status_code=303)
+
+    def _kit_job_or_error(job_id: int) -> tuple[sqlite3.Row | None, str | None, int]:
+        """Load one APPLY/REVIEW job for the kit page, or an error page body."""
+
+        def _error(message: str) -> str:
+            return (
+                _HEAD
+                + _nav()
+                + "<h1>Application kit</h1>"
+                + f'<p class="error">{message}</p>'
+                + _TABLE_FOOT
+            )
+
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return None, _error(f"Database unavailable: {exc}"), 503
+        try:
+            row = shippable_job(conn, job_id)
+        finally:
+            conn.close()
+        if row is None:
+            return None, _error("Job not found, or it did not pass every hard filter."), 404
+        outcome = str(_load_json(row["decision_json"]).get("outcome") or "").lower()
+        if outcome not in _SHOWN_OUTCOMES:
+            return None, _error("No APPLY/REVIEW decision stored for this job."), 404
+        return row, None, 200
+
+    @app.get("/jobs/{job_id}/kit", response_class=HTMLResponse)
+    def kit_get(request: Request, job_id: int) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        row, error_html, status = _kit_job_or_error(job_id)
+        if row is None:
+            return HTMLResponse(error_html, status_code=status)
+        return HTMLResponse(_kit_page(row))
+
+    @app.post("/jobs/{job_id}/kit")
+    def kit_post(request: Request, job_id: int) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+        row, error_html, status = _kit_job_or_error(job_id)
+        if row is None:
+            return HTMLResponse(error_html, status_code=status)
+        return HTMLResponse(
+            _kit_page(row, notice="Application-kit generation is not implemented yet.")
+        )
 
     @app.get("/api/matched")
     def api_matched(request: Request) -> Response:
