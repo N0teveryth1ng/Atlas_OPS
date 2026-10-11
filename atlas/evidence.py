@@ -60,6 +60,17 @@ def _is_valid(evidence: Evidence, jd_text: str, profile_text: str) -> bool:
     return quote in _normalize(source)
 
 
+def quote_valid(quote: str, source: EvidenceSource, jd_text: str, profile_text: str) -> bool:
+    """True when ``quote`` appears verbatim in the claimed source.
+
+    Same rule the evidence validator applies to evaluator/verifier verdicts:
+    whitespace-, case- and Unicode-variant-insensitive substring match against
+    the JD text (``source=jd``) or the rendered profile (``source=profile``),
+    at least :data:`MIN_QUOTE_LEN` characters.
+    """
+    return _is_valid(Evidence(quote=quote, source=source), jd_text, profile_text)
+
+
 def _check_items(items: list[Evidence], label: str, jd_text: str, profile_text: str) -> list[str]:
     errors: list[str] = []
     for index, evidence in enumerate(items):
