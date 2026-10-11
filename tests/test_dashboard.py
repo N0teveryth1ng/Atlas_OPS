@@ -271,7 +271,7 @@ def test_index_lists_undecided_and_hides_manual_rows(tmp_path):
     assert "Manual Role" not in text
 
 
-def test_index_downgrades_apply_with_unknown_seniority(tmp_path):
+def test_index_shows_stored_outcome_and_flags_unknown_seniority(tmp_path):
     conn = _connect(tmp_path)
     run_id = start_run(conn, "test")
     job_id = _add_job(conn, run_id, url="http://x/1", title="Mystery Role", passed=True)
@@ -280,10 +280,11 @@ def test_index_downgrades_apply_with_unknown_seniority(tmp_path):
     conn.close()
 
     text = TestClient(create_app(tmp_path / "dash.db")).get("/").text
+    # The engine now stores REVIEW for unknown seniority; the dashboard shows the
+    # stored outcome verbatim (no display-only downgrade) and keeps the warning.
     assert "Mystery Role" in text
     assert "seniority unknown" in text
-    assert ">REVIEW " in text
-    assert ">APPLY " not in text
+    assert ">APPLY " in text
 
 
 def test_profile_approval_requires_a_location(tmp_path):

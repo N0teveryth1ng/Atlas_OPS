@@ -358,18 +358,15 @@ def _seniority_unknown(evaluation: dict[str, Any], parsed: dict[str, Any]) -> bo
 def _outcome_and_warning(
     decision: dict[str, Any], evaluation: dict[str, Any], parsed: dict[str, Any]
 ) -> tuple[str, str]:
-    """Display outcome plus a warning.
+    """Display outcome plus an informational seniority warning.
 
-    Presentation only: if the stored decision is APPLY but seniority could not
-    be determined, the table shows REVIEW with a visible warning. The stored
-    decision, filters and ranking are never altered.
+    The stored outcome is shown verbatim: the decision engine itself sends
+    unknown/mid seniority to REVIEW, so this no longer downgrades APPLY. The
+    warning is presentation only and never changes filters, ranking or outcome.
     """
     outcome = str(decision.get("outcome") or "").lower()
     if _seniority_unknown(evaluation, parsed):
-        warning = '<div class="warn">seniority unknown</div>'
-        if outcome == "apply":
-            outcome = "review"
-        return outcome, warning
+        return outcome, '<div class="warn">seniority unknown</div>'
     return outcome, ""
 
 
