@@ -7,6 +7,7 @@ from fake_llm import make_client
 from atlas.config import get_settings
 from atlas.db import (
     connect,
+    get_latest_filter_checks,
     init_db,
     log_stage,
     save_profile,
@@ -274,4 +275,21 @@ def test_run_pipeline_progress_reports_stage_counts(tmp_path):
     final = events[-1]
     assert final["done"] == final["total"]
     assert final["decided"] >= 1
+    conn.close()
+
+
+def test_process_job_stores_filter_checks_on_pass(tmp_path):
+    conn, _run, profile, job_id, job = _setup(tmp_path)
+
+    process_job(_client(), job_id, job, profile, get_settings(), conn=conn)
+
+    by_rule = {check["rule_id"]: check for check in get_latest_filter_checks(conn, job_id)}
+    assert by_rule["too_much_experience"]["checked"] is True
+    assert by_rule["too_much_experience"]["value"] == "min_years 0"
+    # Rules that could not run are recorded with a reason, not silently dropped.
+    assert by_rule["employment_type_mismatch"]["checked"] is False
+    assert "not stated" in by_rule["employment_type_mismatch"]["skipped_reason"]
+    assert by_rule["salary_below_floor"]["checked"] is False
+    assert by_rule["deal_breaker_skill"]["checked"] is False
+    assert by_rule["stale_job"]["checked"] is False
     conn.close()

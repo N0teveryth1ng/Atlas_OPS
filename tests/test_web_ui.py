@@ -189,6 +189,42 @@ def test_rejected_page_shows_reason(tmp_path, monkeypatch):
     assert "seniority" in response.text
 
 
+def test_rejected_page_shows_what_was_checked(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    conn = connect(tmp_path / "dash.db")
+    init_db(conn)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn, run_id, Job(source="s", url="http://a/10", dedupe_key="a10", title="Too Senior")
+    )
+    log_stage(
+        conn,
+        "filter_results",
+        job_id=job_id,
+        passed=False,
+        rule_id="senior_title",
+        evidence="title seniority=senior",
+        data={
+            "checks": [
+                {
+                    "rule_id": "location_mismatch",
+                    "checked": False,
+                    "skipped_reason": "no target locations set",
+                },
+                {"rule_id": "stale_job", "checked": False, "skipped_reason": "posted date unknown"},
+            ]
+        },
+    )
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    client.post("/login", data={"password": "pw"})
+    response = client.get("/rejected")
+    assert "location_mismatch: skipped - no target locations set" in response.text
+    assert "stale_job: skipped - posted date unknown" in response.text
+
+
 def test_refuse_non_loopback_without_password(tmp_path, monkeypatch):
     monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
     with pytest.raises(RuntimeError):

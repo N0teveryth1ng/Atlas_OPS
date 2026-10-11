@@ -5,7 +5,7 @@ from __future__ import annotations
 from argparse import Namespace
 
 from atlas import cli, emailer, pipeline, sourcing
-from atlas.db import connect, init_db, save_profile
+from atlas.db import connect, init_db, log_stage, save_profile, start_run, upsert_job
 from atlas.emailer import EmailError
 from atlas.job_status import JobStatus
 from atlas.pipeline import ProcessedJob
@@ -111,3 +111,34 @@ def test_failed_send_leaves_sent_at_zero_but_counts_passed(tmp_path, monkeypatch
     item = result.source_yields[0]
     assert item.passed_filters == 1
     assert item.sent == 0
+
+
+def test_explain_shows_filter_checks(tmp_path, monkeypatch, capsys):
+    dbfile = tmp_path / "t.db"
+    conn = connect(dbfile)
+    init_db(conn)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn, run_id, Job(source="s", url="http://x/1", dedupe_key="k1", title="Job")
+    )
+    log_stage(
+        conn,
+        "filter_results",
+        job_id=job_id,
+        passed=True,
+        data={
+            "checks": [
+                {"rule_id": "stale_job", "checked": False, "skipped_reason": "posted date unknown"}
+            ]
+        },
+    )
+    log_stage(conn, "decisions", job_id=job_id, data={"outcome": "apply", "match_score": 80})
+    conn.close()
+
+    monkeypatch.setattr(cli, "connect", lambda: connect(dbfile))
+    rc = cli.cmd_explain(Namespace(job_id=job_id))
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Filter checks:" in out
+    assert "stale_job: skipped - posted date unknown" in out

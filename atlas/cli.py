@@ -330,18 +330,41 @@ def cmd_decide(args: argparse.Namespace) -> int:
     return 0
 
 
+def _filter_check_text(check: dict[str, Any]) -> str:
+    """One audit line as text, matching the dashboard's /rejected rendering."""
+    rule_id = str(check.get("rule_id") or "-")
+    if not check.get("checked"):
+        return f"{rule_id}: skipped - {check.get('skipped_reason') or 'no reason'}"
+    value = check.get("value")
+    limit = check.get("limit")
+    if value is not None and limit is not None:
+        return f"{rule_id}: {value} <= {limit}"
+    if value is not None:
+        return f"{rule_id}: {value}"
+    return rule_id
+
+
 def cmd_explain(args: argparse.Namespace) -> int:
     """Print the latest decision record for a single job."""
-    from .db import get_latest_decision
+    from .db import get_latest_decision, get_latest_filter_checks
 
     conn = connect()
     init_db(conn)
     decision = get_latest_decision(conn, args.job_id)
+    checks = get_latest_filter_checks(conn, args.job_id)
     conn.close()
     if decision is None:
         print(f"No decision recorded for job {args.job_id}.")
+        if checks:
+            print("Filter checks recorded before it was decided:")
+            for check in checks:
+                print("  " + _filter_check_text(check))
         return 0
     print(json.dumps(decision, indent=2))
+    if checks:
+        print("Filter checks:")
+        for check in checks:
+            print("  " + _filter_check_text(check))
     return 0
 
 

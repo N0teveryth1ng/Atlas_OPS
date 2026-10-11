@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS filter_results (
     passed     INTEGER NOT NULL,
     rule_id    TEXT,
     evidence   TEXT,
+    data_json  TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -183,6 +184,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     digest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(digests)")}
     if "text" not in digest_cols:
         conn.execute("ALTER TABLE digests ADD COLUMN text TEXT")
+    filter_cols = {row["name"] for row in conn.execute("PRAGMA table_info(filter_results)")}
+    if "data_json" not in filter_cols:
+        conn.execute("ALTER TABLE filter_results ADD COLUMN data_json TEXT")
 
 
 # --------------------------------------------------------------------------- #
@@ -381,7 +385,9 @@ def rejected_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                (SELECT f.rule_id FROM filter_results f WHERE f.job_id = j.id
                 AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS rule_id,
                (SELECT f.evidence FROM filter_results f WHERE f.job_id = j.id
-                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS evidence
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS evidence,
+               (SELECT f.data_json FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS data_json
         FROM jobs j
         WHERE EXISTS (
             SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 0
@@ -414,6 +420,17 @@ def get_latest_decision(conn: sqlite3.Connection, job_id: int) -> dict[str, Any]
         "SELECT data_json FROM decisions WHERE job_id = ? ORDER BY id DESC LIMIT 1", (job_id,)
     ).fetchone()
     return json.loads(row["data_json"]) if row is not None else None
+
+
+def get_latest_filter_checks(conn: sqlite3.Connection, job_id: int) -> list[dict[str, Any]]:
+    """The audit lines stored by the hard filter: what each rule compared."""
+    row = conn.execute(
+        "SELECT data_json FROM filter_results WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if row is None or not row["data_json"]:
+        return []
+    return list((json.loads(row["data_json"]) or {}).get("checks", []))
 
 
 def emailed_job_ids(conn: sqlite3.Connection) -> set[int]:
@@ -515,9 +532,16 @@ def log_stage(
     """Record a stage result. Keeps every stage's output traceable."""
     if table == "filter_results":
         cur = conn.execute(
-            "INSERT INTO filter_results (job_id, passed, rule_id, evidence, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (job_id, int(bool(passed)), rule_id, evidence, _now()),
+            "INSERT INTO filter_results (job_id, passed, rule_id, evidence, created_at, data_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                int(bool(passed)),
+                rule_id,
+                evidence,
+                _now(),
+                json.dumps(data) if data is not None else None,
+            ),
         )
     else:
         cur = conn.execute(

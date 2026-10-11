@@ -368,6 +368,22 @@ class FilterRejection(BaseModel):
     evidence: str
 
 
+class FilterCheck(BaseModel):
+    """One rule's audit line: what was compared against what, or why skipped.
+
+    Unlike :class:`FilterRejection`, a check is recorded for *every* rule, pass
+    or fail, so a stored job can always show what the filter actually examined
+    (and, for a skipped rule, the reason it did not run).
+    """
+
+    rule_id: str
+    checked: bool
+    value: str | None = None
+    limit: str | None = None
+    skipped_reason: str | None = None
+
+
 class FilterResult(BaseModel):
     passed: bool
     rejections: list[FilterRejection] = Field(default_factory=list)
+    checks: list[FilterCheck] = Field(default_factory=list)

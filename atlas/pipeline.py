@@ -220,8 +220,9 @@ def process_job(
         )
     result.filter_result = filter_result
     if conn is not None:
+        checks_data = {"checks": [check.model_dump() for check in filter_result.checks]}
         if filter_result.passed:
-            log_stage(conn, "filter_results", job_id=job_id, passed=True, data={})
+            log_stage(conn, "filter_results", job_id=job_id, passed=True, data=checks_data)
         else:
             for rejection in filter_result.rejections:
                 log_stage(
@@ -231,6 +232,7 @@ def process_job(
                     passed=False,
                     rule_id=rejection.rule_id,
                     evidence=rejection.evidence,
+                    data=checks_data,
                 )
     if not filter_result.passed:
         result.advance(JobStatus.rejected, conn)

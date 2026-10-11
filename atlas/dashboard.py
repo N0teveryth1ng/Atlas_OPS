@@ -314,6 +314,20 @@ def _load_json(raw: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _render_check(check: dict[str, Any]) -> str:
+    """One audit line as text: e.g. ``too_much_experience: min_years 1.0 <= allowed 1.0``."""
+    rule_id = str(check.get("rule_id") or "-")
+    if not check.get("checked"):
+        return f"{rule_id}: skipped - {check.get('skipped_reason') or 'no reason'}"
+    value = check.get("value")
+    limit = check.get("limit")
+    if value is not None and limit is not None:
+        return f"{rule_id}: {value} <= {limit}"
+    if value is not None:
+        return f"{rule_id}: {value}"
+    return rule_id
+
+
 def _top_reasons(decision: dict[str, Any], limit: int = 2) -> list[str]:
     reasons: list[str] = []
     for item in decision.get("reasons_for") or []:
@@ -851,11 +865,17 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
                     if is_http_url(url)
                     else title
                 )
+                evidence_cell = html.escape(str(row["evidence"] or "-"))
+                checks = _load_json(row["data_json"]).get("checks", [])
+                if checks:
+                    evidence_cell += "<br>checked: " + "; ".join(
+                        html.escape(_render_check(check)) for check in checks
+                    )
                 parts.append(
                     f"<tr><td>{int(row['id'])}</td><td>{link}</td>"
                     f"<td>{html.escape(str(row['company'] or '-'))}</td>"
                     f"<td>{html.escape(str(row['rule_id'] or '-'))}</td>"
-                    f"<td>{html.escape(str(row['evidence'] or '-'))}</td></tr>\n"
+                    f"<td>{evidence_cell}</td></tr>\n"
                 )
         else:
             parts.append('<tr><td colspan="5">No rejected jobs.</td></tr>\n')
