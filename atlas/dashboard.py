@@ -40,11 +40,15 @@ from .db import (
 from .digest import is_http_url
 from .profile_agent import build_profile as _build_profile_impl
 from .profile_agent import normalize_skill_name
-from .schemas import CandidateProfile, ExperienceLevel, Proficiency, Skill
+from .schemas import CandidateProfile, ExperienceLevel, Proficiency, Seniority, Skill
 
 _LABELS = {"APLD": "Applied", "NTAPLD": "Not applied", "PEND": "Pending"}
 _COLORS = {"APLD": "#1a7f37", "NTAPLD": "#cf222e", "PEND": "#9a6700"}
 _MIN_SKILL_WARNING = 5
+#: Outcomes the results table may show; SKIP is decided but never shown here.
+_SHOWN_OUTCOMES = frozenset({"apply", "review"})
+#: Non-real rows (test fixtures inserted by the pipeline tests) kept off the page.
+_TEST_SOURCES = frozenset({"manual"})
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
@@ -93,6 +97,9 @@ button.badge { opacity: 0.5; }
 button.badge:hover { opacity: 1; }
 .notice { background: #fff8c5; border: 1px solid #d4a72c; padding: 0.75rem; }
 .error { background: #ffeef0; border: 1px solid #cf222e; padding: 0.75rem; }
+.warn { background: #fff1e5; border: 1px solid #d4691d; padding: 0.1rem 0.4rem;
+        font-size: 0.75rem; display: inline-block; }
+h2 { margin-top: 2rem; }
 nav a { margin-right: 1rem; }
 textarea, input[type=text], input[type=password] { width: 100%; box-sizing: border-box; }
 </style>
@@ -301,13 +308,43 @@ def _main_risk(decision: dict[str, Any]) -> str:
     return "-"
 
 
-def _seniority_assessment(evaluation: dict[str, Any], parsed: dict[str, Any]) -> str:
-    assessment = evaluation.get("seniority_assessment")
+def _verdict(evaluation: dict[str, Any]) -> dict[str, Any]:
+    """The evaluator verdict nested inside a stored evaluation record."""
+    verdict = evaluation.get("verdict")
+    return verdict if isinstance(verdict, dict) else {}
+
+
+def _seniority_text(evaluation: dict[str, Any], parsed: dict[str, Any]) -> str:
+    """Human seniority from the stored verdict, else the parsed title level."""
+    assessment = _verdict(evaluation).get("seniority_assessment")
     if isinstance(assessment, dict) and assessment.get("quote"):
         return str(assessment["quote"])
-    if parsed.get("title_seniority"):
-        return f"title: {parsed['title_seniority']}"
-    return "-"
+    level = parsed.get("title_seniority")
+    if level and level != Seniority.unknown.value:
+        return f"title: {level}"
+    return Seniority.unknown.value
+
+
+def _seniority_unknown(evaluation: dict[str, Any], parsed: dict[str, Any]) -> bool:
+    return _seniority_text(evaluation, parsed) == Seniority.unknown.value
+
+
+def _outcome_and_warning(
+    decision: dict[str, Any], evaluation: dict[str, Any], parsed: dict[str, Any]
+) -> tuple[str, str]:
+    """Display outcome plus a warning.
+
+    Presentation only: if the stored decision is APPLY but seniority could not
+    be determined, the table shows REVIEW with a visible warning. The stored
+    decision, filters and ranking are never altered.
+    """
+    outcome = str(decision.get("outcome") or "").lower()
+    if _seniority_unknown(evaluation, parsed):
+        warning = '<div class="warn">seniority unknown</div>'
+        if outcome == "apply":
+            outcome = "review"
+        return outcome, warning
+    return outcome, ""
 
 
 def _row_html(row: sqlite3.Row) -> str:
@@ -323,11 +360,11 @@ def _row_html(row: sqlite3.Row) -> str:
         if is_http_url(url)
         else title
     )
-    outcome = str(decision.get("outcome") or "").upper() or "-"
+    outcome, warning = _outcome_and_warning(decision, evaluation, parsed)
     score = decision.get("match_score")
     score_cell = f"{score:.0f}" if isinstance(score, (int, float)) else "-"
     reasons = " | ".join(html.escape(r) for r in _top_reasons(decision)) or "-"
-    missing = ", ".join(str(s) for s in (decision.get("missing_skills") or [])) or "-"
+    missing = ", ".join(html.escape(str(s)) for s in (decision.get("missing_skills") or [])) or "-"
 
     current = str(row["application_status"] or "PEND")
     if current not in _LABELS:
@@ -345,12 +382,12 @@ def _row_html(row: sqlite3.Row) -> str:
         f"<td>{html.escape(str(row['company'] or '-'))}</td>"
         f"<td>{html.escape(str(row['location'] or '-'))}</td>"
         f"<td>{html.escape(str(row['source'] or '-'))}</td>"
-        f"<td>{html.escape(outcome)}</td>"
+        f"<td>{html.escape(outcome.upper() or '-')} {warning}</td>"
         f"<td>{html.escape(score_cell)}</td>"
         f"<td>{reasons}</td>"
         f"<td>{html.escape(_main_risk(decision))}</td>"
         f"<td>{html.escape(missing)}</td>"
-        f"<td>{html.escape(_seniority_assessment(evaluation, parsed))}</td>"
+        f"<td>{html.escape(_seniority_text(evaluation, parsed))}</td>"
         f'<td><span class="badge" style="background:{_COLORS[current]}">'
         f"{_LABELS[current]}</span></td>"
         f'<td class="actions">{actions}</td></tr>\n'
@@ -365,8 +402,39 @@ _TABLE_HEAD = """<table>
 <tbody>
 """
 
+_UNDECIDED_HEAD = """<table>
+<thead><tr><th>#</th><th>Job</th><th>Company</th><th>Location</th>
+<th>Source</th><th>Seniority</th><th>Why</th></tr></thead>
+<tbody>
+"""
 
-def _page(rows: list[sqlite3.Row], notice: str | None = None) -> str:
+
+def _undecided_row_html(row: sqlite3.Row) -> str:
+    job_id = int(row["id"])
+    url = str(row["url"] or "")
+    evaluation = _load_json(row["evaluation_json"])
+    parsed = _load_json(row["parsed_json"])
+    title = html.escape(str(row["title"] or url or f"job {job_id}"))
+    job_cell = (
+        f'<a href="{html.escape(url, quote=True)}" rel="noreferrer">{title}</a>'
+        if is_http_url(url)
+        else title
+    )
+    return (
+        f"<tr><td>{job_id}</td><td>{job_cell}</td>"
+        f"<td>{html.escape(str(row['company'] or '-'))}</td>"
+        f"<td>{html.escape(str(row['location'] or '-'))}</td>"
+        f"<td>{html.escape(str(row['source'] or '-'))}</td>"
+        f"<td>{html.escape(_seniority_text(evaluation, parsed))}</td>"
+        "<td>passed all filters, no decision stored yet</td></tr>\n"
+    )
+
+
+def _page(
+    decided: list[sqlite3.Row],
+    undecided: list[sqlite3.Row],
+    notice: str | None = None,
+) -> str:
     parts = [_HEAD, _nav(), "<h1>Atlas — matched jobs</h1>\n"]
     if notice:
         parts.append(f'<p class="notice">{html.escape(notice)}</p>\n')
@@ -374,13 +442,26 @@ def _page(rows: list[sqlite3.Row], notice: str | None = None) -> str:
         '<p><form method="post" action="/find">'
         '<button type="submit">Find jobs</button></form></p>\n'
     )
-    parts.append(f"<p>{len(rows)} matched job(s). Apply status is manual bookkeeping.</p>\n")
+    parts.append(
+        f"<p>{len(decided)} matched job(s) with an APPLY/REVIEW decision. "
+        "Apply status is manual bookkeeping.</p>\n"
+    )
     parts.append(_TABLE_HEAD)
-    if rows:
-        parts.extend(_row_html(row) for row in rows)
+    if decided:
+        parts.extend(_row_html(row) for row in decided)
     else:
-        parts.append('<tr><td colspan="13">No matched jobs yet.</td></tr>\n')
+        parts.append(
+            '<tr><td colspan="13">No APPLY/REVIEW jobs yet. '
+            "Click <strong>Find jobs</strong> to run the pipeline.</td></tr>\n"
+        )
     parts.append("</table>\n")
+    parts.append(f"<h2>Not yet evaluated ({len(undecided)})</h2>\n")
+    if undecided:
+        parts.append(_UNDECIDED_HEAD)
+        parts.extend(_undecided_row_html(row) for row in undecided)
+        parts.append("</table>\n")
+    else:
+        parts.append("<p>None — every job that passed the filters has a decision.</p>\n")
     parts.append(_TABLE_FOOT)
     return "".join(parts)
 
@@ -417,6 +498,40 @@ def _parse_skills(text: str) -> list[Skill]:
             Skill(name=name, canonical_name=normalize_skill_name(name), proficiency=proficiency)
         )
     return skills
+
+
+def _profile_page(profile: CandidateProfile, error: str | None = None) -> str:
+    """Render the profile review/edit form (GET and re-render on validation)."""
+    skills = "\n".join(
+        f"{s.name}:{getattr(s.proficiency, 'value', s.proficiency)}" for s in profile.skills
+    )
+    parts = [_HEAD, _nav(), "<h1>Profile review</h1>\n"]
+    if error:
+        parts.append(f'<p class="error">{html.escape(error)}</p>\n')
+    if len(profile.skills) < _MIN_SKILL_WARNING:
+        parts.append(
+            '<p class="notice">Only '
+            f"{len(profile.skills)} skill(s) were extracted (fewer than "
+            f"{_MIN_SKILL_WARNING}). Add more before approving.</p>\n"
+        )
+    parts.append(
+        '<form method="post" action="/profile">'
+        "<p><label>Experience level (fresher/intern/junior/mid/senior):<br>"
+        f'<input type="text" name="level" value="{html.escape(profile.experience_level.value)}"></label></p>'
+        "<p><label>Total experience (months):<br>"
+        f'<input type="text" name="months" value="{profile.total_experience_months}"></label></p>'
+        "<p><label>Skills (one per line, name:proficiency):<br>"
+        f'<textarea name="skills" rows="8">{html.escape(skills)}</textarea></label></p>'
+        "<p><label>Target roles (comma separated):<br>"
+        f'<input type="text" name="target_roles" value="{html.escape(", ".join(profile.target_roles))}"></label></p>'
+        '<p><label>Locations (comma separated, or "anywhere"):<br>'
+        f'<input type="text" name="locations" value="{html.escape(", ".join(profile.locations))}" required></label></p>'
+        "<p><label>Ambiguities (comma separated):<br>"
+        f'<input type="text" name="ambiguities" value="{html.escape(", ".join(profile.ambiguities))}"></label></p>'
+        '<button type="submit">Approve profile</button></form>'
+    )
+    parts.append(_TABLE_FOOT)
+    return "".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -483,20 +598,25 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
         try:
             rows = _open(database)
         except sqlite3.Error as exc:
-            return HTMLResponse(_page([], notice=f"Database unavailable: {exc}"))
+            return HTMLResponse(_page([], [], notice=f"Database unavailable: {exc}"))
         try:
             matched = shippable_jobs(rows)
         except sqlite3.Error as exc:
-            return HTMLResponse(_page([], notice=f"Database unavailable: {exc}"))
+            return HTMLResponse(_page([], [], notice=f"Database unavailable: {exc}"))
         finally:
             rows.close()
-        shown = [
-            row
-            for row in matched
-            if str(_load_json(row["decision_json"]).get("outcome") or "").lower()
-            in {"", "apply", "review"}
-        ]
-        return HTMLResponse(_page(shown))
+        visible = [row for row in matched if str(row["source"] or "").lower() not in _TEST_SOURCES]
+        decided: list[sqlite3.Row] = []
+        undecided: list[sqlite3.Row] = []
+        for row in visible:
+            outcome = str(_load_json(row["decision_json"]).get("outcome") or "").lower()
+            if outcome in _SHOWN_OUTCOMES:
+                decided.append(row)
+            elif not outcome:
+                # passed every hard filter but no decision row was ever stored
+                undecided.append(row)
+            # a stored SKIP is decided; it is neither shown nor "not yet evaluated"
+        return HTMLResponse(_page(decided, undecided))
 
     @app.post("/jobs/{job_id}/status/{status}")
     def update_status(request: Request, job_id: int, status: str) -> Response:
@@ -625,38 +745,7 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
                 + '<p>No profile yet. Go to <a href="/setup">Setup</a>.</p>'
                 + _TABLE_FOOT
             )
-        skills = "\n".join(
-            f"{s.name}:{getattr(s.proficiency, 'value', s.proficiency)}" for s in profile.skills
-        )
-        warning = ""
-        if len(profile.skills) < _MIN_SKILL_WARNING:
-            warning = (
-                '<p class="notice">Only '
-                f"{len(profile.skills)} skill(s) were extracted (fewer than "
-                f"{_MIN_SKILL_WARNING}). Add more before approving.</p>\n"
-            )
-        body = (
-            _HEAD
-            + _nav()
-            + "<h1>Profile review</h1>\n"
-            + warning
-            + '<form method="post" action="/profile">'
-            + "<p><label>Experience level (fresher/intern/junior/mid/senior):<br>"
-            + f'<input type="text" name="level" value="{html.escape(profile.experience_level.value)}"></label></p>'
-            + "<p><label>Total experience (months):<br>"
-            + f'<input type="text" name="months" value="{profile.total_experience_months}"></label></p>'
-            + "<p><label>Skills (one per line, name:proficiency):<br>"
-            + f'<textarea name="skills" rows="8">{html.escape(skills)}</textarea></label></p>'
-            + "<p><label>Target roles (comma separated):<br>"
-            + f'<input type="text" name="target_roles" value="{html.escape(", ".join(profile.target_roles))}"></label></p>'
-            + "<p><label>Locations (comma separated):<br>"
-            + f'<input type="text" name="locations" value="{html.escape(", ".join(profile.locations))}"></label></p>'
-            + "<p><label>Ambiguities (comma separated):<br>"
-            + f'<input type="text" name="ambiguities" value="{html.escape(", ".join(profile.ambiguities))}"></label></p>'
-            + '<button type="submit">Approve profile</button></form>'
-            + _TABLE_FOOT
-        )
-        return HTMLResponse(body)
+        return HTMLResponse(_profile_page(profile))
 
     @app.post("/profile")
     def profile_post(
@@ -688,6 +777,17 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
             profile.target_roles = [r.strip() for r in target_roles.split(",") if r.strip()]
             profile.locations = [item.strip() for item in locations.split(",") if item.strip()]
             profile.ambiguities = [item.strip() for item in ambiguities.split(",") if item.strip()]
+            # A profile cannot be approved without a location preference; the user
+            # must name at least one location or type "anywhere". Nothing is
+            # written, so the previous (unapproved or approved) row is untouched.
+            if not profile.locations:
+                return HTMLResponse(
+                    _profile_page(
+                        profile,
+                        error='Add at least one location (or "anywhere") before approving.',
+                    ),
+                    status_code=422,
+                )
             profile.approved = True
             save_profile(conn, profile)
         finally:
