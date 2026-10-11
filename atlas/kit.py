@@ -1,17 +1,17 @@
 """Grounded application kit: summary, cover note and Q&A for one job.
 
-Phase 8a. Every answer in the kit must trace to a verbatim quote from the
-approved profile or the job posting, validated with the same normalisation the
-evidence validator applies to evaluator verdicts. Answers whose quote does not
-validate are dropped; the dashboard shows them as "needs your input". Nothing in
-this module submits an application or drives a browser, and no kit content is
-sent to Braintrust (``LLMClient.call_json`` only traces prompt fingerprints).
+Phase 8a. Every claim in the kit -- each summary sentence, each cover-note
+sentence and each answer -- must trace to a verbatim quote from the approved
+profile or the job posting, validated with the same normalisation the evidence
+validator applies to evaluator verdicts. Claims whose quote does not validate
+are dropped; the dashboard shows them as "needs your input". Nothing in this
+module submits an application or drives a browser, and no kit content is sent to
+Braintrust (``LLMClient.call_json`` only traces prompt fingerprints).
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from typing import cast
 
 from pydantic import BaseModel, Field
@@ -43,7 +43,10 @@ KIT_QUESTIONS: tuple[tuple[str, str], ...] = (
 _QUESTION_LABELS = dict(KIT_QUESTIONS)
 _QUESTION_KEYS = set(_QUESTION_LABELS)
 
-_SENTENCE_SPLIT = re.compile(r"[.!?]+(?:\s+|$)")
+#: Summary and cover note are sentence-per-claim; every claim must carry a
+#: validated quote or it is dropped and the section is flagged.
+SUMMARY_CLAIMS = 3
+MAX_COVER_WORDS = 150
 
 
 class KitAnswer(BaseModel):
@@ -55,19 +58,44 @@ class KitAnswer(BaseModel):
     source: EvidenceSource
 
 
+class KitClaim(BaseModel):
+    """One factual claim (a sentence) as produced by the model.
+
+    Summary and cover-note text is not free prose: the model must split it into
+    sentences, each carrying the verbatim quote the sentence rests on.
+    """
+
+    text: str
+    quote: str
+    source: EvidenceSource
+
+
 class KitDraft(BaseModel):
     """Layout the model must return for a kit."""
 
-    summary: str = ""
-    cover_note: str = ""
+    summary: list[KitClaim] = Field(default_factory=list)
+    cover_note: list[KitClaim] = Field(default_factory=list)
     answers: list[KitAnswer] = Field(default_factory=list)
 
 
-class KitSection(BaseModel):
-    """Free-text section; ``blocked_reason`` set when the model never produced
-    a section that met the deterministic bounds."""
+class KitClaimResult(BaseModel):
+    """A validated, keepable claim."""
 
-    text: str = ""
+    text: str
+    quote: str
+    source: EvidenceSource
+
+
+class KitSection(BaseModel):
+    """A validated block of claims.
+
+    ``blocked_reason`` is set when any claim was dropped or the section missed
+    its required bounds, so the dashboard can add "needs your input" next to the
+    claims that survived.
+    """
+
+    claims: list[KitClaimResult] = Field(default_factory=list)
+    dropped: int = 0
     blocked_reason: str | None = None
 
 
@@ -94,11 +122,6 @@ class ApplicationKit(BaseModel):
 # --------------------------------------------------------------------------- #
 # Deterministic text checks
 # --------------------------------------------------------------------------- #
-
-
-def sentence_count(text: str) -> int:
-    """Number of sentences in ``text``, splitting on terminal punctuation."""
-    return len([part for part in _SENTENCE_SPLIT.split(text.strip()) if part.strip()])
 
 
 def word_count(text: str) -> int:
@@ -151,19 +174,39 @@ def _retry_message(errors: list[str]) -> str:
     return (
         "Your previous draft did not pass validation:\n"
         + "\n".join(f"- {error}" for error in errors)
-        + "\nFix every item. Omit any question you cannot answer with a verbatim "
-        "quote; keep summary to exactly 3 sentences and cover_note under 150 words."
+        + "\nFix every item. Every summary and cover_note sentence must be its own "
+        "claim with a verbatim quote; keep summary to exactly 3 claims and "
+        "cover_note under 150 words; omit any question you cannot answer with a "
+        "verbatim quote."
     )
+
+
+def _claim_errors(claims: list[KitClaim], label: str, jd_text: str, profile_text: str) -> list[str]:
+    errors: list[str] = []
+    for index, claim in enumerate(claims):
+        if not claim.text.strip():
+            errors.append(f"{label}[{index}] empty text")
+            continue
+        if not quote_valid(claim.quote, claim.source, jd_text, profile_text):
+            errors.append(
+                f"{label}[{index}] quote not found in {claim.source.value}: {claim.quote!r}"
+            )
+    return errors
 
 
 def _validate_draft(draft: KitDraft, jd_text: str, profile_text: str) -> list[str]:
     errors: list[str] = []
-    summary_sentences = sentence_count(draft.summary)
-    if summary_sentences != 3:
-        errors.append(f"summary must be exactly 3 sentences (found {summary_sentences})")
-    cover_words = word_count(draft.cover_note)
-    if cover_words >= 150:
-        errors.append(f"cover_note must be under 150 words (found {cover_words})")
+    if len(draft.summary) != SUMMARY_CLAIMS:
+        errors.append(
+            f"summary must have exactly {SUMMARY_CLAIMS} claims (found {len(draft.summary)})"
+        )
+    errors += _claim_errors(draft.summary, "summary", jd_text, profile_text)
+    if not draft.cover_note:
+        errors.append("cover_note must have at least 1 claim")
+    cover_words = sum(word_count(claim.text) for claim in draft.cover_note)
+    if cover_words >= MAX_COVER_WORDS:
+        errors.append(f"cover_note must be under {MAX_COVER_WORDS} words (found {cover_words})")
+    errors += _claim_errors(draft.cover_note, "cover_note", jd_text, profile_text)
     for index, answer in enumerate(draft.answers):
         if answer.question_key not in _QUESTION_KEYS:
             errors.append(f"answers[{index}] unknown question_key: {answer.question_key!r}")
@@ -178,6 +221,22 @@ def _validate_draft(draft: KitDraft, jd_text: str, profile_text: str) -> list[st
     return errors
 
 
+def _keep_claims(
+    claims: list[KitClaim], jd_text: str, profile_text: str
+) -> tuple[list[KitClaimResult], int]:
+    """Return the claims whose quote validates, plus how many were dropped."""
+    kept: list[KitClaimResult] = []
+    dropped = 0
+    for claim in claims:
+        if not claim.text.strip() or not quote_valid(
+            claim.quote, claim.source, jd_text, profile_text
+        ):
+            dropped += 1
+            continue
+        kept.append(KitClaimResult(text=claim.text, quote=claim.quote, source=claim.source))
+    return kept, dropped
+
+
 def _assemble(
     draft: KitDraft,
     *,
@@ -189,17 +248,19 @@ def _assemble(
     """Keep only the parts that meet the deterministic bounds and the evidence
     rules; everything else is dropped so the dashboard can flag it as
     "needs your input"."""
-    if sentence_count(draft.summary) == 3:
-        summary = KitSection(text=draft.summary)
-    else:
-        summary = KitSection(blocked_reason="needs your input")
-    if word_count(draft.cover_note) < 150:
-        cover_note = KitSection(text=draft.cover_note)
-    else:
-        cover_note = KitSection(blocked_reason="needs your input")
+    summary_claims, summary_dropped = _keep_claims(draft.summary, jd_text, profile_text)
+    summary = KitSection(claims=summary_claims, dropped=summary_dropped)
+    if summary_dropped or len(summary_claims) != SUMMARY_CLAIMS:
+        summary.blocked_reason = "needs your input"
+
+    cover_claims, cover_dropped = _keep_claims(draft.cover_note, jd_text, profile_text)
+    cover_words = sum(word_count(claim.text) for claim in cover_claims)
+    cover_note = KitSection(claims=cover_claims, dropped=cover_dropped)
+    if cover_dropped or not cover_claims or cover_words >= MAX_COVER_WORDS:
+        cover_note.blocked_reason = "needs your input"
 
     answers: list[KitAnswerResult] = []
-    for index, answer in enumerate(draft.answers):
+    for answer in draft.answers:
         if answer.question_key not in _QUESTION_KEYS or not answer.answer.strip():
             continue
         if not quote_valid(answer.quote, answer.source, jd_text, profile_text):
