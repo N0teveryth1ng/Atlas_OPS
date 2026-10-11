@@ -2,13 +2,17 @@
 
 ## State
 - main is AHEAD of origin/main (local commits only, not pushed): web dashboard work on top of d6a06a1
-- tests: 947 passed (verified: `python -m pytest -q` -> 947 passed in 15.51s)
-- lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 89 files unchanged; `mypy atlas` -> no issues in 49 source files
+- tests: 951 passed (verified: `python -m pytest -q` -> 951 passed in 17.53s)
+- lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 90 files unchanged; `mypy atlas` -> no issues in 49 source files
 - selfcheck --fast: 21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6)
 - selfcheck --full and T5: not re-run this session
 - selfcheck exits 1 whenever any gate is BLOCKED; that is expected here, not a new failure.
 
 ## Recent commits
+cabe0c6 fix(dashboard): show only decided APPLY/REVIEW rows, flag unknown seniority
+814f4c9 test: isolate dashboard env so DASHBOARD_PASSWORD cannot leak between tests
+55d6b99 docs(handoff): record groq model verification and session status
+651426f docs: web dashboard flow, password guard, and handoff update
 4f0b8ba chore: gitignore personal resume.pdf
 e13b3e3 chore(dashboard): lint/format fixes and document DASHBOARD_PASSWORD
 528d8c8 test(dashboard): cover upload limits, auth, lock, filtering
@@ -35,13 +39,18 @@ ebb9362 docs(preflight): record current state, block owner gates, keep raw JD po
 ## Done
 Web dashboard (FastAPI, no Jinja): /setup (PDF <=5MB + description), /profile
 (review/edit/approve, pipeline blocked until approved), Find jobs (background
-thread, one-run lock), /status + /api/status, results table (APPLY/REVIEW + empty-dec
-back-compat) with APLD/NTAPLD/PEND buttons, /rejected with filter rule/reason,
-/health probe. DASHBOARD_PASSWORD login (constant-time compare, same-origin
-CSRF, HTML escaping); refuses to bind non-loopback without the password.
-db.py shippable_jobs/rejected_jobs added; CandidateProfile.locations added.
-Procfile now runs the guarded CLI entrypoint. 947 tests pass; ruff/black/mypy
-pass; selfcheck fast 21 PASS / 0 FAIL / 2 BLOCKED.
+thread, one-run lock), /status + /api/status, results table (only APPLY/REVIEW
+decisions; SKIP hidden; no-decision rows listed under "Not yet evaluated"; a
+stored APPLY whose seniority is unknown is shown as REVIEW with a visible
+warning; source=manual rows hidden) with APLD/NTAPLD/PEND buttons, /rejected
+with filter rule/reason, /health probe. /profile approval now requires at least
+one location or "anywhere". DASHBOARD_PASSWORD login (constant-time compare,
+same-origin CSRF, HTML escaping); refuses to bind non-loopback without the
+password. db.py shippable_jobs/rejected_jobs added; CandidateProfile.locations
+added. Procfile now runs the guarded CLI entrypoint. 951 tests pass;
+ruff/black/mypy pass; selfcheck fast 21 PASS / 0 FAIL / 2 BLOCKED.
+Dashboard tests are env-isolated (tests/conftest.py clears DASHBOARD_PASSWORD /
+ATLAS_DB) so order does not matter.
 
 From earlier: label-check read-only; 22 collected labeling tests.
 Braintrust (BrainTrace) observability: MIT license, PII-redacted LLM tracing via
