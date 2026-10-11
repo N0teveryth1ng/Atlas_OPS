@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import REPO_ROOT
-from .job_status import JobStatus, transition
+from .job_status import JobStatus, reset_for_retry, transition
 from .schemas import CandidateProfile, Job
 
 DEFAULT_DB_PATH = REPO_ROOT / "atlas.db"
@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS filter_results (
     passed     INTEGER NOT NULL,
     rule_id    TEXT,
     evidence   TEXT,
+    data_json  TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -183,6 +184,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     digest_cols = {row["name"] for row in conn.execute("PRAGMA table_info(digests)")}
     if "text" not in digest_cols:
         conn.execute("ALTER TABLE digests ADD COLUMN text TEXT")
+    filter_cols = {row["name"] for row in conn.execute("PRAGMA table_info(filter_results)")}
+    if "data_json" not in filter_cols:
+        conn.execute("ALTER TABLE filter_results ADD COLUMN data_json TEXT")
 
 
 # --------------------------------------------------------------------------- #
@@ -309,6 +313,20 @@ def set_job_status(conn: sqlite3.Connection, job_id: int, new_status: JobStatus)
     return resolved
 
 
+def reset_job_for_retry(conn: sqlite3.Connection, job_id: int) -> JobStatus:
+    """Rewind a decision-free, pre-decision job to ``new`` so a run can finish it.
+
+    Uses the explicit retry helper (not the forward graph) so a stalled job does
+    not trip the state machine. Terminal states raise ``IllegalTransition``.
+    """
+    current = get_job_status(conn, job_id)
+    resolved = reset_for_retry(current)
+    if resolved is not current:
+        conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (resolved.value, job_id))
+        conn.commit()
+    return resolved
+
+
 # --------------------------------------------------------------------------- #
 # Application status (manual dashboard bookkeeping)
 # --------------------------------------------------------------------------- #
@@ -325,6 +343,54 @@ def matched_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         FROM jobs j
         WHERE EXISTS (
             SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 1
+        )
+        ORDER BY j.id DESC
+        """).fetchall()
+
+
+def shippable_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Jobs that passed EVERY hard filter, with their latest decision/eval.
+
+    Read-only helper for the dashboard results table. It never changes filter
+    or decision behaviour: it only excludes jobs with a failed filter result
+    and attaches the latest stored decision, evaluation, and parsed JD.
+    """
+    return conn.execute("""
+        SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.status,
+               j.application_status,
+               (SELECT d.data_json FROM decisions d WHERE d.job_id = j.id
+                ORDER BY d.id DESC LIMIT 1) AS decision_json,
+               (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id
+                ORDER BY e.id DESC LIMIT 1) AS evaluation_json,
+               (SELECT p.data_json FROM parsed_jds p WHERE p.job_id = j.id
+                ORDER BY p.id DESC LIMIT 1) AS parsed_json
+        FROM jobs j
+        WHERE EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 1
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 0
+        )
+        ORDER BY j.id DESC
+        """).fetchall()
+
+
+def rejected_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Jobs with at least one failed hard filter, plus the rejection reason.
+
+    Read-only helper for the dashboard "why not shown" page.
+    """
+    return conn.execute("""
+        SELECT j.id, j.title, j.company, j.location, j.source, j.url,
+               (SELECT f.rule_id FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS rule_id,
+               (SELECT f.evidence FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS evidence,
+               (SELECT f.data_json FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS data_json
+        FROM jobs j
+        WHERE EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 0
         )
         ORDER BY j.id DESC
         """).fetchall()
@@ -354,6 +420,17 @@ def get_latest_decision(conn: sqlite3.Connection, job_id: int) -> dict[str, Any]
         "SELECT data_json FROM decisions WHERE job_id = ? ORDER BY id DESC LIMIT 1", (job_id,)
     ).fetchone()
     return json.loads(row["data_json"]) if row is not None else None
+
+
+def get_latest_filter_checks(conn: sqlite3.Connection, job_id: int) -> list[dict[str, Any]]:
+    """The audit lines stored by the hard filter: what each rule compared."""
+    row = conn.execute(
+        "SELECT data_json FROM filter_results WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if row is None or not row["data_json"]:
+        return []
+    return list((json.loads(row["data_json"]) or {}).get("checks", []))
 
 
 def emailed_job_ids(conn: sqlite3.Connection) -> set[int]:
@@ -455,9 +532,16 @@ def log_stage(
     """Record a stage result. Keeps every stage's output traceable."""
     if table == "filter_results":
         cur = conn.execute(
-            "INSERT INTO filter_results (job_id, passed, rule_id, evidence, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (job_id, int(bool(passed)), rule_id, evidence, _now()),
+            "INSERT INTO filter_results (job_id, passed, rule_id, evidence, created_at, data_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                int(bool(passed)),
+                rule_id,
+                evidence,
+                _now(),
+                json.dumps(data) if data is not None else None,
+            ),
         )
     else:
         cur = conn.execute(

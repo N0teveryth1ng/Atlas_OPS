@@ -55,8 +55,9 @@ Design rules:
 - **Phase 4** — collectors, query planner, normalize, dedupe. *(done)*
 - **Phase 5** — evaluator + adversarial verifier. *(done)*
 - **Phase 6** — ranker, digest, scheduling. *(done; email delivery cancelled)*
-- **Dashboard** — local matched-jobs table with `APLD`/`NTAPLD`/`PEND`
-  bookkeeping (`atlas dashboard`). *(done)*
+- **Web dashboard** — browser flow (`/setup`, `/profile`, **Find jobs**,
+  results, `/rejected`) with `APLD`/`NTAPLD`/`PEND` bookkeeping and optional
+  password login (`atlas dashboard`). *(done)*
 - **Phase 7** — feedback loop + tuning. *(done)*
 - **Decision Engine** — explicit `apply`/`review`/`skip` with vetoes, confidence,
   and a full audit trail (`atlas/decision.py`, `atlas.cli decide/explain`). *(done)*
@@ -85,6 +86,7 @@ cp .env.example .env              # fill in real values, never commit .env
 | `BRAINTRUST_PROJECT` | Braintrust project/org for traces (default `atlasops`) |
 | `BRAINTRUST_PROJECT_ID` | Braintrust project id that receives traces and eval scores (default `3c5416f9-…`) |
 | `ATLAS_OFFLINE` | Set to `1` to force-disable all telemetry |
+| `DASHBOARD_PASSWORD` | Password for the web dashboard; required to bind a non-loopback host |
 | `ATLAS_DB` | Optional path to the SQLite DB (default `atlas.sqlite3`) |
 
 ### Configuration
@@ -284,20 +286,43 @@ Every stage logs its inputs/outputs via `log_stage` (`parsed_jds`,
   operation, prefer Windows Task Scheduler, cron/systemd, or GitHub Actions.
   Sending nothing when nothing clears the bar is a valid, expected outcome.
 
-## Matched-jobs dashboard
+## Web dashboard
 
-`atlas dashboard` (or `uvicorn app:app`) serves a local page listing every job
-that passed the hard filter, with its pipeline status and a human-set
-application status:
+`atlas dashboard` (or `uvicorn app:app`) serves a browser UI so the whole flow
+works without a terminal:
 
-- `APLD` — you applied
-- `NTAPLD` — you decided not to apply
-- `PEND` — not decided yet (the default)
+1. **`/setup`** — upload a resume PDF (PDF only, max 5 MB) and/or type a
+   description, then click **Build profile**. The uploaded file is ignored by
+   filename, stored under the gitignored `data/` folder, and deleted after
+   parsing. Resume text is never sent to Braintrust.
+2. **`/profile`** — review the parsed profile (level, years, skills with
+   proficiency, target roles, locations, ambiguities), edit any field, and
+   click **Approve profile**. Fewer than 5 extracted skills shows a warning.
+   The pipeline stays blocked until a profile is approved.
+3. **Find jobs** — the **Find jobs** button on `/` runs the existing pipeline
+   (collect → parse → filter → evaluate → verify → rank → decide) in a
+   background thread. `/status` polls current stage, counts, and per-source
+   errors; only one run may be in flight at a time.
+4. **Results** — `/` lists only jobs that passed **every** hard filter with a
+   decision of `APPLY` or `REVIEW`, with title, company, location, source,
+   apply link, score, top reasons, main risk, missing skills, seniority, and
+   `APLD`/`NTAPLD`/`PEND` buttons. `/rejected` shows jobs with a failed filter
+   and the rule/reason, so false rejects are auditable.
 
-Status is stored in `jobs.application_status` (SQLite) and changes only when
-you click a button — the dashboard never applies anywhere. `GET /api/matched`
-returns the same list as JSON; `GET /health` is the deploy probe. The Vercel
-deploy keeps serving `/health` only: the SQLite database is not deployed.
+Application status is stored in `jobs.application_status` (SQLite) and changes
+only when you click a button — the dashboard never applies anywhere.
+`GET /api/matched` returns the matched list as JSON, `GET /api/status` returns
+pipeline state, and `GET /health` is the deploy probe.
+
+### Password protection
+
+Set `DASHBOARD_PASSWORD` in `.env`. Every route (including uploads) then
+requires login; sessions are signed cookies compared in constant time. If the
+password is unset, the server refuses to bind a non-loopback address, so it can
+only be started on `127.0.0.1`. POSTs keep the same-origin CSRF check and all
+rendered values are HTML-escaped. Railway runs the guarded entrypoint via the
+`Procfile` (`python -m atlas.cli dashboard --host 0.0.0.0 --port $PORT`), so the
+password must be set there too.
 
 ## Feedback loop (Phase 7)
 
@@ -326,7 +351,7 @@ python -m atlas.cli status
 python -m atlas.cli collect                   # fetch + normalize + dedupe (Phase 4)
 python -m atlas.cli run                       # parse -> filter -> evaluate -> verify -> rank -> digest
 python -m atlas.cli run --collect --limit 50  # fetch first, then process
-python -m atlas.cli dashboard --port 8000     # local matched-jobs dashboard (APLD/NTAPLD/PEND)
+python -m atlas.cli dashboard --port 8000     # web dashboard: setup -> profile -> find -> results
 python -m atlas.cli decide                    # default: decision engine dry-run (no email)
 python -m atlas.cli decide --limit 25         # dry-run decision engine over <=25 jobs
 python -m atlas.cli explain <job_id>          # show the latest stored decision for a job

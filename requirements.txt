@@ -13,6 +13,7 @@ braintrust==0.44.0
 
 # --- dashboard (local web UI) ---
 fastapi==0.133.1
+python-multipart==0.0.27
 uvicorn==0.41.0
 
 # --- deferred: browser automation for Phase 8 auto-apply ---

@@ -1,14 +1,31 @@
 # HANDOFF.md
 
 ## State
-- main in sync with origin/main; latest commits are docs-only on top of d6e4a4f
-- tests: 594 passed (verified: `python -m pytest -q` -> 594 passed in 8.70s)
-- lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 65 files unchanged; `mypy atlas` -> no issues in 40 source files
-- selfcheck --fast: 20 PASS / 1 FAIL / 2 BLOCKED (FAIL is H1, working tree dirty from uncommitted BrainTrace eval publishing; BLOCKED are G5, DEC6)
-- selfcheck --full: 28 PASS / 0 FAIL / 3 BLOCKED (G5, DEC6, T5)
+- main is AHEAD of origin/main (local commits only, not pushed): Steps 2-5 (pipeline resume + profile-pref filters + seniority review veto + filter audit) on top of cabe0c6
+- tests: 970 passed (verified: `python -m pytest -q` -> 970 passed in 19.02s)
+- lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 90 files unchanged; `mypy atlas` -> no issues in 49 source files
+- eval: `python -m atlas.cli eval` -> 100.0% year-extraction (19/19), 0 pass-throughs, 100.0% ontology skill (19/19), 21.1% baseline, both PASS (metrics unchanged vs 951 baseline)
+- selfcheck --fast: 21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6)
+- selfcheck --full and T5: not re-run this session
 - selfcheck exits 1 whenever any gate is BLOCKED; that is expected here, not a new failure.
 
 ## Recent commits
+db9d3ec feat(filters): audit passing filter results; surface checks in /rejected and explain
+71ae5da feat(decision): soft-veto unknown/mid seniority to REVIEW, drop display override
+3e5e3ea feat(config): apply approved profile prefs to filter settings at run time
+72a43a5 fix(pipeline): process undecided jobs and report per-stage/per-source progress
+cabe0c6 fix(dashboard): show only decided APPLY/REVIEW rows, flag unknown seniority
+814f4c9 test: isolate dashboard env so DASHBOARD_PASSWORD cannot leak between tests
+55d6b99 docs(handoff): record groq model verification and session status
+651426f docs: web dashboard flow, password guard, and handoff update
+4f0b8ba chore: gitignore personal resume.pdf
+e13b3e3 chore(dashboard): lint/format fixes and document DASHBOARD_PASSWORD
+528d8c8 test(dashboard): cover upload limits, auth, lock, filtering
+91b7326 feat(dashboard): web UI for setup, profile approval, find jobs, results
+c905591 STEP6a: add web UI tests
+aa2557d STEP5b: pass host to create_app and enforce password check
+8c4a91b fix: sqlite3.Row access without .get()
+e318b46 fix: preserve index behavior when decision missing
 08b925e feat: add MIT license and document BrainTrace observability
 80ea58f test: build path fixtures at runtime so selfcheck A4 stays green
 edda227 feat: add optional Braintrust observability with PII redaction
@@ -25,11 +42,49 @@ ebb9362 docs(preflight): record current state, block owner gates, keep raw JD po
 3e3197c feat(decision): apply/review/skip decision engine, CLI, prompts, selfcheck (#11)
 
 ## Done
-label-check read-only; 22 collected labeling tests; 594 tests pass.
+Web dashboard (FastAPI, no Jinja): /setup (PDF <=5MB + description), /profile
+(review/edit/approve, pipeline blocked until approved), Find jobs (background
+thread, one-run lock), /status + /api/status, results table (only APPLY/REVIEW
+decisions; SKIP hidden; no-decision rows listed under "Not yet evaluated"; a
+stored APPLY whose seniority is unknown is shown as REVIEW with a visible
+warning; source=manual rows hidden) with APLD/NTAPLD/PEND buttons, /rejected
+with filter rule/reason, /health probe. /profile approval now requires at least
+one location or "anywhere". DASHBOARD_PASSWORD login (constant-time compare,
+same-origin CSRF, HTML escaping); refuses to bind non-loopback without the
+password. db.py shippable_jobs/rejected_jobs added; CandidateProfile.locations
+added. Procfile now runs the guarded CLI entrypoint. 951 tests pass;
+ruff/black/mypy pass; selfcheck fast 21 PASS / 0 FAIL / 2 BLOCKED.
+Dashboard tests are env-isolated (tests/conftest.py clears DASHBOARD_PASSWORD /
+ATLAS_DB) so order does not matter.
+
+From this session (Steps 2-5, committed 72a43a5 / 3e5e3ea / 71ae5da / db9d3ec):
+- Pipeline runs resume through RETRYABLE pre-decision states and decide every
+  undecided job, reporting per-stage/per-source progress to the /status page;
+  `reset_for_retry` keeps `process_job` legal. 970 tests pass.
+- Approved profile prefs (locations / remote-any / target roles / experience)
+  are applied to filter settings at run time via `settings_for_profile`
+  (locations empty -> remote-ok; years fall back to level if no months).
+- Seniority `unknown`/`mid` becomes a soft REVIEW veto in the decision engine
+  (unknown -> everyone, mid -> fresher only); dashboard shows the stored
+  outcome verbatim with an informational warning, no display override.
+- Hard filters now record a per-rule audit (rule_id, value, limit, or
+  skipped_reason) into filter_results.data_json; /rejected and `explain
+  <job_id>` render a "checked" line per rule. Eval metrics unchanged.
+
+From earlier: label-check read-only; 22 collected labeling tests.
 Braintrust (BrainTrace) observability: MIT license, PII-redacted LLM tracing via
 atlas/observability.py, and eval metrics published as named scores
 (year_extraction_accuracy, skill_matching_accuracy, llm_precision_at_k) into
 Braintrust project atlasops (3c5416f9-ff13-4c16-9a07-71d0e5a8c090).
+
+## Not done this session
+- Groq models API call is blocked from the sandbox (Cloudflare `error code: 1010`);
+  model ids were cross-checked against Groq's published catalogue instead
+  (`openai/gpt-oss-120b` and `qwen/qwen3.8-27b` both live on Groq; verifier is a
+  different family from the evaluator). Re-run the /models check on a real
+  network before relying on it.
+- "claims not verified with a command" final list: see the end of the session
+  transcript that produced commit 651426f.
 
 ## Not done/hold
 Phase 8/PR B on hold.
@@ -49,7 +104,7 @@ Gate counts above were taken from a real run; re-run the commands in "How to run
 
 ## Owner decisions
 - Fresher, about 3 months internship; experience tolerance 1 year.
-- Interface: CLI + scheduled run (email delivery cancelled; FastAPI/Jinja UI dropped).
+- Interface: CLI + scheduled run (email delivery cancelled) PLUS the web dashboard (/setup -> /profile -> find -> results) added this session.
 - auto_applications/ bots disabled from the pipeline, kept for Phase 8.
 - History purge + key rotation chosen; rotation NOT yet confirmed (G1 stays BLOCKED).
 - Sources: existing feeds + Adzuna + Greenhouse/Lever/Ashby; second Groq model as verifier.
@@ -77,6 +132,7 @@ Commands and their flags (from `python -m atlas.cli --help` and per-command `--h
 - `eval [--golden GOLDEN] [--with-llm]`
 - `selfcheck [--fast] [--full] [--report REPORT]`
 - `feedback [--reason {too_senior,wrong_stack,bad_company,wrong_location,other,good_fit}] [--note NOTE] [--export] [job_id] [{good,bad}]`
+- `dashboard [--host HOST] [--port PORT]` (also `uvicorn app:app` for local; Procfile guards non-loopback with DASHBOARD_PASSWORD)
 
 Gates:
 ```
@@ -99,6 +155,7 @@ Agent summaries were wrong several times (invented test counts, a commit holding
 3. Owner runs mutmut under WSL/Linux (T5).
 4. Re-run selfcheck --full and the preflight.
 5. Only if verdict is GO, plan PR B (apply layer).
+6. Verify Groq model ids via the live /models API on a real network.
 
 ## Starting a new session
 1. Read AGENTS.md, PRD.md, and this HANDOFF.md.

@@ -71,31 +71,36 @@ def test_missing_file_reports_issue(tmp_path: Path) -> None:
 
 
 def test_invalid_json_line_is_reported(tmp_path: Path) -> None:
-    report = labeling.validate_labels(_write(tmp_path, ["{not json"]))
+    report = labeling.validate_labels(_write(tmp_path, ["{not json"]), pool_by_id={})
     assert report.valid == 0
     assert "invalid JSON" in report.issues[0].message
 
 
 def test_non_object_entry_is_reported(tmp_path: Path) -> None:
-    report = labeling.validate_labels(_write(tmp_path, ["[1, 2, 3]"]))
+    report = labeling.validate_labels(_write(tmp_path, ["[1, 2, 3]"]), pool_by_id={})
     assert "not a JSON object" in report.issues[0].message
 
 
 def test_missing_required_fields_are_reported(tmp_path: Path) -> None:
     bad = _entry("p1", "apply")
     del bad["url"]
-    report = labeling.validate_labels(_write(tmp_path, [bad]))
+    report = labeling.validate_labels(_write(tmp_path, [bad]), pool_by_id=_pool_map_for([bad]))
     assert report.valid == 0
     assert "url" in report.issues[0].message
 
 
 def test_invalid_label_is_reported(tmp_path: Path) -> None:
-    report = labeling.validate_labels(_write(tmp_path, [_entry("p1", "maybe")]))
+    report = labeling.validate_labels(
+        _write(tmp_path, [_entry("p1", "maybe")]), pool_by_id=_pool_map_for([_entry("p1", "maybe")])
+    )
     assert "invalid label" in report.issues[0].message
 
 
 def test_labeled_by_must_be_human(tmp_path: Path) -> None:
-    report = labeling.validate_labels(_write(tmp_path, [_entry("p1", "apply", labeled_by="bot")]))
+    report = labeling.validate_labels(
+        _write(tmp_path, [_entry("p1", "apply", labeled_by="bot")]),
+        pool_by_id=_pool_map_for([_entry("p1", "apply", labeled_by="bot")]),
+    )
     assert report.valid == 0
     assert "labeled_by" in report.issues[0].message
 
@@ -292,7 +297,7 @@ def test_missing_pool_file_exits_1(tmp_path: Path) -> None:
             "--pool",
             str(pool_path),
         ],
-        cwd="D:\\Atlas",
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         check=False,
     )
@@ -352,7 +357,7 @@ def test_happy_path_meets_minimums_exit_0(tmp_path: Path) -> None:
             "--pool",
             str(pool),
         ],
-        cwd="D:\\Atlas",
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         check=False,
     )
@@ -383,7 +388,7 @@ def test_read_only_labels_and_pool_bytes_unchanged(tmp_path: Path) -> None:
             "--pool",
             str(pool),
         ],
-        cwd="D:\\Atlas",
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         check=False,
     )
@@ -448,7 +453,7 @@ def test_invalid_lines_not_counted_toward_minimums(tmp_path: Path) -> None:
             "--pool",
             str(pool),
         ],
-        cwd="D:\\Atlas",
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         check=False,
     )

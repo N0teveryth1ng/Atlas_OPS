@@ -29,6 +29,7 @@ from atlas.schemas import (
     ProjectRelevanceItem,
     Recommendation,
     RemoteType,
+    Seniority,
     Skill,
     Verdict,
     VerifierVerdict,
@@ -96,10 +97,11 @@ def _parsed(
     confidence=0.95,
     education_required=None,
     visa_relocation=None,
+    seniority=Seniority.junior,
 ):
     return ParsedJD(
         title="Backend Engineer",
-        title_seniority="junior",
+        title_seniority=seniority,
         min_years_experience=min_years,
         max_years_experience=None,
         must_have_skills=["Python"],
@@ -337,6 +339,66 @@ def test_seniority_years_below_tolerance_vetoes():
         settings=SETTINGS,
     )
     assert any(veto.rule_id == "seniority_years" and veto.hard for veto in v)
+
+
+def test_unknown_seniority_is_a_soft_review_veto():
+    v = dec.evaluate_vetoes(
+        parsed=_parsed(seniority=Seniority.unknown),
+        profile=_profile(),
+        verdict=_verdict(),
+        verifier=_verifier(),
+        skill_match=_skill_match(),
+        critic=None,
+        settings=SETTINGS,
+    )
+    review = [veto for veto in v if veto.rule_id == "seniority_review"]
+    assert review and all(not veto.hard for veto in review)
+
+
+def test_mid_seniority_reviews_only_for_a_fresher():
+    fresh = _profile(experience_months=6)
+    fresh.experience_level = ExperienceLevel.fresher
+    for_veto = dec.evaluate_vetoes(
+        parsed=_parsed(seniority=Seniority.mid),
+        profile=fresh,
+        verdict=_verdict(),
+        verifier=_verifier(),
+        skill_match=_skill_match(),
+        critic=None,
+        settings=SETTINGS,
+    )
+    assert any(veto.rule_id == "seniority_review" and not veto.hard for veto in for_veto)
+
+    # A junior is not gated by a mid title.
+    not_veto = dec.evaluate_vetoes(
+        parsed=_parsed(seniority=Seniority.mid),
+        profile=_profile(),
+        verdict=_verdict(),
+        verifier=_verifier(),
+        skill_match=_skill_match(),
+        critic=None,
+        settings=SETTINGS,
+    )
+    assert not any(veto.rule_id == "seniority_review" for veto in not_veto)
+
+
+@pytest.mark.parametrize("months", [0, 6, 24, 120])
+def test_unknown_seniority_never_yields_apply(months):
+    """Property: an unknown title can never be auto-APPLY, at any experience."""
+    profile = _profile(experience_months=months)
+    decision = dec.decide(
+        parsed=_parsed(seniority=Seniority.unknown),
+        profile=profile,
+        verdict=_verdict(seniority_fit=95),
+        verifier=_verifier(),
+        skill_match=_skill_match(),
+        dimensions=_dims(),
+        spreads={},
+        relevance=None,
+        critic=None,
+        settings=SETTINGS,
+    )
+    assert decision.outcome != DecisionOutcome.apply
 
 
 # --------------------------------------------------------------------------- #

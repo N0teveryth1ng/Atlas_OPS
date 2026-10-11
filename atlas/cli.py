@@ -21,10 +21,12 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from . import __version__
-from .config import REPO_ROOT, get_settings
+from .config import REPO_ROOT, get_settings, settings_for_profile
 from .db import (
     connect,
     finish_run,
@@ -179,11 +181,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     return _execute_run(args, run_kind="run")
 
 
-def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
+def _execute_run(
+    args: argparse.Namespace,
+    *,
+    run_kind: str = "run",
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> int:
     from .db import emailed_job_ids, mark_digest_sent, save_digest
     from .digest import build_digest, render_html, render_text
     from .feedback import load_and_apply
     from .pipeline import run_pipeline
+
+    def emit(stage: str, **fields: Any) -> None:
+        if on_event is not None:
+            on_event({"stage": stage, **fields})
 
     settings = get_settings()
     conn = connect()
@@ -194,6 +205,9 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
         conn.close()
         return 2
 
+    # The approved profile's locations/roles/experience are the source of truth;
+    # fold them into the filter settings (rule logic itself is unchanged).
+    settings = settings_for_profile(profile, settings)
     settings, tuning = load_and_apply(conn, settings)
     if tuning.feedback_count:
         print(f"Tuning: {tuning.summary()}")
@@ -204,10 +218,24 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
     if getattr(args, "collect", False):
         from .sourcing import run_sourcing
 
+        emit("collecting")
         sourcing_result = run_sourcing(profile, settings=settings, conn=conn, run_id=run_id)
+        emit(
+            "collected",
+            collected=len(sourcing_result.jobs),
+            new_jobs=sourcing_result.new_jobs,
+            queries=len(sourcing_result.queries),
+        )
 
     results = run_pipeline(
-        conn, run_id, profile, settings, client, limit=getattr(args, "limit", None)
+        conn,
+        run_id,
+        profile,
+        settings,
+        client,
+        limit=getattr(args, "limit", None),
+        resume=True,
+        on_progress=lambda progress: emit("processing", **progress),
     )
     from .job_status import InvariantViolation, JobStatus, assert_sent_subset
 
@@ -247,6 +275,19 @@ def _execute_run(args: argparse.Namespace, *, run_kind: str = "run") -> int:
                 f"  {item.source:<15} fetched={item.fetched:<5} kept={item.kept:<5} "
                 f"passed={item.passed_filters:<5} sent={item.sent}"
             )
+        emit(
+            "sources",
+            sources=[
+                {
+                    "source": item.source,
+                    "fetched": item.fetched,
+                    "kept": item.kept,
+                    "passed_filters": item.passed_filters,
+                    "sent": item.sent,
+                }
+                for item in sourcing_result.source_yields
+            ],
+        )
     finish_run(conn, run_id, "ok", summary=digest.summary.model_dump())
     conn.close()
     return 0
@@ -289,18 +330,41 @@ def cmd_decide(args: argparse.Namespace) -> int:
     return 0
 
 
+def _filter_check_text(check: dict[str, Any]) -> str:
+    """One audit line as text, matching the dashboard's /rejected rendering."""
+    rule_id = str(check.get("rule_id") or "-")
+    if not check.get("checked"):
+        return f"{rule_id}: skipped - {check.get('skipped_reason') or 'no reason'}"
+    value = check.get("value")
+    limit = check.get("limit")
+    if value is not None and limit is not None:
+        return f"{rule_id}: {value} <= {limit}"
+    if value is not None:
+        return f"{rule_id}: {value}"
+    return rule_id
+
+
 def cmd_explain(args: argparse.Namespace) -> int:
     """Print the latest decision record for a single job."""
-    from .db import get_latest_decision
+    from .db import get_latest_decision, get_latest_filter_checks
 
     conn = connect()
     init_db(conn)
     decision = get_latest_decision(conn, args.job_id)
+    checks = get_latest_filter_checks(conn, args.job_id)
     conn.close()
     if decision is None:
         print(f"No decision recorded for job {args.job_id}.")
+        if checks:
+            print("Filter checks recorded before it was decided:")
+            for check in checks:
+                print("  " + _filter_check_text(check))
         return 0
     print(json.dumps(decision, indent=2))
+    if checks:
+        print("Filter checks:")
+        for check in checks:
+            print("  " + _filter_check_text(check))
     return 0
 
 
@@ -329,12 +393,12 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         print(
-            "WARNING: dashboard has no authentication; binding to a non-loopback "
-            "host exposes it to the network.",
+            "WARNING: binding a non-loopback host exposes the dashboard to the "
+            "network; it is protected by DASHBOARD_PASSWORD.",
             file=sys.stderr,
         )
     print(f"Dashboard: http://{args.host}:{args.port}/ (Ctrl+C to stop)")
-    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(create_app(host=args.host), host=args.host, port=args.port, log_level="warning")
     return 0
 
 

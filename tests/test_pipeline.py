@@ -1,12 +1,22 @@
 import json
 import logging
 
+import pytest
 from fake_llm import make_client
 
 from atlas.config import get_settings
-from atlas.db import connect, init_db, save_profile, set_job_status, start_run, upsert_job
-from atlas.job_status import JobStatus
-from atlas.pipeline import load_jobs, process_job, run_pipeline
+from atlas.db import (
+    connect,
+    get_latest_filter_checks,
+    init_db,
+    log_stage,
+    save_profile,
+    set_job_status,
+    start_run,
+    upsert_job,
+)
+from atlas.job_status import IllegalTransition, JobStatus, reset_for_retry
+from atlas.pipeline import RESUMABLE_STATUSES, load_jobs, process_job, run_pipeline
 from atlas.schemas import CandidateProfile, Job, Proficiency, Recommendation, Skill
 
 PARSED = {
@@ -64,6 +74,25 @@ def _setup(tmp_path):
     )
     job_id, _ = upsert_job(conn, run_id, job)
     return conn, run_id, profile, job_id, job
+
+
+def test_reset_for_retry_rewinds_only_pre_decision_states():
+    for status in (
+        JobStatus.parsed,
+        JobStatus.passed_filters,
+        JobStatus.evaluated,
+        JobStatus.verified,
+    ):
+        assert reset_for_retry(status) == JobStatus.new
+    assert reset_for_retry(JobStatus.new) == JobStatus.new
+    for terminal in (
+        JobStatus.rejected,
+        JobStatus.needs_review,
+        JobStatus.ranked,
+        JobStatus.sent,
+    ):
+        with pytest.raises(IllegalTransition):
+            reset_for_retry(terminal)
 
 
 def test_process_job_happy_path(tmp_path):
@@ -183,4 +212,84 @@ def test_skip_log_counts_only_non_new_rows(tmp_path, caplog):
         run_pipeline(conn, run_id, profile, get_settings(), _client(), limit=2)
 
     assert "skipping 2 stored job(s)" in caplog.text
+    conn.close()
+
+
+def test_load_jobs_undecided_keeps_stuck_jobs_drops_decided(tmp_path):
+    """Resume must pick up jobs stranded mid-pipeline but never re-rule a decided one."""
+    conn, run_id, _profile, fresh_id, job = _setup(tmp_path)
+    stuck_id, _ = upsert_job(
+        conn, run_id, job.model_copy(update={"url": "http://x/2", "dedupe_key": "k2"})
+    )
+    set_job_status(conn, stuck_id, JobStatus.parsed)
+    rejected_id, _ = upsert_job(
+        conn, run_id, job.model_copy(update={"url": "http://x/3", "dedupe_key": "k3"})
+    )
+    _mark_rejected(conn, rejected_id)
+    decided_id, _ = upsert_job(
+        conn, run_id, job.model_copy(update={"url": "http://x/4", "dedupe_key": "k4"})
+    )
+    set_job_status(conn, decided_id, JobStatus.parsed)
+    set_job_status(conn, decided_id, JobStatus.passed_filters)
+    log_stage(conn, "decisions", job_id=decided_id, data={"outcome": "skip", "match_score": 0.0})
+
+    got = {jid for jid, _ in load_jobs(conn, statuses=RESUMABLE_STATUSES, undecided=True)}
+
+    assert got == {fresh_id, stuck_id}
+    conn.close()
+
+
+def test_run_pipeline_resume_reaches_a_decision_for_stuck_job(tmp_path):
+    """A job left at `parsed` by an interrupted run is finished on the next run."""
+    conn, run_id, profile, _fresh, job = _setup(tmp_path)
+    stuck_id, _ = upsert_job(
+        conn, run_id, job.model_copy(update={"url": "http://x/2", "dedupe_key": "k2"})
+    )
+    set_job_status(conn, stuck_id, JobStatus.parsed)
+
+    results = run_pipeline(conn, run_id, profile, get_settings(), _client(), resume=True)
+
+    assert stuck_id in {result.job_id for result in results}
+    assert (
+        conn.execute("SELECT COUNT(*) FROM decisions WHERE job_id = ?", (stuck_id,)).fetchone()[0]
+        == 1
+    )
+    conn.close()
+
+
+def test_run_pipeline_progress_reports_stage_counts(tmp_path):
+    conn, run_id, profile, _fresh, _job = _setup(tmp_path)
+    events: list[dict] = []
+
+    run_pipeline(
+        conn,
+        run_id,
+        profile,
+        get_settings(),
+        _client(),
+        on_progress=events.append,
+    )
+
+    assert events, "progress callback must fire at least once"
+    assert events[0]["total"] >= 1
+    final = events[-1]
+    assert final["done"] == final["total"]
+    assert final["decided"] >= 1
+    conn.close()
+
+
+def test_process_job_stores_filter_checks_on_pass(tmp_path):
+    conn, _run, profile, job_id, job = _setup(tmp_path)
+
+    process_job(_client(), job_id, job, profile, get_settings(), conn=conn)
+
+    by_rule = {check["rule_id"]: check for check in get_latest_filter_checks(conn, job_id)}
+    assert by_rule["too_much_experience"]["checked"] is True
+    assert by_rule["too_much_experience"]["value"] == "min_years 0"
+    # Rules that could not run are recorded with a reason, not silently dropped.
+    assert by_rule["employment_type_mismatch"]["checked"] is False
+    assert "not stated" in by_rule["employment_type_mismatch"]["skipped_reason"]
+    assert by_rule["salary_below_floor"]["checked"] is False
+    assert by_rule["deal_breaker_skill"]["checked"] is False
+    assert by_rule["stale_job"]["checked"] is False
     conn.close()

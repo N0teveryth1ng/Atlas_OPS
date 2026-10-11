@@ -18,8 +18,22 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
 
+from .schemas import CandidateProfile, ExperienceLevel
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "config.yaml"
+
+#: Location tokens that mean "no location restriction".
+ANYWHERE_TOKENS = frozenset({"anywhere", "remote", "any"})
+
+#: Minimum years implied by an experience level, used only when the profile has
+#: no explicit total. Feeds the existing ``too_much_experience`` allowance.
+LEVEL_TO_YEARS: dict[ExperienceLevel, float] = {
+    ExperienceLevel.fresher: 0.0,
+    ExperienceLevel.junior: 1.0,
+    ExperienceLevel.mid: 3.0,
+    ExperienceLevel.senior: 5.0,
+}
 
 
 class CandidateConfig(BaseModel):
@@ -199,6 +213,38 @@ def load_settings(config_path: Path | str = CONFIG_PATH) -> Settings:
 def get_settings() -> Settings:
     """Cached accessor used everywhere in the pipeline."""
     return load_settings()
+
+
+def _years_from_profile(profile: CandidateProfile) -> float:
+    if profile.total_experience_months and profile.total_experience_months > 0:
+        return round(profile.total_experience_months / 12.0, 2)
+    return LEVEL_TO_YEARS.get(profile.experience_level, 0.0)
+
+
+def settings_for_profile(profile: CandidateProfile, base: Settings | None = None) -> Settings:
+    """Return a copy of ``base`` with the approved profile's preferences applied.
+
+    Only preference fields are overridden — target locations, remote preference,
+    target roles, and the candidate's years. Filter rule logic, thresholds,
+    models, sources and ranking weights are left untouched, so behaviour is
+    unchanged apart from the prefs the human actually approved. Never mutates
+    ``base``.
+    """
+    settings = (base or get_settings()).model_copy(deep=True)
+
+    locations = [loc.strip() for loc in profile.locations if loc.strip()]
+    tokens = {loc.lower() for loc in locations}
+    if not locations or tokens & ANYWHERE_TOKENS:
+        settings.targets.locations = []
+        settings.targets.remote_ok = True
+    else:
+        settings.targets.locations = locations
+
+    if profile.target_roles:
+        settings.targets.target_roles = list(profile.target_roles)
+
+    settings.candidate.my_years_experience = _years_from_profile(profile)
+    return settings
 
 
 def config_hash() -> str:

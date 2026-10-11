@@ -47,6 +47,28 @@ ALLOWED: dict[JobStatus, frozenset[JobStatus]] = {
 # States from which a job is allowed to be rendered / shipped.
 SHIPPABLE: frozenset[JobStatus] = frozenset({JobStatus.verified, JobStatus.ranked})
 
+#: Pre-decision states a stalled job may be rewound to ``new`` from so a later
+#: run can finish it. A decision-free job left in one of these states by an
+#: interrupted run has no verdict to preserve, so restarting it is safe. Terminal
+#: states (``rejected``/``needs_review``/``ranked``/``sent``) are deliberately
+#: excluded: their outcome is already a decision.
+RETRYABLE: frozenset[JobStatus] = frozenset(
+    {JobStatus.parsed, JobStatus.passed_filters, JobStatus.evaluated, JobStatus.verified}
+)
+
+
+def reset_for_retry(status: JobStatus) -> JobStatus:
+    """Return ``new`` for a stalled pre-decision job; ``new`` stays ``new``.
+
+    The forward graph in ``ALLOWED`` stays strict. Only this explicit helper may
+    rewind a resumable job, and it raises for terminal states.
+    """
+    if status == JobStatus.new:
+        return JobStatus.new
+    if status in RETRYABLE:
+        return JobStatus.new
+    raise IllegalTransition(f"cannot retry a job in terminal state: {status.value}")
+
 
 def can_transition(current: JobStatus, new: JobStatus) -> bool:
     return new in ALLOWED.get(current, frozenset())

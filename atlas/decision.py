@@ -32,11 +32,13 @@ from .schemas import (
     Decision,
     DecisionCritic,
     DecisionOutcome,
+    ExperienceLevel,
     Job,
     ParsedJD,
     ProjectRelevance,
     Recommendation,
     RemoteType,
+    Seniority,
     Verdict,
     VerifierVerdict,
     Veto,
@@ -61,6 +63,11 @@ DIMENSION_NAMES = (
 
 #: Candidate may fall this many years below a stated minimum before it vetoes.
 EXPERIENCE_TOLERANCE_YEARS = 1.0
+
+#: Title levels that must go to a human rather than auto-APPLY. ``unknown`` is a
+#: soft veto for everyone (the level could not be determined); ``mid`` is one for
+#: a fresher, who should not be auto-applied to a mid-level role.
+REVIEW_SENIORITY = frozenset({Seniority.unknown, Seniority.mid})
 
 #: Neutral score used when there is nothing to judge (absence != failure).
 NEUTRAL_PROJECT_SCORE = 50.0
@@ -140,6 +147,29 @@ def _verifier_veto_has_evidence(verifier: VerifierVerdict) -> bool:
     return bool(verifier.reasons_against) and all(e.quote.strip() for e in verifier.reasons_against)
 
 
+def _seniority_review_veto(parsed: ParsedJD, profile: CandidateProfile) -> Veto | None:
+    """A soft veto forcing REVIEW when seniority cannot be trusted for auto-APPLY.
+
+    ``unknown`` always qualifies: the level is undetermined, so a job must not be
+    auto-applied to. ``mid`` qualifies for a fresher, who is out of depth there.
+    Never hard — the job still surfaces for a human, it just cannot be APPLY.
+    """
+    level = parsed.title_seniority
+    if level == Seniority.unknown:
+        return Veto(
+            rule_id="seniority_review",
+            reason="title seniority is unknown; a human must confirm the level",
+            hard=False,
+        )
+    if level == Seniority.mid and profile.experience_level == ExperienceLevel.fresher:
+        return Veto(
+            rule_id="seniority_review",
+            reason="mid-level role for a fresher profile; a human must confirm the fit",
+            hard=False,
+        )
+    return None
+
+
 def evaluate_vetoes(
     *,
     parsed: ParsedJD,
@@ -192,6 +222,10 @@ def evaluate_vetoes(
                 hard=True,
             )
         )
+
+    seniority_veto = _seniority_review_veto(parsed, profile)
+    if seniority_veto is not None:
+        vetoes.append(seniority_veto)
 
     if verifier.veto:
         vetoes.append(
