@@ -131,6 +131,16 @@ CREATE TABLE IF NOT EXISTS digests (
     sent_at    TEXT
 );
 
+CREATE TABLE IF NOT EXISTS kits (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id         INTEGER REFERENCES jobs(id),
+    model          TEXT,
+    prompt_version TEXT,
+    created_at     TEXT NOT NULL,
+    text           TEXT,
+    data_json      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS feedback (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id      INTEGER REFERENCES jobs(id),
@@ -238,6 +248,46 @@ def get_latest_profile(conn: sqlite3.Connection) -> CandidateProfile | None:
     if row is None:
         return None
     return CandidateProfile.model_validate_json(row["data_json"])
+
+
+# --------------------------------------------------------------------------- #
+# Application kits
+# --------------------------------------------------------------------------- #
+
+
+def save_kit(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    text: str,
+    data_json: str,
+    model: str,
+    prompt_version: str,
+) -> int:
+    """Store one generated application kit for a job.
+
+    ``text`` is the plain-text rendering (what the copy buttons put on the
+    clipboard) and ``data_json`` is the structured kit the page renders.
+    """
+    cur = conn.execute(
+        "INSERT INTO kits (job_id, model, prompt_version, created_at, text, data_json) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (job_id, model, prompt_version, _now(), text, data_json),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def latest_kit_data(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
+    """Latest stored kit for ``job_id`` as a raw dict, or ``None``."""
+    row = conn.execute(
+        "SELECT data_json FROM kits WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    parsed = json.loads(row["data_json"])
+    return parsed if isinstance(parsed, dict) else None
 
 
 # --------------------------------------------------------------------------- #
@@ -357,7 +407,7 @@ def shippable_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """
     return conn.execute("""
         SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.status,
-               j.application_status,
+               j.application_status, j.description_raw,
                (SELECT d.data_json FROM decisions d WHERE d.job_id = j.id
                 ORDER BY d.id DESC LIMIT 1) AS decision_json,
                (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id
@@ -384,7 +434,7 @@ def shippable_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
     return conn.execute(
         """
         SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.status,
-               j.application_status,
+               j.application_status, j.description_raw,
                (SELECT d.data_json FROM decisions d WHERE d.job_id = j.id
                 ORDER BY d.id DESC LIMIT 1) AS decision_json,
                (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id

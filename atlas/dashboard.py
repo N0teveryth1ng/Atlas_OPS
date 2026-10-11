@@ -19,6 +19,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -31,17 +32,29 @@ from .db import (
     connect,
     get_latest_profile,
     init_db,
+    latest_kit_data,
     matched_jobs,
     rejected_jobs,
+    save_kit,
     save_profile,
     set_application_status,
     shippable_job,
     shippable_jobs,
 )
 from .digest import is_http_url
+from .kit import ApplicationKit, generate_kit, render_kit_text
+from .llm import LLMClient, LLMError
 from .profile_agent import build_profile as _build_profile_impl
 from .profile_agent import normalize_skill_name
-from .schemas import CandidateProfile, ExperienceLevel, Proficiency, Seniority, Skill
+from .schemas import (
+    CandidateProfile,
+    EvidenceSource,
+    ExperienceLevel,
+    Job,
+    Proficiency,
+    Seniority,
+    Skill,
+)
 
 _LABELS = {"APLD": "Applied", "NTAPLD": "Not applied", "PEND": "Pending"}
 _COLORS = {"APLD": "#1a7f37", "NTAPLD": "#cf222e", "PEND": "#9a6700"}
@@ -472,11 +485,89 @@ def _undecided_row_html(row: sqlite3.Row) -> str:
     )
 
 
-def _kit_page(row: sqlite3.Row, notice: str | None = None) -> str:
-    """Application-kit page for one job: posting info plus a generate form.
+def _source_label(source: EvidenceSource) -> str:
+    """Display name for an evidence source: ``profile`` or ``job``."""
+    return "profile" if source.value == "profile" else "job"
 
-    The kit itself (summary/cover/responses) is generated and stored in later
-    Phase 8a steps; this page owns the navigation and the generate trigger.
+
+def _copy_button(target_id: str, label: str = "Copy") -> str:
+    """Client-side copy button; reads the target element's rendered text."""
+    return (
+        f'<button type="button" class="badge" '
+        f"onclick=\"navigator.clipboard.writeText(document.getElementById('{target_id}')"
+        f'.textContent)">{html.escape(label)}</button>'
+    )
+
+
+def _kit_claim_rows(claims: list[Any]) -> str:
+    return "".join(
+        f"<tr><td>{html.escape(claim.text)}</td>"
+        f"<td>&ldquo;{html.escape(claim.quote)}&rdquo;</td>"
+        f"<td>{html.escape(_source_label(claim.source))}</td></tr>"
+        for claim in claims
+    )
+
+
+def _kit_lines_html(section: Any, anchor: str) -> str:
+    """One summary/cover table: each sentence next to its quote and source."""
+    if not section.claims:
+        return f'<p class="error">{html.escape(section.blocked_reason or "needs your input")}</p>'
+    table = (
+        "<table>"
+        "<thead><tr><th>Sentence</th><th>Supporting quote</th><th>Source</th></tr></thead>"
+        f"<tbody>{_kit_claim_rows(section.claims)}</tbody></table>"
+    )
+    if section.blocked_reason:
+        table += f'<p class="error">{html.escape(section.blocked_reason)}</p>'
+    return f'<div id="{anchor}">{table}</div>' + _copy_button(anchor)
+
+
+def _kit_answers_html(kit: ApplicationKit) -> str:
+    if not kit.answers:
+        return '<p class="error">needs your input</p>'
+    rows = "".join(
+        f"<tr><td>{html.escape(answer.question)}<br>{html.escape(answer.answer)}</td>"
+        f"<td>&ldquo;{html.escape(answer.quote)}&rdquo;</td>"
+        f"<td>{html.escape(_source_label(answer.source))}</td></tr>"
+        for answer in kit.answers
+    )
+    return (
+        '<div id="kit-answers"><table>'
+        "<thead><tr><th>Question &amp; answer</th><th>Supporting quote</th>"
+        "<th>Source</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table></div>"
+    ) + _copy_button("kit-answers")
+
+
+def _kit_body_html(kit: ApplicationKit) -> str:
+    """Render a stored kit: summary, cover note and answers, each claim shown
+    next to its supporting quote and source. Nothing here is applied for the
+    user: the page only displays and copies text."""
+    parts = ["<h2>Summary</h2>\n", _kit_lines_html(kit.summary, "kit-summary"), "\n"]
+    parts.append("<h2>Cover note</h2>\n")
+    parts.append(_kit_lines_html(kit.cover_note, "kit-cover"))
+    parts.append("\n<h2>Answers</h2>\n")
+    parts.append(_kit_answers_html(kit))
+    parts.append("\n")
+    if kit.prompt_version:
+        parts.append(
+            f'<p class="notice">prompt v{html.escape(kit.prompt_version)} '
+            f"· model {html.escape(kit.model or '-')}</p>\n"
+        )
+    return "".join(parts)
+
+
+def _kit_page(
+    row: sqlite3.Row,
+    kit: ApplicationKit | None = None,
+    notice: str | None = None,
+    error: str | None = None,
+) -> str:
+    """Application-kit page for one job.
+
+    Shows the posting, the apply link, a "mark as APLD" button, and — once
+    generated — the kit with every claim next to its supporting quote and
+    source. It never submits an application.
     """
     job_id = int(row["id"])
     url = str(row["url"] or "")
@@ -484,25 +575,50 @@ def _kit_page(row: sqlite3.Row, notice: str | None = None) -> str:
     company = html.escape(str(row["company"] or "-"))
     location = html.escape(str(row["location"] or "-"))
     source = html.escape(str(row["source"] or "-"))
-    apply_link = (
-        f'<a href="{html.escape(url, quote=True)}" rel="noreferrer">Open posting</a>'
-        if is_http_url(url)
-        else html.escape(url or "-")
-    )
     parts = [_HEAD, _nav(), "<h1>Application kit</h1>\n"]
     if notice:
         parts.append(f'<p class="notice">{html.escape(notice)}</p>\n')
+    if error:
+        parts.append(f'<p class="error">{html.escape(error)}</p>\n')
+    if is_http_url(url):
+        apply_link = (
+            f'<a class="badge" style="background:#0969da" '
+            f'href="{html.escape(url, quote=True)}" rel="noreferrer" '
+            f'target="_blank">Apply link (opens posting)</a>'
+        )
+    else:
+        apply_link = html.escape(url or "-")
     parts.append(
         f"<p>{title}<br>Company: {company}<br>Location: {location}<br>"
-        f"Source: {source}<br>Posting: {apply_link}</p>\n"
+        f"Source: {source}<br>Apply: {apply_link}</p>\n"
     )
     parts.append(
+        f'<p><form method="post" action="/jobs/{job_id}/status/APLD">'
+        '<button type="submit" class="badge" style="background:#1a7f37">'
+        "Mark as APLD (applied)</button></form></p>\n"
+    )
+    if kit is not None:
+        parts.append(_kit_body_html(kit))
+    else:
+        parts.append("<p>No kit generated yet.</p>\n")
+    action = "Regenerate" if kit is not None else "Generate"
+    parts.append(
         f'<form method="post" action="/jobs/{job_id}/kit">'
-        '<button type="submit">Generate application kit</button></form>\n'
+        f'<button type="submit">{action} application kit</button></form>\n'
     )
     parts.append('<p><a href="/">Back to results</a></p>\n')
     parts.append(_TABLE_FOOT)
     return "".join(parts)
+
+
+def _kit_error_page(message: str) -> str:
+    return (
+        _HEAD
+        + _nav()
+        + "<h1>Application kit</h1>"
+        + f'<p class="error">{html.escape(message)}</p>'
+        + _TABLE_FOOT
+    )
 
 
 def _page(
@@ -614,11 +730,26 @@ def _profile_page(profile: CandidateProfile, error: str | None = None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def create_app(database: Path | None = None, host: str | None = None) -> FastAPI:
-    """Build the dashboard ASGI app (``database`` defaults to ``ATLAS_DB``)."""
+def create_app(
+    database: Path | None = None,
+    host: str | None = None,
+    client_factory: Callable[[], LLMClient] | None = None,
+) -> FastAPI:
+    """Build the dashboard ASGI app (``database`` defaults to ``ATLAS_DB``).
+
+    ``client_factory`` is the LLM client used to draft a kit; it defaults to the
+    CLI's client and is injectable so tests never touch the network.
+    """
     if host and not host.startswith(("127.0.0.1", "localhost", "::1")) and _get_password() is None:
         raise RuntimeError("DASHBOARD_PASSWORD must be set when binding a non-loopback address")
     app = FastAPI(title="Atlas dashboard", version="0.2.0")
+
+    def _make_kit_client() -> LLMClient:
+        if client_factory is not None:
+            return client_factory()
+        from .cli import _make_client
+
+        return _make_client()
 
     def require_auth(request: Request) -> Response | None:
         if _get_password() is not None and not _check_auth(request):
@@ -716,30 +847,47 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
 
     def _kit_job_or_error(job_id: int) -> tuple[sqlite3.Row | None, str | None, int]:
         """Load one APPLY/REVIEW job for the kit page, or an error page body."""
-
-        def _error(message: str) -> str:
-            return (
-                _HEAD
-                + _nav()
-                + "<h1>Application kit</h1>"
-                + f'<p class="error">{message}</p>'
-                + _TABLE_FOOT
-            )
-
         try:
             conn = _open(database)
         except sqlite3.Error as exc:
-            return None, _error(f"Database unavailable: {exc}"), 503
+            return None, _kit_error_page(f"Database unavailable: {exc}"), 503
         try:
             row = shippable_job(conn, job_id)
         finally:
             conn.close()
         if row is None:
-            return None, _error("Job not found, or it did not pass every hard filter."), 404
+            return (
+                None,
+                _kit_error_page("Job not found, or it did not pass every hard filter."),
+                404,
+            )
         outcome = str(_load_json(row["decision_json"]).get("outcome") or "").lower()
         if outcome not in _SHOWN_OUTCOMES:
-            return None, _error("No APPLY/REVIEW decision stored for this job."), 404
+            return None, _kit_error_page("No APPLY/REVIEW decision stored for this job."), 404
         return row, None, 200
+
+    def _stored_kit(job_id: int) -> ApplicationKit | None:
+        conn = _open(database)
+        try:
+            data = latest_kit_data(conn, job_id)
+        finally:
+            conn.close()
+        if data is None:
+            return None
+        try:
+            return ApplicationKit.model_validate(data)
+        except ValueError:
+            return None
+
+    def _job_from_kit_row(row: sqlite3.Row) -> Job:
+        return Job(
+            source=str(row["source"] or ""),
+            title=row["title"],
+            company=row["company"],
+            location=row["location"],
+            url=str(row["url"] or ""),
+            description_raw=str(row["description_raw"] or ""),
+        )
 
     @app.get("/jobs/{job_id}/kit", response_class=HTMLResponse)
     def kit_get(request: Request, job_id: int) -> Response:
@@ -749,7 +897,11 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
         row, error_html, status = _kit_job_or_error(job_id)
         if row is None:
             return HTMLResponse(error_html, status_code=status)
-        return HTMLResponse(_kit_page(row))
+        try:
+            kit = _stored_kit(job_id)
+        except sqlite3.Error:
+            kit = None
+        return HTMLResponse(_kit_page(row, kit=kit))
 
     @app.post("/jobs/{job_id}/kit")
     def kit_post(request: Request, job_id: int) -> Response:
@@ -761,9 +913,36 @@ def create_app(database: Path | None = None, host: str | None = None) -> FastAPI
         row, error_html, status = _kit_job_or_error(job_id)
         if row is None:
             return HTMLResponse(error_html, status_code=status)
-        return HTMLResponse(
-            _kit_page(row, notice="Application-kit generation is not implemented yet.")
-        )
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return HTMLResponse(_kit_error_page(f"Database unavailable: {exc}"), status_code=503)
+        try:
+            profile = get_latest_profile(conn)
+            if profile is None:
+                return HTMLResponse(
+                    _kit_error_page("Build and approve a profile first."), status_code=400
+                )
+            if not profile.approved:
+                return HTMLResponse(
+                    _kit_error_page("Approve your profile before generating a kit."),
+                    status_code=400,
+                )
+            job = _job_from_kit_row(row)
+            kit = generate_kit(_make_kit_client(), profile=profile, job=job)
+            save_kit(
+                conn,
+                job_id,
+                text=render_kit_text(kit),
+                data_json=kit.model_dump_json(),
+                model=kit.model,
+                prompt_version=kit.prompt_version,
+            )
+        except LLMError as exc:
+            return HTMLResponse(_kit_error_page(f"Kit generation failed: {exc}"), status_code=502)
+        finally:
+            conn.close()
+        return HTMLResponse(_kit_page(row, kit=kit))
 
     @app.get("/api/matched")
     def api_matched(request: Request) -> Response:
