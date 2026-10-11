@@ -1,8 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
-from atlas.config import Settings
+from atlas.config import Settings, settings_for_profile
 from atlas.filters import _parse_salary, apply_hard_filters
-from atlas.schemas import CandidateProfile, Job, ParsedJD, RemoteType, Seniority
+from atlas.schemas import CandidateProfile, ExperienceLevel, Job, ParsedJD, RemoteType, Seniority
 
 
 def _settings() -> Settings:
@@ -155,3 +155,52 @@ def test_fresh_naive_job_passes_once_timestamped():
     naive_recent = datetime.now(UTC).replace(tzinfo=None)
     result = apply_hard_filters(_job(posted_at=naive_recent), ParsedJD(), _profile(), settings)
     assert result.passed
+
+
+def test_profile_locations_wire_into_filters():
+    profile = CandidateProfile(locations=["India"])
+    settings = settings_for_profile(profile, _settings())
+
+    assert settings.targets.locations == ["India"]
+    zurich = apply_hard_filters(
+        _job(location="Zurich"),
+        ParsedJD(location="Zurich", remote_type=RemoteType.onsite),
+        profile,
+        settings,
+    )
+    assert not zurich.passed
+    assert any(r.rule_id == "location_mismatch" for r in zurich.rejections)
+
+
+def test_profile_anywhere_clears_location_filter():
+    profile = CandidateProfile(locations=["anywhere"])
+    settings = settings_for_profile(profile, _settings())
+
+    assert settings.targets.locations == []
+    zurich = apply_hard_filters(
+        _job(location="Zurich"),
+        ParsedJD(location="Zurich", remote_type=RemoteType.onsite),
+        profile,
+        settings,
+    )
+    assert zurich.passed
+
+
+def test_settings_for_profile_wires_roles_and_experience_and_copies():
+    base = _settings()
+    profile = CandidateProfile(target_roles=["Backend"], total_experience_months=18)
+
+    settings = settings_for_profile(profile, base)
+
+    assert settings.targets.target_roles == ["Backend"]
+    assert settings.candidate.my_years_experience == 1.5
+    # Purity: the base object the pipeline cached is untouched.
+    assert base.targets.target_roles == []
+    assert base.candidate.my_years_experience == 0
+
+
+def test_settings_for_profile_falls_back_to_level_for_years():
+    settings = settings_for_profile(
+        CandidateProfile(experience_level=ExperienceLevel.junior), _settings()
+    )
+    assert settings.candidate.my_years_experience == 1.0

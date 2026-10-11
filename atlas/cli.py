@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .config import REPO_ROOT, get_settings
+from .config import REPO_ROOT, get_settings, settings_for_profile
 from .db import (
     connect,
     finish_run,
@@ -205,6 +205,9 @@ def _execute_run(
         conn.close()
         return 2
 
+    # The approved profile's locations/roles/experience are the source of truth;
+    # fold them into the filter settings (rule logic itself is unchanged).
+    settings = settings_for_profile(profile, settings)
     settings, tuning = load_and_apply(conn, settings)
     if tuning.feedback_count:
         print(f"Tuning: {tuning.summary()}")
