@@ -10,6 +10,7 @@ instead of failing the run that produced it.
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import types
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fake_llm import make_client
+from fake_llm import FakeClient, make_client
 from pydantic import BaseModel
 
 from atlas import evaluation, observability
@@ -41,6 +42,7 @@ from atlas.evaluation import (
     run_llm_eval,
     run_skill_eval,
 )
+from atlas.kit import generate_kit
 from atlas.llm import LLMClient, LLMError
 from atlas.observability import (
     ALLOWED_PAYLOAD_KEYS,
@@ -728,6 +730,39 @@ def _canned_client() -> LLMClient:
     )
 
 
+_KIT_PAYLOAD = {
+    "summary": [
+        {"text": "Initech is hiring.", "quote": "Initech is hiring", "source": "jd"},
+        {
+            "text": "The role needs 0-2 years of experience.",
+            "quote": "0-2 years experience",
+            "source": "jd",
+        },
+        {"text": "The role is remote.", "quote": "Fully remote", "source": "jd"},
+    ],
+    "cover_note": [
+        {"text": "I would join to work on the platform.", "quote": "work on the", "source": "jd"}
+    ],
+    "answers": [
+        {
+            "question_key": "why_company",
+            "answer": "Initech is hiring for this role.",
+            "quote": "Initech is hiring",
+            "source": "jd",
+        }
+    ],
+}
+
+
+def _kit_client() -> LLMClient:
+    """Fake client that returns one valid kit draft, never touching the network."""
+
+    def handler(kwargs: dict) -> str:
+        return json.dumps(_KIT_PAYLOAD)
+
+    return LLMClient(client=FakeClient(handler))
+
+
 #: Every string that must be absent from anything Atlas sends.
 PII_MARKERS = (
     PII_NAME,
@@ -887,6 +922,20 @@ class TestNoPiiReachesBraintrust:
         assert job.url in blob, "the job url is allowlisted and must survive"
         assert job.title in blob
         assert job.company in blob
+
+    def test_kit_generation_spans_carry_no_profile_or_job_text(self, sdk: FakeSDK) -> None:
+        """The kit prompt embeds the profile and the raw posting; neither may go out."""
+        kit = generate_kit(
+            _kit_client(), profile=_pii_profile(), job=_pii_job(), settings=get_settings()
+        )
+
+        assert kit.summary.claims, "the kit under test must produce claims"
+        assert sdk.spans, "kit generation must produce spans"
+        blob = "".join(span.sent() for span in sdk.spans)
+        for marker in PII_MARKERS:
+            assert marker not in blob, marker
+        assert "## Candidate profile" not in blob, "no prompt text may leave the process"
+        assert "## Raw job posting" not in blob
 
     def test_careless_publish_payload_is_stripped_of_everything_private(self, sdk: FakeSDK) -> None:
         """Even a call site that tries to send PII cannot get it out."""

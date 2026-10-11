@@ -119,6 +119,36 @@ class ApplicationKit(BaseModel):
     model: str = ""
 
 
+def _claim_line(claim: KitClaimResult) -> str:
+    return f'{claim.text}\n    quote: "{claim.quote}" ({claim.source.value})'
+
+
+def render_kit_text(kit: ApplicationKit) -> str:
+    """Plain-text rendering of a kit: every claim next to its supported quote.
+
+    This is what the page's copy buttons put on the clipboard. It contains only
+    what the kit already validated, so nothing here is unquoted prose.
+    """
+    lines: list[str] = ["SUMMARY"]
+    if kit.summary.claims:
+        lines += [_claim_line(claim) for claim in kit.summary.claims]
+    if kit.summary.blocked_reason:
+        lines.append(f"[{kit.summary.blocked_reason}]")
+    lines.append("")
+    lines.append("COVER NOTE")
+    if kit.cover_note.claims:
+        lines += [_claim_line(claim) for claim in kit.cover_note.claims]
+    if kit.cover_note.blocked_reason:
+        lines.append(f"[{kit.cover_note.blocked_reason}]")
+    if kit.answers:
+        lines.append("")
+        lines.append("ANSWERS")
+        for answer in kit.answers:
+            lines.append(answer.question)
+            lines.append(f'{answer.answer}\n    quote: "{answer.quote}" ({answer.source.value})')
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- #
 # Deterministic text checks
 # --------------------------------------------------------------------------- #
