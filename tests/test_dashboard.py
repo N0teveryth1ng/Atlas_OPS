@@ -330,3 +330,54 @@ def test_profile_approval_requires_a_location(tmp_path):
     assert profile is not None
     assert profile.approved is True
     assert profile.locations == ["anywhere"]
+
+
+def test_kit_page_requires_login(tmp_path, monkeypatch):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id = _add_job(conn, run_id, url="http://x/1", passed=True)
+    _decide(conn, job_id, outcome="apply")
+    conn.close()
+
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "secret")
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.get(f"/jobs/{job_id}/kit", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_kit_page_404_for_non_shippable_job(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    failed_id = _add_job(conn, run_id, url="http://x/failed", passed=False)
+    undecided_id = _add_job(conn, run_id, url="http://x/undecided", passed=True)
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    assert client.get(f"/jobs/{failed_id}/kit").status_code == 404
+    assert client.get(f"/jobs/{undecided_id}/kit").status_code == 404
+    assert client.get("/jobs/9999/kit").status_code == 404
+
+
+def test_kit_page_renders_for_shippable_decided_job(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id = _add_job(conn, run_id, url="http://x/1", passed=True)
+    _decide(conn, job_id, outcome="review")
+    conn.close()
+
+    response = TestClient(create_app(tmp_path / "dash.db")).get(f"/jobs/{job_id}/kit")
+    assert response.status_code == 200
+    assert "Application kit" in response.text
+
+
+def test_kit_post_rejects_cross_origin(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id = _add_job(conn, run_id, url="http://x/1", passed=True)
+    _decide(conn, job_id, outcome="apply")
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.post(f"/jobs/{job_id}/kit", headers={"origin": "http://evil.example"})
+    assert response.status_code == 403
