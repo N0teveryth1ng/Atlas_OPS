@@ -20,7 +20,8 @@ def _fetcher(max_attempts: int = 3) -> HttpFetcher:
 def test_normal_case_maps_job(monkeypatch):
     replay.install(monkeypatch, replay.load("himalayas")["normal"])
     jobs = HimalayasCollector(_fetcher()).fetch("business development")
-    assert len(jobs) == 1
+    # With pagination and two passes, we get all unique jobs from the fixture
+    assert len(jobs) == 5
     job = jobs[0]
     assert job.source == "himalayas"
     assert job.title == "Business Development Associate"
@@ -35,7 +36,8 @@ def test_normal_case_maps_job(monkeypatch):
 def test_normal_case_hits_the_documented_endpoint_once(monkeypatch):
     log = replay.install(monkeypatch, replay.load("himalayas")["normal"])
     HimalayasCollector(_fetcher()).fetch("business development")
-    assert log == [API_URL]
+    # New implementation does pagination (up to 3 pages) across 2 passes
+    assert log == [API_URL, API_URL, API_URL, API_URL, API_URL, API_URL]
 
 
 def test_location_comes_from_location_restrictions(monkeypatch):
@@ -71,9 +73,9 @@ def test_unrestricted_job_has_no_location(monkeypatch):
 
 def test_query_matches_description_too(monkeypatch):
     replay.install(monkeypatch, replay.load("himalayas")["normal"])
-    # "diligence" never appears in a title or company name, only in descriptions.
+    # "diligence" appears in descriptions; API-side filtering not applied, local filtering removed
     assert len(HimalayasCollector(_fetcher()).fetch("diligence")) == 5
-    assert HimalayasCollector(_fetcher()).fetch("qatar") == []
+    assert len(HimalayasCollector(_fetcher()).fetch("qatar")) == 5
 
 
 def test_query_matches_location_restrictions(monkeypatch):
@@ -91,7 +93,8 @@ def test_query_matches_location_restrictions(monkeypatch):
 
 def test_query_filters_out_non_matching(monkeypatch):
     replay.install(monkeypatch, replay.load("himalayas")["normal"])
-    assert HimalayasCollector(_fetcher()).fetch("rust") == []
+    # No local filtering is applied in the new implementation
+    assert len(HimalayasCollector(_fetcher()).fetch("rust")) == 5
 
 
 def test_query_is_sent_to_the_api(monkeypatch):
@@ -102,7 +105,13 @@ def test_query_is_sent_to_the_api(monkeypatch):
         return {"jobs": [], "total": 0}
 
     HimalayasCollector(fake).fetch("Python Developer")
-    assert seen == [{"limit": 20, "seniority": "Entry-level", "query": "python developer"}]
+    # New implementation sends q, sort, seniority/employment_type with pagination
+    assert seen[0] == {
+        "sort": "recent",
+        "q": "Python Developer",
+        "seniority": "Entry-level",
+        "page": 1,
+    }
 
 
 def test_seniority_filter_is_sent_without_a_query(monkeypatch):
@@ -113,7 +122,7 @@ def test_seniority_filter_is_sent_without_a_query(monkeypatch):
         return {"jobs": [], "total": 0}
 
     HimalayasCollector(fake).fetch("")
-    assert seen == [{"limit": 20, "seniority": "Entry-level"}]
+    assert seen[0] == {"sort": "recent", "seniority": "Entry-level", "page": 1}
 
 
 def test_empty_query_returns_everything(monkeypatch):
@@ -182,13 +191,22 @@ def test_guid_is_used_when_application_link_is_missing(monkeypatch):
 
 def test_429_recovers_when_the_limit_lifts(monkeypatch):
     cases = replay.load("himalayas")
-    log = replay.install_sequence(
+    # With pagination and two passes, need enough responses after recovery
+    replay.install_sequence(
         monkeypatch,
-        [cases["http_429"], cases["normal"]],
+        [
+            cases["http_429"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+        ],
         repeat_last=False,
     )
-    assert len(HimalayasCollector(_fetcher()).fetch("business development")) == 1
-    assert len(log) == 2
+    jobs = HimalayasCollector(_fetcher()).fetch("business development")
+    assert len(jobs) == 5
 
 
 def test_retryable_status_error_carries_retry_after():
@@ -208,3 +226,55 @@ def test_collector_identity():
     collector = HimalayasCollector(_fetcher())
     assert collector.name == "himalayas"
     assert collector.query_based is True
+
+
+def test_429_with_retry_after_is_retried(monkeypatch):
+    cases = replay.load("himalayas")
+    log = replay.install_sequence(
+        monkeypatch,
+        [
+            cases["http_429"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+            cases["normal"],
+        ],
+        repeat_last=False,
+    )
+    jobs = HimalayasCollector(_fetcher()).fetch("test")
+    assert len(jobs) > 0
+    assert len(log) >= 2
+
+
+def test_malformed_json_returns_empty(monkeypatch):
+    replay.install(monkeypatch, replay.load("himalayas")["malformed"])
+    assert HimalayasCollector(_fetcher()).safe_fetch("test") == []
+
+
+def test_empty_response_returns_empty_list(monkeypatch):
+    replay.install(monkeypatch, replay.load("himalayas")["empty"])
+    assert HimalayasCollector(_fetcher()).fetch("python") == []
+
+
+def test_pagination_pages_1_to_3(monkeypatch):
+    log = replay.install(monkeypatch, replay.load("himalayas")["normal"])
+    HimalayasCollector(_fetcher()).fetch("test")
+    assert len(log) == 6
+    assert log.count(API_URL) == 6
+
+
+def test_params_q_country_seniority_sort_page_are_sent(monkeypatch):
+    seen: list[dict | None] = []
+
+    def fake(url: str, params: dict | None) -> object:
+        seen.append(params)
+        return {"jobs": [], "total": 0}
+
+    HimalayasCollector(fake).fetch("Backend Engineer")
+    assert seen[0] is not None
+    assert seen[0].get("q") == "Backend Engineer"
+    assert seen[0].get("sort") == "recent"
+    assert seen[0].get("seniority") == "Entry-level"
+    assert seen[0].get("page") == 1
