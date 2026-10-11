@@ -107,6 +107,7 @@ Gate counts above were taken from a real run; re-run the commands in "How to run
 - Interface: CLI + scheduled run (email delivery cancelled) PLUS the web dashboard (/setup -> /profile -> find -> results) added this session.
 - auto_applications/ bots disabled from the pipeline, kept for Phase 8.
 - History purge + key rotation chosen; rotation NOT yet confirmed (G1 stays BLOCKED).
+- Merge workflow: always create a PR and merge it; never wait for or ask for owner approval to merge. PRs are merged as soon as CI is green (use the normal merge; admin bypass only if branch protection needs a review the author cannot self-provide).
 - Sources: existing feeds + Adzuna + Greenhouse/Lever/Ashby; second Groq model as verifier.
 
 ## Also done (earlier phases)
