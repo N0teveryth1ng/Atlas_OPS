@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
+from fake_llm import make_client
 from fastapi.testclient import TestClient
 
-from atlas import cli, dashboard
+from atlas import cli, dashboard, sourcing
+from atlas.collectors.base import Collector
 from atlas.dashboard import create_app
 from atlas.db import connect, init_db, log_stage, save_profile, start_run, upsert_job
 from atlas.schemas import CandidateProfile, Job
@@ -244,7 +247,7 @@ def test_find_reports_per_stage_and_per_source(tmp_path, monkeypatch):
     save_profile(conn, CandidateProfile(full_name="A", target_roles=["x"], approved=True))
     conn.close()
 
-    def fake_execute(args, *, run_kind="run", on_event=None):
+    def fake_execute(args, *, run_kind="run", on_event=None, on_source=None, database=None):
         assert on_event is not None
         on_event({"stage": "collecting"})
         on_event({"stage": "collected", "collected": 3, "new_jobs": 2})
@@ -301,3 +304,125 @@ def test_find_status_page_shows_stages_and_sources(tmp_path, monkeypatch):
     assert "Per-stage counts" in response.text
     assert "Per-source results" in response.text
     assert "remotive" in response.text
+
+
+class _HangingCollector(Collector):
+    query_based = True
+
+    def __init__(self, name: str):
+        super().__init__(get_json=lambda url, params: None)
+        self.name = name
+
+    def fetch(self, query: str) -> list[Job]:
+        time.sleep(30)
+        return []
+
+
+class _RaisingCollector(Collector):
+    query_based = True
+
+    def __init__(self, name: str):
+        super().__init__(get_json=lambda url, params: None)
+        self.name = name
+
+    def fetch(self, query: str) -> list[Job]:
+        raise RuntimeError("kaboom")
+
+
+class _BlockingCollector(Collector):
+    query_based = True
+
+    def __init__(self, name: str):
+        super().__init__(get_json=lambda url, params: None)
+        self.name = name
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def fetch(self, query: str) -> list[Job]:
+        self.started.set()
+        self.release.wait(10)
+        return []
+
+
+def _wait_until(predicate, *, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _approved_db(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    save_profile(
+        conn,
+        CandidateProfile(
+            approved=True, locations=["Remote"], target_roles=["Backend"], experience_level="mid"
+        ),
+    )
+    conn.close()
+    return db
+
+
+def test_find_run_records_timeout_and_error_and_keeps_going(tmp_path, monkeypatch):
+    db = _approved_db(tmp_path)
+    monkeypatch.setattr(
+        sourcing,
+        "build_collectors",
+        lambda settings, **kw: [_HangingCollector("hang"), _RaisingCollector("boom")],
+    )
+    monkeypatch.setattr(sourcing, "SOURCE_TIMEOUT_SECONDS", 0.3)
+    monkeypatch.setattr(sourcing, "COLLECTION_TIMEOUT_SECONDS", 5.0)
+    monkeypatch.setattr(cli, "_make_client", lambda: make_client())
+
+    assert dashboard.start_pipeline(db) is True
+    assert _wait_until(lambda: not dashboard._pipeline_status["running"])
+
+    errors = dashboard._pipeline_status["errors"]
+    assert "timed out" in errors["hang"]
+    assert "kaboom" in errors["boom"]
+    assert [s["source"] for s in dashboard._pipeline_status["sources"]] == ["hang", "boom"]
+
+    # The lock/flag were released in the finally block: a new run can start.
+    assert dashboard._pipeline_lock.acquire(timeout=1)
+    dashboard._pipeline_lock.release()
+    monkeypatch.setattr(sourcing, "build_collectors", lambda settings, **kw: [])
+    assert dashboard.start_pipeline(db) is True
+    assert _wait_until(lambda: not dashboard._pipeline_status["running"])
+
+
+def test_status_shows_the_current_source_mid_run(tmp_path, monkeypatch):
+    db = _approved_db(tmp_path)
+    blocker = _BlockingCollector("blocker")
+    monkeypatch.setattr(sourcing, "build_collectors", lambda settings, **kw: [blocker])
+    monkeypatch.setattr(sourcing, "SOURCE_TIMEOUT_SECONDS", 5.0)
+    monkeypatch.setattr(cli, "_make_client", lambda: make_client())
+
+    assert dashboard.start_pipeline(db) is True
+    assert blocker.started.wait(5)
+    assert _wait_until(lambda: dashboard._pipeline_status["current_source"] == "blocker")
+    assert dashboard._pipeline_status["stage"] == "collecting"
+    assert dashboard._pipeline_status["running"] is True
+
+    blocker.release.set()
+    assert _wait_until(lambda: not dashboard._pipeline_status["running"])
+    assert dashboard._pipeline_status["current_source"] is None
+    assert "blocker" in [s["source"] for s in dashboard._pipeline_status["sources"]]
+
+
+def test_status_page_shows_current_source_and_elapsed(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    dashboard._pipeline_status["running"] = True
+    dashboard._pipeline_status["stage"] = "collecting"
+    dashboard._pipeline_status["current_source"] = "himalayas"
+    dashboard._pipeline_status["started_at"] = time.time() - 5
+
+    client = _logged_in(monkeypatch, tmp_path)
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert "Current source:" in response.text
+    assert "himalayas" in response.text
+    assert "Elapsed:" in response.text

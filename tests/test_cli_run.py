@@ -67,7 +67,7 @@ def _run(tmp_path, monkeypatch, *, email: bool, send_stub=None):
         source_yields=[SourceYield(source="fake", fetched=1, kept=1)],
         persisted_job_sources={JOB_ID: "fake"},
     )
-    monkeypatch.setattr(cli, "connect", lambda: connect(dbfile))
+    monkeypatch.setattr(cli, "connect", lambda *args, **kwargs: connect(dbfile))
     monkeypatch.setattr(cli, "_make_client", lambda: object())
     monkeypatch.setattr(sourcing, "run_sourcing", lambda *args, **kwargs: result)
     monkeypatch.setattr(pipeline, "run_pipeline", lambda *args, **kwargs: [_shippable_result()])
