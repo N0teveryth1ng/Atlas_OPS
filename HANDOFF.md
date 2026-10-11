@@ -1,14 +1,19 @@
 # HANDOFF.md
 
 ## State
-- main is AHEAD of origin/main (local commits only, not pushed): web dashboard work on top of d6a06a1
-- tests: 951 passed (verified: `python -m pytest -q` -> 951 passed in 17.53s)
+- main is AHEAD of origin/main (local commits only, not pushed): Steps 2-5 (pipeline resume + profile-pref filters + seniority review veto + filter audit) on top of cabe0c6
+- tests: 970 passed (verified: `python -m pytest -q` -> 970 passed in 19.02s)
 - lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 90 files unchanged; `mypy atlas` -> no issues in 49 source files
+- eval: `python -m atlas.cli eval` -> 100.0% year-extraction (19/19), 0 pass-throughs, 100.0% ontology skill (19/19), 21.1% baseline, both PASS (metrics unchanged vs 951 baseline)
 - selfcheck --fast: 21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6)
 - selfcheck --full and T5: not re-run this session
 - selfcheck exits 1 whenever any gate is BLOCKED; that is expected here, not a new failure.
 
 ## Recent commits
+db9d3ec feat(filters): audit passing filter results; surface checks in /rejected and explain
+71ae5da feat(decision): soft-veto unknown/mid seniority to REVIEW, drop display override
+3e5e3ea feat(config): apply approved profile prefs to filter settings at run time
+72a43a5 fix(pipeline): process undecided jobs and report per-stage/per-source progress
 cabe0c6 fix(dashboard): show only decided APPLY/REVIEW rows, flag unknown seniority
 814f4c9 test: isolate dashboard env so DASHBOARD_PASSWORD cannot leak between tests
 55d6b99 docs(handoff): record groq model verification and session status
@@ -51,6 +56,20 @@ added. Procfile now runs the guarded CLI entrypoint. 951 tests pass;
 ruff/black/mypy pass; selfcheck fast 21 PASS / 0 FAIL / 2 BLOCKED.
 Dashboard tests are env-isolated (tests/conftest.py clears DASHBOARD_PASSWORD /
 ATLAS_DB) so order does not matter.
+
+From this session (Steps 2-5, committed 72a43a5 / 3e5e3ea / 71ae5da / db9d3ec):
+- Pipeline runs resume through RETRYABLE pre-decision states and decide every
+  undecided job, reporting per-stage/per-source progress to the /status page;
+  `reset_for_retry` keeps `process_job` legal. 970 tests pass.
+- Approved profile prefs (locations / remote-any / target roles / experience)
+  are applied to filter settings at run time via `settings_for_profile`
+  (locations empty -> remote-ok; years fall back to level if no months).
+- Seniority `unknown`/`mid` becomes a soft REVIEW veto in the decision engine
+  (unknown -> everyone, mid -> fresher only); dashboard shows the stored
+  outcome verbatim with an informational warning, no display override.
+- Hard filters now record a per-rule audit (rule_id, value, limit, or
+  skipped_reason) into filter_results.data_json; /rejected and `explain
+  <job_id>` render a "checked" line per rule. Eval metrics unchanged.
 
 From earlier: label-check read-only; 22 collected labeling tests.
 Braintrust (BrainTrace) observability: MIT license, PII-redacted LLM tracing via
@@ -136,6 +155,7 @@ Agent summaries were wrong several times (invented test counts, a commit holding
 3. Owner runs mutmut under WSL/Linux (T5).
 4. Re-run selfcheck --full and the preflight.
 5. Only if verdict is GO, plan PR B (apply layer).
+6. Verify Groq model ids via the live /models API on a real network.
 
 ## Starting a new session
 1. Read AGENTS.md, PRD.md, and this HANDOFF.md.
