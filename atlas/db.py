@@ -375,6 +375,35 @@ def shippable_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         """).fetchall()
 
 
+def shippable_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
+    """One job that passed EVERY hard filter, with its latest decision/eval.
+
+    Read-only single-row version of :func:`shippable_jobs` for the application
+    kit page. Returns ``None`` when the job does not exist or failed a filter.
+    """
+    return conn.execute(
+        """
+        SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.status,
+               j.application_status,
+               (SELECT d.data_json FROM decisions d WHERE d.job_id = j.id
+                ORDER BY d.id DESC LIMIT 1) AS decision_json,
+               (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id
+                ORDER BY e.id DESC LIMIT 1) AS evaluation_json,
+               (SELECT p.data_json FROM parsed_jds p WHERE p.job_id = j.id
+                ORDER BY p.id DESC LIMIT 1) AS parsed_json
+        FROM jobs j
+        WHERE j.id = ?
+          AND EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 1
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 0
+          )
+        """,
+        (job_id,),
+    ).fetchone()
+
+
 def rejected_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Jobs with at least one failed hard filter, plus the rejection reason.
 
