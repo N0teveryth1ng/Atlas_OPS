@@ -164,12 +164,20 @@ def collect(
         item = SourceYield(source=collector.name)
         yields[collector.name] = item
         source_queries = queries if collector.query_based else [""]
-        timeout = min(source_timeout, remaining)
         source_started = time.monotonic()
         logger.info("source %s: start", collector.name)
         emit_source(collector.name, "start")
         error: str | None = None
         for query in source_queries:
+            # Cap every query by what is left of the whole-run budget, not just
+            # by the per-source limit, so a source with many queries cannot
+            # overrun the run deadline by reusing one stale allowance.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                error = "collection run timed out"
+                logger.error("collection run timed out during source %s", collector.name)
+                break
+            timeout = min(source_timeout, remaining)
             raw, query_error = _fetch_with_timeout(collector, query, timeout)
             if query_error is not None:
                 error = query_error
