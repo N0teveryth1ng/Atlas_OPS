@@ -138,6 +138,39 @@ def test_source_exception_is_recorded_and_the_run_continues():
     assert len(result.jobs) == 1
 
 
+class SlowQueryCollector(Collector):
+    query_based = True
+
+    def __init__(self, name, delay, seen):
+        super().__init__(get_json=lambda url, params: None)
+        self.name = name
+        self._delay = delay
+        self._seen = seen
+
+    def fetch(self, query):
+        self._seen.append(query)
+        time.sleep(self._delay)
+        return []
+
+
+def test_query_timeout_is_capped_by_the_remaining_run_budget():
+    seen: list[str] = []
+    slow = SlowQueryCollector("slow", 0.2, seen)
+
+    result = collect(
+        [slow],
+        ["q1", "q2", "q3"],
+        settings=Settings(),
+        now=NOW,
+        source_timeout=0.25,
+        run_timeout=0.3,
+    )
+
+    assert "timed out" in result.source_errors["slow"]
+    assert len(seen) < 3
+    assert result.jobs == []
+
+
 def test_whole_collection_timeout_skips_the_remaining_sources():
     a = HangingCollector("a")
     b = FakeCollector("b", [_job(source="b")])
