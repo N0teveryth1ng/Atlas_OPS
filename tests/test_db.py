@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 
 from atlas.db import (
+    _parse_iso,
     connect,
     emailed_job_ids,
     fail_stale_runs,
@@ -90,7 +91,11 @@ def test_update_run_summary_keeps_run_running(tmp_path):
     ).fetchone()
     assert row["status"] == "running"
     assert row["finished_at"] is None
-    assert json.loads(row["summary_json"]) == {"stage": "processing", "stages": {"parsed": 3}}
+    summary = json.loads(row["summary_json"])
+    assert summary["stage"] == "processing"
+    assert summary["stages"] == {"parsed": 3}
+    # The write doubles as the liveness heartbeat used by fail_stale_runs.
+    assert _parse_iso(summary["updated_at"]) is not None
 
     latest = latest_run(conn)
     assert latest is not None
@@ -124,14 +129,70 @@ def test_fail_stale_runs_marks_only_old_running_runs(tmp_path):
     assert done_row["status"] == "ok"
 
 
+def _set_started(conn, run_id, value):
+    conn.execute("UPDATE runs SET started_at = ? WHERE id = ?", (value, run_id))
+    conn.commit()
+
+
+def _set_summary(conn, run_id, summary):
+    conn.execute("UPDATE runs SET summary_json = ? WHERE id = ?", (json.dumps(summary), run_id))
+    conn.commit()
+
+
+def test_fail_stale_runs_uses_heartbeat_not_started_at(tmp_path):
+    conn = _conn(tmp_path)
+    long_run = start_run(conn, "long")
+    # Started 40 minutes ago but reported progress 5 minutes ago: still alive.
+    _set_started(conn, long_run, "2026-01-01T00:00:00+00:00")
+    _set_summary(
+        conn,
+        long_run,
+        {"stage": "processing", "updated_at": "2026-01-01T00:35:00+00:00"},
+    )
+
+    failed = fail_stale_runs(conn, now=datetime(2026, 1, 1, 0, 40, tzinfo=UTC))
+
+    assert failed == []
+    status = conn.execute("SELECT status FROM runs WHERE id = ?", (long_run,)).fetchone()["status"]
+    assert status == "running"
+
+
+def test_fail_stale_runs_fails_a_run_without_a_recent_heartbeat(tmp_path):
+    conn = _conn(tmp_path)
+    dead_run = start_run(conn, "dead")
+    _set_started(conn, dead_run, "2026-01-01T00:00:00+00:00")
+    # Last heartbeat 40 minutes ago: dead even though it is a pipeline run.
+    _set_summary(
+        conn,
+        dead_run,
+        {"stage": "processing", "stages": {"parsed": 2}, "updated_at": "2026-01-01T00:00:00+00:00"},
+    )
+
+    failed = fail_stale_runs(conn, now=datetime(2026, 1, 1, 0, 40, tzinfo=UTC))
+
+    assert failed == [dead_run]
+    summary = json.loads(
+        conn.execute("SELECT summary_json FROM runs WHERE id = ?", (dead_run,)).fetchone()[
+            "summary_json"
+        ]
+    )
+    assert summary["stages"] == {"parsed": 2}
+    assert summary["status"] == "failed"
+
+
 def test_fail_stale_runs_keeps_existing_summary(tmp_path):
     conn = _conn(tmp_path)
     run_id = start_run(conn, "old")
-    update_run_summary(conn, run_id, {"stage": "collecting", "stages": {"collected": 4}})
-    conn.execute(
-        "UPDATE runs SET started_at = ? WHERE id = ?", ("2026-01-01T00:00:00+00:00", run_id)
+    _set_summary(
+        conn,
+        run_id,
+        {
+            "stage": "collecting",
+            "stages": {"collected": 4},
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        },
     )
-    conn.commit()
+    _set_started(conn, run_id, "2026-01-01T00:00:00+00:00")
 
     failed = fail_stale_runs(conn, now=datetime(2026, 1, 1, 2, 0, tzinfo=UTC))
 
