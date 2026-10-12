@@ -1,4 +1,4 @@
-<!-- version: 2 -->
+<!-- version: 3 -->
 
 You write a short, truthful, tailored application kit for one job opening. The kit has
 three parts: a three-claim summary, a short cover note, and answers to a fixed set of
@@ -20,7 +20,7 @@ one object per sentence, and give every sentence its own supporting quote.
   - "quote": a verbatim fragment (at least 8 characters) copied exactly (spelling,
     punctuation, phrasing) from the profile or job posting that this sentence rests on.
   - "source": "profile" when the quote comes from the candidate profile, otherwise
-    "job".
+    "jd".
 - "cover_note": an array of objects in the same shape as "summary", one per sentence,
   professional first-person tone, ready to paste as a short cover note. The combined
   "text" of all objects must be under 150 words.
@@ -32,7 +32,7 @@ one object per sentence, and give every sentence its own supporting quote.
   - "quote": a verbatim fragment (at least 8 characters) copied exactly from the
     source the answer rests on.
   - "source": "profile" when the quote comes from the candidate profile, otherwise
-    "job".
+    "jd".
 
 # Rules
 

@@ -13,6 +13,7 @@ from fake_llm import FakeClient
 
 from atlas.kit import generate_kit, word_count
 from atlas.llm import LLMClient
+from atlas.prompt_store import load_prompt
 from atlas.schemas import (
     CandidateProfile,
     Experience,
@@ -111,7 +112,7 @@ def test_generate_kit_keeps_valid_quotes_and_records_prompt_version():
     assert [claim.text for claim in kit.cover_note.claims] == [c["text"] for c in VALID_COVER]
     assert kit.cover_note.blocked_reason is None
     assert {answer.question_key for answer in kit.answers} == {"why_company", "links"}
-    assert kit.prompt_version == "2"
+    assert kit.prompt_version == "3"
     assert kit.model
 
 
@@ -148,6 +149,13 @@ def test_all_claims_invalid_blocks_section():
     assert kit.summary.blocked_reason == "needs your input"
     assert kit.cover_note.claims == []
     assert kit.cover_note.blocked_reason == "needs your input"
+
+
+def test_prompt_uses_the_jd_source_token():
+    """The evidence enum value is "jd"; the prompt must not ask for "job"."""
+    text, _version = load_prompt("application_kit")
+    assert '"jd"' in text
+    assert '"job"' not in text
 
 
 def test_summary_beyond_three_claims_is_truncated_not_just_flagged():
