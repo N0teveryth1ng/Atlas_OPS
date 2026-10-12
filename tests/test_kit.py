@@ -11,7 +11,7 @@ import json
 
 from fake_llm import FakeClient
 
-from atlas.kit import generate_kit
+from atlas.kit import generate_kit, word_count
 from atlas.llm import LLMClient
 from atlas.schemas import (
     CandidateProfile,
@@ -147,6 +147,42 @@ def test_all_claims_invalid_blocks_section():
     assert kit.summary.dropped == 3
     assert kit.summary.blocked_reason == "needs your input"
     assert kit.cover_note.claims == []
+    assert kit.cover_note.blocked_reason == "needs your input"
+
+
+def test_summary_beyond_three_claims_is_truncated_not_just_flagged():
+    payload = {
+        "summary": [
+            *VALID_SUMMARY,
+            {
+                "text": "Acme is hiring a Data engineer now.",
+                "quote": "hiring a Data engineer",
+                "source": "jd",
+            },
+        ],
+        "cover_note": VALID_COVER,
+        "answers": [],
+    }
+    kit = generate_kit(_client(payload), profile=_profile(), job=_job())
+
+    assert len(kit.summary.claims) == 3
+    assert kit.summary.dropped == 1
+    assert kit.summary.blocked_reason == "needs your input"
+
+
+def test_cover_note_beyond_word_bound_is_truncated_not_just_flagged():
+    long_text = "word " * 60  # 60 words per claim
+    claim = {"text": long_text, "quote": "Builds a job pipeline", "source": "profile"}
+    payload = {
+        "summary": VALID_SUMMARY,
+        "cover_note": [dict(claim) for _ in range(3)],
+        "answers": [],
+    }
+    kit = generate_kit(_client(payload), profile=_profile(), job=_job())
+
+    total = sum(word_count(c.text) for c in kit.cover_note.claims)
+    assert total < 150
+    assert kit.cover_note.dropped >= 1
     assert kit.cover_note.blocked_reason == "needs your input"
 
 

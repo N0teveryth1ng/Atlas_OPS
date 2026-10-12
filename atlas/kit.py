@@ -279,14 +279,29 @@ def _assemble(
     rules; everything else is dropped so the dashboard can flag it as
     "needs your input"."""
     summary_claims, summary_dropped = _keep_claims(draft.summary, jd_text, profile_text)
+    # Enforce the sentence bound on what survives: validated claims beyond
+    # SUMMARY_CLAIMS are dropped, not merely flagged.
+    if len(summary_claims) > SUMMARY_CLAIMS:
+        summary_dropped += len(summary_claims) - SUMMARY_CLAIMS
+        summary_claims = summary_claims[:SUMMARY_CLAIMS]
     summary = KitSection(claims=summary_claims, dropped=summary_dropped)
     if summary_dropped or len(summary_claims) != SUMMARY_CLAIMS:
         summary.blocked_reason = "needs your input"
 
     cover_claims, cover_dropped = _keep_claims(draft.cover_note, jd_text, profile_text)
-    cover_words = sum(word_count(claim.text) for claim in cover_claims)
-    cover_note = KitSection(claims=cover_claims, dropped=cover_dropped)
-    if cover_dropped or not cover_claims or cover_words >= MAX_COVER_WORDS:
+    # Enforce the word bound on what survives: once the running total would reach
+    # MAX_COVER_WORDS the remaining claims are dropped, not merely flagged.
+    bounded_cover: list[KitClaimResult] = []
+    cover_words = 0
+    for claim in cover_claims:
+        claim_words = word_count(claim.text)
+        if cover_words + claim_words >= MAX_COVER_WORDS:
+            break
+        bounded_cover.append(claim)
+        cover_words += claim_words
+    cover_dropped += len(cover_claims) - len(bounded_cover)
+    cover_note = KitSection(claims=bounded_cover, dropped=cover_dropped)
+    if cover_dropped or not bounded_cover or cover_words >= MAX_COVER_WORDS:
         cover_note.blocked_reason = "needs your input"
 
     answers: list[KitAnswerResult] = []
