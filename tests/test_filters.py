@@ -1,7 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from atlas.config import Settings, settings_for_profile
-from atlas.filters import _parse_salary, apply_hard_filters
+from atlas.filters import NON_JOB_LISTING_PHRASES, _parse_salary, apply_hard_filters
 from atlas.schemas import CandidateProfile, ExperienceLevel, Job, ParsedJD, RemoteType, Seniority
 
 
@@ -204,3 +206,46 @@ def test_settings_for_profile_falls_back_to_level_for_years():
         CandidateProfile(experience_level=ExperienceLevel.junior), _settings()
     )
     assert settings.candidate.my_years_experience == 1.0
+
+
+@pytest.mark.parametrize("phrase", NON_JOB_LISTING_PHRASES)
+def test_each_non_job_listing_phrase_is_rejected(phrase):
+    result = apply_hard_filters(
+        _job(title=f"{phrase.title()} - Software Engineer"),
+        ParsedJD(),
+        _profile(),
+        _settings(),
+    )
+    assert not result.passed
+    assert any(r.rule_id == "non_job_listing" for r in result.rejections)
+
+
+def test_talent_acquisition_specialist_is_not_a_non_job_listing():
+    result = apply_hard_filters(
+        _job(title="Talent Acquisition Specialist"), ParsedJD(), _profile(), _settings()
+    )
+    assert not any(r.rule_id == "non_job_listing" for r in result.rejections)
+
+
+def test_junior_python_developer_is_not_a_non_job_listing():
+    result = apply_hard_filters(
+        _job(title="Junior Python Developer"), ParsedJD(), _profile(), _settings()
+    )
+    assert result.passed
+    assert not any(r.rule_id == "non_job_listing" for r in result.rejections)
+
+
+def test_title_with_no_phrase_passes_the_non_job_listing_rule():
+    result = apply_hard_filters(_job(title="Backend Engineer"), ParsedJD(), _profile(), _settings())
+    assert result.passed
+
+
+def test_non_job_listing_records_the_matched_phrase_as_evidence():
+    result = apply_hard_filters(
+        _job(title="Talent Community - Software Engineer"),
+        ParsedJD(),
+        _profile(),
+        _settings(),
+    )
+    rejection = next(r for r in result.rejections if r.rule_id == "non_job_listing")
+    assert "talent community" in rejection.evidence
