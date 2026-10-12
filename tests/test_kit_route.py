@@ -27,16 +27,23 @@ from atlas.schemas import CandidateProfile, Job, Links
 
 KIT_PAYLOAD = {
     "summary": [
-        {"text": "Acme needs a Data engineer.", "quote": "hiring a Data engineer", "source": "jd"},
+        {
+            "text": "Acme needs a Data engineer.",
+            "quote": "hiring a Data engineer",
+            "source": "jd",
+            "kind": "about_job",
+        },
         {
             "text": "The role builds pipelines in Python.",
             "quote": "build pipelines in Python",
             "source": "jd",
+            "kind": "about_job",
         },
         {
             "text": "Ada brings 30 months of experience.",
             "quote": "Experience: 30 months",
             "source": "profile",
+            "kind": "about_candidate",
         },
     ],
     "cover_note": [
@@ -44,6 +51,7 @@ KIT_PAYLOAD = {
             "text": "I am a Data engineer who builds pipelines in Python.",
             "quote": "build pipelines in Python",
             "source": "jd",
+            "kind": "about_job",
         }
     ],
     "answers": [
@@ -52,12 +60,14 @@ KIT_PAYLOAD = {
             "answer": "Acme is hiring a Data engineer.",
             "quote": "hiring a Data engineer",
             "source": "jd",
+            "kind": "about_job",
         },
         {
             "question_key": "links",
             "answer": "My GitHub is https://github.com/ada.",
             "quote": "github: https://github.com/ada",
             "source": "profile",
+            "kind": "about_candidate",
         },
     ],
 }
@@ -142,10 +152,10 @@ def test_kit_post_generates_stores_and_renders_quotes(tmp_path):
     ).fetchone()
     conn.close()
     assert data is not None
-    assert data["prompt_version"] == "3"
+    assert data["prompt_version"] == "4"
     assert data["model"]
     assert row is not None
-    assert row["prompt_version"] == "3"
+    assert row["prompt_version"] == "4"
     assert "hiring a Data engineer" in row["text"]
 
 

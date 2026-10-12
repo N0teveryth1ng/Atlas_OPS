@@ -732,16 +732,32 @@ def _canned_client() -> LLMClient:
 
 _KIT_PAYLOAD = {
     "summary": [
-        {"text": "Initech is hiring.", "quote": "Initech is hiring", "source": "jd"},
+        {
+            "text": "Initech is hiring.",
+            "quote": "Initech is hiring",
+            "source": "jd",
+            "kind": "about_job",
+        },
         {
             "text": "The role needs 0-2 years of experience.",
             "quote": "0-2 years experience",
             "source": "jd",
+            "kind": "about_job",
         },
-        {"text": "The role is remote.", "quote": "Fully remote", "source": "jd"},
+        {
+            "text": "The role is remote.",
+            "quote": "Fully remote",
+            "source": "jd",
+            "kind": "about_job",
+        },
     ],
     "cover_note": [
-        {"text": "I would join to work on the platform.", "quote": "work on the", "source": "jd"}
+        {
+            "text": "I would join to work on the platform.",
+            "quote": "work on the",
+            "source": "jd",
+            "kind": "about_job",
+        }
     ],
     "answers": [
         {
@@ -749,6 +765,7 @@ _KIT_PAYLOAD = {
             "answer": "Initech is hiring for this role.",
             "quote": "Initech is hiring",
             "source": "jd",
+            "kind": "about_job",
         }
     ],
 }
