@@ -228,11 +228,13 @@ def update_run_summary(conn: sqlite3.Connection, run_id: int, summary: dict[str,
 
     Unlike :func:`finish_run` this never touches ``status`` or ``finished_at``;
     it only refreshes ``summary_json`` so the last known per-stage/per-source
-    progress survives a restart.
+    progress survives a restart. It also stamps ``updated_at``, the heartbeat
+    :func:`fail_stale_runs` uses to tell a live long run from a dead one.
     """
+    payload = {**summary, "updated_at": _now()}
     conn.execute(
         "UPDATE runs SET summary_json = ? WHERE id = ?",
-        (json.dumps(summary), run_id),
+        (json.dumps(payload), run_id),
     )
     conn.commit()
 
@@ -258,9 +260,14 @@ def fail_stale_runs(
     """Mark runs abandoned in ``running`` as ``failed``; return their ids.
 
     A run whose process died leaves ``finished_at`` NULL forever and the Status
-    page advertising a run that is not happening. On startup anything still
-    ``running`` after ``max_age_minutes`` is flipped to ``failed`` with a
-    ``finished_at`` and an error note folded into its summary.
+    page advertising a run that is not happening. A run is stale when it has not
+    made progress for ``max_age_minutes``: staleness is measured from the
+    summary's ``updated_at`` heartbeat (written after every stage/source event),
+    falling back to ``started_at`` for a run that never reported progress. This
+    way a long but healthy run — say 40 minutes of Groq retries that keep
+    emitting progress — is never failed by a restart or a concurrent CLI run.
+    Anything stale is flipped to ``failed`` with a ``finished_at`` and an error
+    note folded into its summary.
     """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(minutes=max_age_minutes)
@@ -268,9 +275,6 @@ def fail_stale_runs(
     for row in conn.execute(
         "SELECT id, started_at, summary_json FROM runs WHERE status = 'running'"
     ).fetchall():
-        started = _parse_iso(row["started_at"])
-        if started is None or started > cutoff:
-            continue
         summary: dict[str, Any] = {}
         if row["summary_json"]:
             try:
@@ -279,6 +283,9 @@ def fail_stale_runs(
                 loaded = None
             if isinstance(loaded, dict):
                 summary = loaded
+        last_update = _parse_iso(summary.get("updated_at")) or _parse_iso(row["started_at"])
+        if last_update is None or last_update > cutoff:
+            continue
         summary["status"] = "failed"
         summary["error"] = (
             f"run left in 'running' for more than {max_age_minutes} minutes; "
