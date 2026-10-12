@@ -102,7 +102,7 @@ class HimalayasCollector(Collector):
                 job = self._job_from_item(item)
                 if job is None:
                     continue
-                key = job.url or (job.source_id or "")
+                key = job.source_id or job.url or ""
                 if key and key in seen:
                     continue
                 if key:
@@ -131,7 +131,7 @@ class HimalayasCollector(Collector):
         seen: set[str] = set()
         deduped: list[Job] = []
         for job in jobs:
-            key = job.url or (job.source_id or "")
+            key = job.source_id or job.url or ""
             if key and key in seen:
                 continue
             if key:
