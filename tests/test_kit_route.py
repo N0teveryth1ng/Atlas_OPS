@@ -142,10 +142,10 @@ def test_kit_post_generates_stores_and_renders_quotes(tmp_path):
     ).fetchone()
     conn.close()
     assert data is not None
-    assert data["prompt_version"] == "2"
+    assert data["prompt_version"] == "3"
     assert data["model"]
     assert row is not None
-    assert row["prompt_version"] == "2"
+    assert row["prompt_version"] == "3"
     assert "hiring a Data engineer" in row["text"]
 
 
