@@ -12,6 +12,7 @@ Braintrust (``LLMClient.call_json`` only traces prompt fingerprints).
 from __future__ import annotations
 
 import logging
+from enum import Enum
 from typing import cast
 
 from pydantic import BaseModel, Field
@@ -49,6 +50,21 @@ SUMMARY_CLAIMS = 3
 MAX_COVER_WORDS = 150
 
 
+class ClaimKind(str, Enum):
+    """Whether a claim is about the job/company or about the candidate.
+
+    ``about_job`` claims may cite the job posting or the profile. An
+    ``about_candidate`` claim (skills, experience, years, projects, education,
+    availability) is a statement about the person, so it must cite the
+    *profile*: a job-posting quote cannot ground it. The default is
+    ``about_candidate`` so a claim that forgets to label itself is held to the
+    strict rule.
+    """
+
+    about_job = "about_job"
+    about_candidate = "about_candidate"
+
+
 class KitAnswer(BaseModel):
     """One grounded answer as produced by the model."""
 
@@ -56,18 +72,21 @@ class KitAnswer(BaseModel):
     answer: str
     quote: str
     source: EvidenceSource
+    kind: ClaimKind = ClaimKind.about_candidate
 
 
 class KitClaim(BaseModel):
     """One factual claim (a sentence) as produced by the model.
 
     Summary and cover-note text is not free prose: the model must split it into
-    sentences, each carrying the verbatim quote the sentence rests on.
+    sentences, each carrying the verbatim quote the sentence rests on and a
+    ``kind`` saying whether the claim is about the job or the candidate.
     """
 
     text: str
     quote: str
     source: EvidenceSource
+    kind: ClaimKind = ClaimKind.about_candidate
 
 
 class KitDraft(BaseModel):
@@ -84,6 +103,7 @@ class KitClaimResult(BaseModel):
     text: str
     quote: str
     source: EvidenceSource
+    kind: ClaimKind = ClaimKind.about_candidate
 
 
 class KitSection(BaseModel):
@@ -107,6 +127,7 @@ class KitAnswerResult(BaseModel):
     answer: str
     quote: str
     source: EvidenceSource
+    kind: ClaimKind = ClaimKind.about_candidate
 
 
 class ApplicationKit(BaseModel):
@@ -205,10 +226,27 @@ def _retry_message(errors: list[str]) -> str:
         "Your previous draft did not pass validation:\n"
         + "\n".join(f"- {error}" for error in errors)
         + "\nFix every item. Every summary and cover_note sentence must be its own "
-        "claim with a verbatim quote; keep summary to exactly 3 claims and "
-        "cover_note under 150 words; omit any question you cannot answer with a "
-        "verbatim quote."
+        "claim with a verbatim quote and a kind (about_job or about_candidate); a "
+        "claim about the candidate (skills, experience, years, projects, "
+        "education, availability) must quote the profile; keep summary to exactly "
+        "3 claims and cover_note under 150 words; omit any question you cannot "
+        "answer with a verbatim quote."
     )
+
+
+def _grounded(
+    kind: ClaimKind, source: EvidenceSource, quote: str, jd_text: str, profile_text: str
+) -> bool:
+    """Whether a claim's quote can ground it.
+
+    A claim about the candidate must cite the profile; a claim about the job may
+    cite either the profile or the job posting.
+    """
+    if kind == ClaimKind.about_candidate:
+        return source == EvidenceSource.profile and quote_valid(
+            quote, EvidenceSource.profile, jd_text, profile_text
+        )
+    return quote_valid(quote, source, jd_text, profile_text)
 
 
 def _claim_errors(claims: list[KitClaim], label: str, jd_text: str, profile_text: str) -> list[str]:
@@ -216,6 +254,12 @@ def _claim_errors(claims: list[KitClaim], label: str, jd_text: str, profile_text
     for index, claim in enumerate(claims):
         if not claim.text.strip():
             errors.append(f"{label}[{index}] empty text")
+            continue
+        if claim.kind == ClaimKind.about_candidate and claim.source != EvidenceSource.profile:
+            errors.append(
+                f"{label}[{index}] about_candidate claim must cite the profile, "
+                f"not {claim.source.value}: {claim.quote!r}"
+            )
             continue
         if not quote_valid(claim.quote, claim.source, jd_text, profile_text):
             errors.append(
@@ -244,6 +288,12 @@ def _validate_draft(draft: KitDraft, jd_text: str, profile_text: str) -> list[st
         if not answer.answer.strip():
             errors.append(f"answers[{index}] empty answer")
             continue
+        if answer.kind == ClaimKind.about_candidate and answer.source != EvidenceSource.profile:
+            errors.append(
+                f"answers[{index}] about_candidate answer must cite the profile, "
+                f"not {answer.source.value}: {answer.quote!r}"
+            )
+            continue
         if not quote_valid(answer.quote, answer.source, jd_text, profile_text):
             errors.append(
                 f"answers[{index}] quote not found in {answer.source.value}: {answer.quote!r}"
@@ -258,12 +308,14 @@ def _keep_claims(
     kept: list[KitClaimResult] = []
     dropped = 0
     for claim in claims:
-        if not claim.text.strip() or not quote_valid(
-            claim.quote, claim.source, jd_text, profile_text
+        if not claim.text.strip() or not _grounded(
+            claim.kind, claim.source, claim.quote, jd_text, profile_text
         ):
             dropped += 1
             continue
-        kept.append(KitClaimResult(text=claim.text, quote=claim.quote, source=claim.source))
+        kept.append(
+            KitClaimResult(text=claim.text, quote=claim.quote, source=claim.source, kind=claim.kind)
+        )
     return kept, dropped
 
 
@@ -308,11 +360,11 @@ def _assemble(
     for answer in draft.answers:
         if answer.question_key not in _QUESTION_KEYS or not answer.answer.strip():
             continue
-        if not quote_valid(answer.quote, answer.source, jd_text, profile_text):
+        if not _grounded(answer.kind, answer.source, answer.quote, jd_text, profile_text):
             logger.warning(
-                "application-kit answer %r dropped: quote not found in %s",
+                "application-kit answer %r dropped: quote not grounded in %s evidence",
                 answer.question_key,
-                answer.source.value,
+                answer.kind.value,
             )
             continue
         answers.append(
@@ -322,6 +374,7 @@ def _assemble(
                 answer=answer.answer,
                 quote=answer.quote,
                 source=answer.source,
+                kind=answer.kind,
             )
         )
     return ApplicationKit(
