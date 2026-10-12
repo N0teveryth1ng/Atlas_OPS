@@ -34,6 +34,22 @@ DISALLOWED_SENIORITY = {
     Seniority.manager,
 }
 
+#: Title phrases that mark a posting as NOT a specific job opening: talent-pool
+#: and general-application boilerplate, speculative/expression-of-interest ads.
+#: Matched case-insensitively as substrings of the title; the matched phrase is
+#: recorded as the rejection evidence.
+NON_JOB_LISTING_PHRASES: tuple[str, ...] = (
+    "talent community",
+    "talent pool",
+    "join our talent",
+    "initiativbewerbung",
+    "spontaneous application",
+    "unsolicited application",
+    "general application",
+    "expression of interest",
+    "future opportunities",
+)
+
 _SALARY_RE = re.compile(r"(\d[\d,\.]*)\s*(k|m|lpa|lakh|lakhs|per annum|/yr|/year)?", re.IGNORECASE)
 
 
@@ -319,6 +335,27 @@ def apply_hard_filters(
     else:
         checks.append(
             _check("stale_job", checked=False, skipped_reason="no max job age configured")
+        )
+
+    # 9. Non-job listing (talent-pool / general-application boilerplate).
+    title_text = (job.title or "").lower()
+    matched_phrase = next(
+        (phrase for phrase in NON_JOB_LISTING_PHRASES if phrase in title_text), None
+    )
+    checks.append(
+        _check(
+            "non_job_listing",
+            checked=True,
+            value=f"title='{job.title or ''}'",
+            limit=f"phrases: {list(NON_JOB_LISTING_PHRASES)}",
+        )
+    )
+    if matched_phrase is not None:
+        rejections.append(
+            FilterRejection(
+                rule_id="non_job_listing",
+                evidence=f"title matches non-job listing phrase '{matched_phrase}'",
+            )
         )
 
     return FilterResult(passed=not rejections, rejections=rejections, checks=checks)
