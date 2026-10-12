@@ -198,6 +198,35 @@ def test_guid_is_used_when_application_link_is_missing(monkeypatch):
     assert jobs[0].url == item["guid"]
 
 
+def test_distinct_guid_sharing_an_apply_url_are_both_kept(monkeypatch):
+    """Dedupe is on the listing id (guid), not the apply URL.
+
+    Two listings can point at the same application page; keying on the URL would
+    silently drop one of them.
+    """
+    case = replay.load("himalayas")["normal"]
+    first = dict(case.body["jobs"][0])
+    second = dict(case.body["jobs"][1])
+    shared_apply = "https://himalayas.app/jobs/apply/one-form"
+    first["applicationLink"] = shared_apply
+    second["applicationLink"] = shared_apply
+    assert first["guid"] != second["guid"]
+    replay.install(
+        monkeypatch,
+        replay.Recorded(
+            source=case.source,
+            case=case.case,
+            status=case.status,
+            headers=case.headers,
+            body={"jobs": [first, second], "total": 2},
+            url=case.url,
+            provenance=case.provenance,
+        ),
+    )
+    jobs = HimalayasCollector(_fetcher()).fetch("")
+    assert {job.source_id for job in jobs} == {first["guid"], second["guid"]}
+
+
 def test_429_recovers_when_the_limit_lifts(monkeypatch):
     cases = replay.load("himalayas")
     # With pagination and two passes, need enough responses after recovery
