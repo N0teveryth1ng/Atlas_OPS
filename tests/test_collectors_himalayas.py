@@ -10,6 +10,7 @@ import pytest
 
 from atlas.collectors.base import HttpFetcher, RetryableStatusError
 from atlas.collectors.himalayas import API_URL, HimalayasCollector
+from atlas.schemas import RemoteType
 from tests import replay
 
 
@@ -38,6 +39,14 @@ def test_normal_case_hits_the_documented_endpoint_once(monkeypatch):
     HimalayasCollector(_fetcher()).fetch("business development")
     # New implementation does pagination (up to 3 pages) across 2 passes
     assert log == [API_URL, API_URL, API_URL, API_URL, API_URL, API_URL]
+
+
+def test_jobs_from_the_endpoint_are_remote(monkeypatch):
+    """The payload carries no per-job remote flag; the whole endpoint is remote."""
+    replay.install(monkeypatch, replay.load("himalayas")["normal"])
+    jobs = HimalayasCollector(_fetcher()).fetch("business development")
+    assert jobs
+    assert all(job.remote_type == RemoteType.remote for job in jobs)
 
 
 def test_location_comes_from_location_restrictions(monkeypatch):
