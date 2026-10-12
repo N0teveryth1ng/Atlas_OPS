@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 
 from atlas import cli, emailer, pipeline, sourcing
@@ -111,6 +112,27 @@ def test_failed_send_leaves_sent_at_zero_but_counts_passed(tmp_path, monkeypatch
     item = result.source_yields[0]
     assert item.passed_filters == 1
     assert item.sent == 0
+
+
+def test_run_persists_progress_into_run_summary(tmp_path, monkeypatch):
+    rc, _ = _run(tmp_path, monkeypatch, email=False)
+    assert rc == 0
+
+    conn = connect(tmp_path / "t.db")
+    row = conn.execute(
+        "SELECT status, finished_at, summary_json FROM runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+
+    assert row["status"] == "ok"
+    assert row["finished_at"] is not None
+    summary = json.loads(row["summary_json"])
+    assert summary["stage"] == "done"
+    assert summary["result"] == "ok"
+    assert "collected" in summary["stages"]
+    assert summary["sources"][0]["source"] == "fake"
+    assert summary["sources"][0]["passed_filters"] == 1
+    assert summary["digest"]["processed"] == 1
 
 
 def test_explain_shows_filter_checks(tmp_path, monkeypatch, capsys):

@@ -31,9 +31,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from .db import (
     APPLICATION_STATUSES,
     connect,
+    fail_stale_runs,
     get_latest_profile,
     init_db,
     latest_kit_data,
+    latest_run,
     matched_jobs,
     rejected_jobs,
     save_kit,
@@ -394,6 +396,20 @@ def _load_json(raw: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _recorded_text(value: Any) -> str:
+    """An ISO timestamp rendered as ``YYYY-MM-DD HH:MM UTC`` (or the raw value).
+
+    Shown next to every filter result so a stale pass/rejection is visible: the
+    date is when the filter ran, which may predate the current approved profile.
+    """
+    if not value:
+        return "-"
+    text = str(value)
+    if len(text) >= 16 and text[4] == "-" and text[10] in {"T", " "}:
+        return text[:16].replace("T", " ") + " UTC"
+    return text
+
+
 def _render_check(check: dict[str, Any]) -> str:
     """One audit line as text: e.g. ``too_much_experience: min_years 1.0 <= allowed 1.0``."""
     rule_id = str(check.get("rule_id") or "-")
@@ -525,7 +541,7 @@ _TABLE_HEAD = """<table>
 
 _UNDECIDED_HEAD = """<table>
 <thead><tr><th>#</th><th>Job</th><th>Company</th><th>Location</th>
-<th>Source</th><th>Seniority</th><th>Why</th></tr></thead>
+<th>Source</th><th>Seniority</th><th>Filtered</th><th>Why</th></tr></thead>
 <tbody>
 """
 
@@ -547,6 +563,7 @@ def _undecided_row_html(row: sqlite3.Row) -> str:
         f"<td>{html.escape(str(row['location'] or '-'))}</td>"
         f"<td>{html.escape(str(row['source'] or '-'))}</td>"
         f"<td>{html.escape(_seniority_text(evaluation, parsed))}</td>"
+        f"<td>{html.escape(_recorded_text(row['filter_created_at']))}</td>"
         "<td>passed all filters, no decision stored yet</td></tr>\n"
     )
 
@@ -729,6 +746,52 @@ def _open(database: Path | None) -> sqlite3.Connection:
     return conn
 
 
+def _recover_runs(database: Path | None) -> None:
+    """On startup, fail abandoned runs and restore the last run's status.
+
+    A run whose process was killed leaves ``runs.status='running'`` forever, and
+    the Status page keeps advertising a run that is not happening. Anything
+    still ``running`` past the stale threshold is marked ``failed`` here, then
+    the latest run's persisted summary is loaded so ``/status`` shows the last
+    known per-stage/per-source progress instead of a blank idle screen.
+    """
+    if _pipeline_status["running"] or _pipeline_status["stage"] != "idle":
+        return
+    try:
+        conn = _open(database)
+    except sqlite3.Error:
+        return
+    try:
+        failed = fail_stale_runs(conn)
+        row = latest_run(conn)
+        summary = _load_json(row["summary_json"]) if row is not None else {}
+        errors = dict(summary.get("errors") or {})
+        if summary.get("error"):
+            errors["history"] = str(summary["error"])
+        if failed:
+            errors["startup"] = "marked stale run(s) failed on startup: " + ", ".join(
+                str(run_id) for run_id in failed
+            )
+    except sqlite3.Error:
+        return
+    finally:
+        conn.close()
+    if row is None:
+        return
+    if "stage" not in summary and row["status"] != "failed":
+        # Not a pipeline run we can rehydrate (e.g. a one-off eval or collect).
+        return
+    stage = "failed" if row["status"] == "failed" else str(summary.get("stage") or row["status"])
+    _pipeline_status["stage"] = stage
+    _pipeline_status["stages"] = summary.get("stages") or {}
+    _pipeline_status["progress"] = summary.get("stages") or {}
+    _pipeline_status["sources"] = summary.get("sources") or []
+    _pipeline_status["counts"] = summary.get("counts") or {}
+    _pipeline_status["errors"] = errors
+    _pipeline_status["result"] = summary.get("result")
+    _pipeline_status["recovered_run_id"] = int(row["id"])
+
+
 def _same_origin(request: Request) -> bool:
     """CSRF guard: reject POSTs whose Origin/Referer points at another site."""
     candidate = request.headers.get("origin") or request.headers.get("referer")
@@ -808,6 +871,7 @@ def create_app(
     """
     if host and not host.startswith(("127.0.0.1", "localhost", "::1")) and _get_password() is None:
         raise RuntimeError("DASHBOARD_PASSWORD must be set when binding a non-loopback address")
+    _recover_runs(database)
     app = FastAPI(title="Atlas dashboard", version="0.2.0")
 
     def _make_kit_client() -> LLMClient:
@@ -1187,7 +1251,7 @@ def create_app(
             "<p>Jobs with at least one failed hard filter.</p>\n",
             (
                 "<table><thead><tr><th>#</th><th>Job</th><th>Company</th>"
-                "<th>Rule</th><th>Reason</th></tr></thead><tbody>\n"
+                "<th>Rule</th><th>Reason</th><th>Recorded</th></tr></thead><tbody>\n"
             ),
         ]
         if rows:
@@ -1209,10 +1273,11 @@ def create_app(
                     f"<tr><td>{int(row['id'])}</td><td>{link}</td>"
                     f"<td>{html.escape(str(row['company'] or '-'))}</td>"
                     f"<td>{html.escape(str(row['rule_id'] or '-'))}</td>"
-                    f"<td>{evidence_cell}</td></tr>\n"
+                    f"<td>{evidence_cell}</td>"
+                    f"<td>{html.escape(_recorded_text(row['filter_created_at']))}</td></tr>\n"
                 )
         else:
-            parts.append('<tr><td colspan="5">No rejected jobs.</td></tr>\n')
+            parts.append('<tr><td colspan="6">No rejected jobs.</td></tr>\n')
         parts.append("</table>\n")
         parts.append(_TABLE_FOOT)
         return HTMLResponse("".join(parts))
@@ -1275,6 +1340,13 @@ def create_app(
         else:
             elapsed = "-"
         current = status.get("current_source") or "-"
+        recovered = ""
+        if status.get("recovered_run_id") is not None:
+            recovered = (
+                f"<p>Showing last recorded run #{html.escape(str(status['recovered_run_id']))} "
+                f"(result: {html.escape(str(status.get('result') or '-'))}) — "
+                "restored from the database after a restart.</p>\n"
+            )
         body = (
             _HEAD
             + _nav()
@@ -1283,6 +1355,7 @@ def create_app(
             + f"Stage: {html.escape(str(status['stage']))} &nbsp; "
             + f"Current source: {html.escape(str(current))} &nbsp; "
             + f"Elapsed: {html.escape(elapsed)}</p>\n"
+            + recovered
             + f"<p>Per-stage counts:</p><ul>{stages}</ul>\n"
             + f"<p>Per-source results:</p><ul>{sources}</ul>\n"
             + f"<p>Totals in database:</p><ul>{counts}</ul>\n"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fake_llm import make_client
@@ -12,7 +13,15 @@ from fastapi.testclient import TestClient
 from atlas import cli, dashboard, sourcing
 from atlas.collectors.base import Collector
 from atlas.dashboard import create_app
-from atlas.db import connect, init_db, log_stage, save_profile, start_run, upsert_job
+from atlas.db import (
+    connect,
+    init_db,
+    log_stage,
+    save_profile,
+    start_run,
+    update_run_summary,
+    upsert_job,
+)
 from atlas.schemas import CandidateProfile, Job
 
 
@@ -226,6 +235,134 @@ def test_rejected_page_shows_what_was_checked(tmp_path, monkeypatch):
     response = client.get("/rejected")
     assert "location_mismatch: skipped - no target locations set" in response.text
     assert "stale_job: skipped - posted date unknown" in response.text
+
+
+def _recorded_filter_date(conn, job_id):
+    conn.execute(
+        "UPDATE filter_results SET created_at = ? WHERE job_id = ?",
+        ("2026-10-07T16:53:12+00:00", job_id),
+    )
+    conn.commit()
+
+
+def test_rejected_page_shows_when_the_filter_ran(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    conn = connect(tmp_path / "dash.db")
+    init_db(conn)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn, run_id, Job(source="s", url="http://a/11", dedupe_key="a11", title="Stale Pick")
+    )
+    log_stage(conn, "filter_results", job_id=job_id, passed=False, rule_id="seniority")
+    _recorded_filter_date(conn, job_id)
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    client.post("/login", data={"password": "pw"})
+    response = client.get("/rejected")
+    assert "Stale Pick" in response.text
+    assert "2026-10-07 16:53 UTC" in response.text
+
+
+def test_undecided_page_shows_when_the_filter_ran(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    conn = connect(tmp_path / "dash.db")
+    init_db(conn)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn, run_id, Job(source="s", url="http://a/12", dedupe_key="a12", title="Unsettled")
+    )
+    log_stage(conn, "filter_results", job_id=job_id, passed=True)
+    _recorded_filter_date(conn, job_id)
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    client.post("/login", data={"password": "pw"})
+    response = client.get("/")
+    assert "Unsettled" in response.text
+    assert "2026-10-07 16:53 UTC" in response.text
+
+
+def test_startup_marks_stale_run_failed(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    conn = connect(tmp_path / "dash.db")
+    init_db(conn)
+    run_id = start_run(conn, "dashboard")
+    started = datetime.now(UTC) - timedelta(hours=2)
+    conn.execute("UPDATE runs SET started_at = ? WHERE id = ?", (started.isoformat(), run_id))
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    client.post("/login", data={"password": "pw"})
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert "failed" in response.text
+
+    conn = connect(tmp_path / "dash.db")
+    row = conn.execute("SELECT status, finished_at FROM runs WHERE id = ?", (run_id,)).fetchone()
+    conn.close()
+    assert row["status"] == "failed"
+    assert row["finished_at"] is not None
+
+
+def test_startup_reraises_no_run_and_stays_idle(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    TestClient(create_app(tmp_path / "dash.db"))
+    assert dashboard._pipeline_status["stage"] == "idle"
+    assert dashboard._pipeline_status["running"] is False
+
+
+def test_startup_restores_last_run_summary(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    conn = connect(tmp_path / "dash.db")
+    init_db(conn)
+    run_id = start_run(conn, "dashboard")
+    update_run_summary(
+        conn,
+        run_id,
+        {
+            "stage": "processing",
+            "stages": {"parsed": 4, "decided": 2},
+            "sources": [
+                {"source": "remotive", "fetched": 5, "kept": 3, "passed_filters": 2, "sent": 0}
+            ],
+            "errors": {"remotive": "timeout"},
+        },
+    )
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    client.post("/login", data={"password": "pw"})
+    response = client.get("/status")
+    assert "remotive" in response.text
+    assert "decided: 2" in response.text
+    assert f"run #{run_id}" in response.text
+    assert "restored from the database" in response.text
+
+
+def test_startup_does_not_clobber_a_running_pipeline(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    dashboard._pipeline_status["running"] = True
+    dashboard._pipeline_status["stage"] = "processing"
+    conn = connect(tmp_path / "dash.db")
+    init_db(conn)
+    run_id = start_run(conn, "dashboard")
+    started = datetime.now(UTC) - timedelta(hours=2)
+    conn.execute("UPDATE runs SET started_at = ? WHERE id = ?", (started.isoformat(), run_id))
+    conn.commit()
+    conn.close()
+
+    TestClient(create_app(tmp_path / "dash.db"))
+
+    assert dashboard._pipeline_status["stage"] == "processing"
+    assert dashboard._pipeline_status["running"] is True
+    conn = connect(tmp_path / "dash.db")
+    status = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()["status"]
+    conn.close()
+    # Recovery did not run because a live pipeline owns the status; the stale row
+    # is left for the next real startup.
+    assert status == "running"
 
 
 def test_refuse_non_loopback_without_password(tmp_path, monkeypatch):

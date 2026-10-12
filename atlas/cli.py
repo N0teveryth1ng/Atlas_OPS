@@ -34,6 +34,7 @@ from .db import (
     init_db,
     save_profile,
     start_run,
+    update_run_summary,
 )
 from .llm import LLMClient
 from .logging_setup import setup_logging
@@ -194,11 +195,6 @@ def _execute_run(
     from .feedback import load_and_apply
     from .pipeline import run_pipeline
 
-    def emit(stage: str, **fields: Any) -> None:
-        logger.info("stage %s %s", stage, fields or "")
-        if on_event is not None:
-            on_event({"stage": stage, **fields})
-
     settings = get_settings()
     conn = connect(database)
     init_db(conn)
@@ -217,13 +213,70 @@ def _execute_run(
 
     client = _make_client()
     run_id = start_run(conn, run_kind)
+
+    # The run's live summary, refreshed into ``runs.summary_json`` after every
+    # stage and source event. Persisting progress (not just the final digest)
+    # means the Status page and the run history survive a restart even when the
+    # process is killed mid-run.
+    run_summary: dict[str, Any] = {
+        "kind": run_kind,
+        "stage": "starting",
+        "counts": {},
+        "stages": {},
+        "sources": [],
+        "errors": {},
+    }
+
+    def persist() -> None:
+        update_run_summary(conn, run_id, run_summary)
+
+    def emit(stage: str, **fields: Any) -> None:
+        logger.info("stage %s %s", stage, fields or "")
+        if stage == "collecting":
+            run_summary["stage"] = "collecting"
+        elif stage == "collected":
+            run_summary["stage"] = "processing"
+            run_summary["stages"] = {
+                "collected": fields.get("collected"),
+                "new_jobs": fields.get("new_jobs"),
+                "queries": fields.get("queries"),
+            }
+            run_summary["errors"] = dict(fields.get("source_errors") or {})
+        elif stage == "processing":
+            run_summary["stage"] = "processing"
+            run_summary["stages"] = {key: value for key, value in fields.items()}
+        elif stage == "sources":
+            run_summary["sources"] = list(fields.get("sources") or [])
+        persist()
+        if on_event is not None:
+            on_event({"stage": stage, **fields})
+
+    def _on_source(event: dict[str, Any]) -> None:
+        phase = str(event.get("phase") or "")
+        if phase in {"end", "error"}:
+            errored = phase == "error"
+            run_summary["sources"].append(
+                {
+                    "source": event.get("source"),
+                    "fetched": 0 if errored else event.get("fetched"),
+                    "kept": 0 if errored else event.get("kept"),
+                    "passed_filters": 0,
+                    "sent": 0,
+                    "error": event.get("error") if errored else None,
+                    "elapsed": event.get("elapsed"),
+                }
+            )
+        if on_source is not None:
+            on_source(event)
+        persist()
+
     sourcing_result = None
     if getattr(args, "collect", False):
         from .sourcing import run_sourcing
 
         emit("collecting")
         sourcing_result = run_sourcing(
-            profile, settings=settings, conn=conn, run_id=run_id, on_source=on_source
+            profile, settings=settings, conn=conn, run_id=run_id, on_source=_on_source
         )
         emit(
             "collected",
@@ -294,7 +347,14 @@ def _execute_run(
                 for item in sourcing_result.source_yields
             ],
         )
-    finish_run(conn, run_id, "ok", summary=digest.summary.model_dump())
+    run_summary["stage"] = "done"
+    run_summary["result"] = "ok"
+    finish_run(
+        conn,
+        run_id,
+        "ok",
+        summary={**run_summary, "digest": digest.summary.model_dump()},
+    )
     conn.close()
     return 0
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -223,6 +223,86 @@ def finish_run(
     conn.commit()
 
 
+def update_run_summary(conn: sqlite3.Connection, run_id: int, summary: dict[str, Any]) -> None:
+    """Write a partial run summary while the run is still going.
+
+    Unlike :func:`finish_run` this never touches ``status`` or ``finished_at``;
+    it only refreshes ``summary_json`` so the last known per-stage/per-source
+    progress survives a restart.
+    """
+    conn.execute(
+        "UPDATE runs SET summary_json = ? WHERE id = ?",
+        (json.dumps(summary), run_id),
+    )
+    conn.commit()
+
+
+def latest_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """The most recent run row, regardless of kind or status."""
+    return conn.execute(
+        "SELECT id, kind, status, started_at, finished_at, summary_json "
+        "FROM runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+#: A run only left ``running`` this long is presumed dead (process killed).
+STALE_RUN_MINUTES = 30
+
+
+def fail_stale_runs(
+    conn: sqlite3.Connection,
+    *,
+    max_age_minutes: int = STALE_RUN_MINUTES,
+    now: datetime | None = None,
+) -> list[int]:
+    """Mark runs abandoned in ``running`` as ``failed``; return their ids.
+
+    A run whose process died leaves ``finished_at`` NULL forever and the Status
+    page advertising a run that is not happening. On startup anything still
+    ``running`` after ``max_age_minutes`` is flipped to ``failed`` with a
+    ``finished_at`` and an error note folded into its summary.
+    """
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(minutes=max_age_minutes)
+    failed: list[int] = []
+    for row in conn.execute(
+        "SELECT id, started_at, summary_json FROM runs WHERE status = 'running'"
+    ).fetchall():
+        started = _parse_iso(row["started_at"])
+        if started is None or started > cutoff:
+            continue
+        summary: dict[str, Any] = {}
+        if row["summary_json"]:
+            try:
+                loaded = json.loads(row["summary_json"])
+            except json.JSONDecodeError:
+                loaded = None
+            if isinstance(loaded, dict):
+                summary = loaded
+        summary["status"] = "failed"
+        summary["error"] = (
+            f"run left in 'running' for more than {max_age_minutes} minutes; "
+            "marked failed on startup"
+        )
+        conn.execute(
+            "UPDATE runs SET status = 'failed', finished_at = ?, summary_json = ? WHERE id = ?",
+            (now.isoformat(), json.dumps(summary), row["id"]),
+        )
+        failed.append(int(row["id"]))
+    conn.commit()
+    return failed
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 # --------------------------------------------------------------------------- #
 # Profiles
 # --------------------------------------------------------------------------- #
@@ -413,7 +493,9 @@ def shippable_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id
                 ORDER BY e.id DESC LIMIT 1) AS evaluation_json,
                (SELECT p.data_json FROM parsed_jds p WHERE p.job_id = j.id
-                ORDER BY p.id DESC LIMIT 1) AS parsed_json
+                ORDER BY p.id DESC LIMIT 1) AS parsed_json,
+               (SELECT f.created_at FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 1 ORDER BY f.id DESC LIMIT 1) AS filter_created_at
         FROM jobs j
         WHERE EXISTS (
             SELECT 1 FROM filter_results f WHERE f.job_id = j.id AND f.passed = 1
@@ -440,7 +522,9 @@ def shippable_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
                (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id
                 ORDER BY e.id DESC LIMIT 1) AS evaluation_json,
                (SELECT p.data_json FROM parsed_jds p WHERE p.job_id = j.id
-                ORDER BY p.id DESC LIMIT 1) AS parsed_json
+                ORDER BY p.id DESC LIMIT 1) AS parsed_json,
+               (SELECT f.created_at FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 1 ORDER BY f.id DESC LIMIT 1) AS filter_created_at
         FROM jobs j
         WHERE j.id = ?
           AND EXISTS (
@@ -465,6 +549,8 @@ def rejected_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                 AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS rule_id,
                (SELECT f.evidence FROM filter_results f WHERE f.job_id = j.id
                 AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS evidence,
+               (SELECT f.created_at FROM filter_results f WHERE f.job_id = j.id
+                AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS filter_created_at,
                (SELECT f.data_json FROM filter_results f WHERE f.job_id = j.id
                 AND f.passed = 0 ORDER BY f.id DESC LIMIT 1) AS data_json
         FROM jobs j
