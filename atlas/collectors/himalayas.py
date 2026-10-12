@@ -75,9 +75,6 @@ class HimalayasCollector(Collector):
         link = item.get("applicationLink") or item.get("guid") or ""
         if not link:
             return None
-        extra: dict = {}
-        if item.get("isRemote") or item.get("remoteRestriction") or item.get("isWorkFromHome"):
-            extra["remote_type"] = RemoteType.remote
         return Job(
             source=self.name,
             source_id=str(item.get("id") or item.get("guid") or "") or None,
@@ -87,7 +84,9 @@ class HimalayasCollector(Collector):
             url=link,
             description_raw=item.get("description") or "",
             posted_at=parse_datetime(item.get("pubDate")),
-            **extra,
+            # Himalayas is a remote-only board and the payload carries no
+            # per-job remote flag, so every listing from this endpoint is remote.
+            remote_type=RemoteType.remote,
         )
 
     def _fetch_for_params(self, base_params: dict[str, Any], max_pages: int = 3) -> list[Job]:
