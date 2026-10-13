@@ -182,3 +182,23 @@ def test_whole_collection_timeout_skips_the_remaining_sources():
     assert "timed out" in result.source_errors["a"]
     assert result.source_errors["b"] == "collection run timed out"
     assert result.jobs == []
+
+
+def test_run_budget_timeout_skips_later_sources_despite_clock_jitter(monkeypatch):
+    a = HangingCollector("a")
+    b = FakeCollector("b", [_job(source="b")])
+
+    def fake_fetch(collector, query, timeout):
+        if collector.name == "a":
+            return None, f"timed out after {timeout:.0f}s"
+        return collector.fetch(query), None
+
+    monkeypatch.setattr("atlas.sourcing._fetch_with_timeout", fake_fetch)
+
+    result = collect(
+        [a, b], [""], settings=Settings(), now=NOW, source_timeout=5.0, run_timeout=0.15
+    )
+
+    assert "timed out" in result.source_errors["a"]
+    assert result.source_errors["b"] == "collection run timed out"
+    assert result.jobs == []
