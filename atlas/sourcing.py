@@ -149,6 +149,7 @@ def collect(
     result = SourcingResult(queries=list(queries))
     yields: dict[str, SourceYield] = {}
     pooled: list[Job] = []
+    run_exhausted = False
 
     def emit_source(source: str, phase: str, **fields: Any) -> None:
         if on_source is not None:
@@ -156,7 +157,7 @@ def collect(
 
     for collector in collectors:
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if run_exhausted or remaining <= 0:
             logger.error("collection run timed out before source %s", collector.name)
             result.source_errors[collector.name] = "collection run timed out"
             emit_source(collector.name, "error", error="collection run timed out")
@@ -180,6 +181,13 @@ def collect(
             timeout = min(source_timeout, remaining)
             raw, query_error = _fetch_with_timeout(collector, query, timeout)
             if query_error is not None:
+                if remaining <= source_timeout:
+                    # The whole-run budget, not the per-source limit, bounded
+                    # this query, so a timeout means the run deadline is spent.
+                    # Record that explicitly: a wall-clock recheck can still see
+                    # a sliver of budget left (``thread.join`` may return a hair
+                    # early), which would let the next source run by accident.
+                    run_exhausted = True
                 error = query_error
                 logger.error("source %s: query %r failed: %s", collector.name, query, query_error)
                 break
