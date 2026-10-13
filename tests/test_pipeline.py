@@ -4,9 +4,10 @@ import logging
 import pytest
 from fake_llm import make_client
 
-from atlas.config import get_settings
+from atlas.config import get_settings, settings_for_profile
 from atlas.db import (
     connect,
+    get_job_status,
     get_latest_filter_checks,
     init_db,
     log_stage,
@@ -15,13 +16,14 @@ from atlas.db import (
     start_run,
     upsert_job,
 )
-from atlas.job_status import IllegalTransition, JobStatus, reset_for_retry
+from atlas.job_status import IllegalTransition, JobStatus, reopen_for_refilter, reset_for_retry
 from atlas.pipeline import (
     RESUMABLE_STATUSES,
     LLMCallBudgetExceeded,
     _BudgetedClient,
     load_jobs,
     process_job,
+    reapply_filters,
     run_pipeline,
 )
 from atlas.schemas import (
@@ -428,4 +430,93 @@ def test_run_pipeline_stops_when_llm_budget_is_exhausted(tmp_path, caplog):
 
     assert "budget" in caplog.text.lower()
     assert results == []
+    conn.close()
+
+
+def _force_status(conn, job_id, status):
+    """Set a job's status directly, to simulate a state a prior run left behind."""
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status.value, job_id))
+    conn.commit()
+
+
+def test_reopen_for_refilter_revives_only_rejected_and_needs_review():
+    assert reopen_for_refilter(JobStatus.rejected) == JobStatus.new
+    assert reopen_for_refilter(JobStatus.needs_review) == JobStatus.new
+    for state in (
+        JobStatus.new,
+        JobStatus.parsed,
+        JobStatus.passed_filters,
+        JobStatus.evaluated,
+        JobStatus.verified,
+        JobStatus.ranked,
+        JobStatus.sent,
+    ):
+        with pytest.raises(IllegalTransition):
+            reopen_for_refilter(state)
+
+
+def test_reapply_filters_reopens_a_job_only_when_the_new_profile_passes_it(tmp_path):
+    conn = connect(tmp_path / "t.db")
+    init_db(conn)
+    run_id = start_run(conn, "run")
+    job = Job(
+        source="t",
+        url="http://x/berlin",
+        dedupe_key="berlin",
+        title="Backend Engineer",
+        company="C",
+        location="Berlin",
+        remote_type="onsite",
+        description_raw="Backend Engineer role in our Berlin office.",
+    )
+    job_id, _ = upsert_job(conn, run_id, job)
+    _force_status(conn, job_id, JobStatus.rejected)
+
+    pune = CandidateProfile(
+        full_name="A", email="a@b.c", target_roles=["Backend"], locations=["Pune"]
+    )
+    berlin = pune.model_copy(update={"locations": ["Berlin"]})
+
+    # The job still fails the location filter under the old profile.
+    unchanged = reapply_filters(conn, pune, settings_for_profile(pune), reason="profile approved")
+    assert unchanged.examined == 1
+    assert unchanged.reopened == 0
+    assert get_job_status(conn, job_id) == JobStatus.rejected
+
+    # The new profile matches, so the same job is re-opened and the reason stored.
+    revived = reapply_filters(conn, berlin, settings_for_profile(berlin), reason="profile approved")
+    assert revived.reopened == 1
+    assert revived.reopened_ids == [job_id]
+    assert get_job_status(conn, job_id) == JobStatus.new
+    event = conn.execute(
+        "SELECT event, reason, data_json FROM job_events WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    assert event["event"] == "reopened_for_refilter"
+    assert event["reason"] == "profile approved"
+    assert json.loads(event["data_json"]) == {"from": "rejected", "to": "new"}
+    conn.close()
+
+
+def test_reapply_filters_reopens_a_needs_review_job_that_now_passes(tmp_path):
+    conn, _run, profile, job_id, _job = _setup(tmp_path)
+    _force_status(conn, job_id, JobStatus.needs_review)
+
+    summary = reapply_filters(conn, profile, settings_for_profile(profile), reason="run started")
+
+    assert summary.reopened == 1
+    assert get_job_status(conn, job_id) == JobStatus.new
+    conn.close()
+
+
+def test_reapply_filters_never_reopens_a_shipped_job(tmp_path):
+    conn, _run, profile, job_id, _job = _setup(tmp_path)
+    # A ranked/sent job is already decided and shipped; even forced to a state
+    # the undecided loader would return, it must be left exactly as it is.
+    _force_status(conn, job_id, JobStatus.sent)
+
+    summary = reapply_filters(conn, profile, settings_for_profile(profile), reason="run started")
+
+    assert summary.reopened == 0
+    assert summary.examined == 0
+    assert get_job_status(conn, job_id) == JobStatus.sent
     conn.close()

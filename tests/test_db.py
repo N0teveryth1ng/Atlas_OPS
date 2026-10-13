@@ -5,23 +5,31 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
+import pytest
+
 from atlas.db import (
     _parse_iso,
     connect,
     emailed_job_ids,
     fail_stale_runs,
+    get_job_status,
     get_latest_profile,
     init_db,
     job_seen,
+    latest_parsed_jd,
     latest_run,
+    log_job_event,
+    log_stage,
     mark_digest_sent,
     mark_jobs_emailed,
+    reopen_job_for_refilter,
     save_digest,
     save_profile,
     start_run,
     update_run_summary,
     upsert_job,
 )
+from atlas.job_status import IllegalTransition, JobStatus
 from atlas.schemas import CandidateProfile, Job
 
 
@@ -204,3 +212,57 @@ def test_fail_stale_runs_keeps_existing_summary(tmp_path):
     )
     assert summary["stages"] == {"collected": 4}
     assert summary["status"] == "failed"
+
+
+def test_reopen_job_for_refilter_revives_a_rejected_job_and_logs_the_reason(tmp_path):
+    conn = _conn(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(conn, run_id, Job(source="a", url="http://x", dedupe_key="k", title="T"))
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", ("rejected", job_id))
+    conn.commit()
+
+    resolved = reopen_job_for_refilter(conn, job_id, reason="profile approved")
+
+    assert resolved == JobStatus.new
+    assert get_job_status(conn, job_id) == JobStatus.new
+    row = conn.execute(
+        "SELECT event, reason, data_json FROM job_events WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    assert row["event"] == "reopened_for_refilter"
+    assert row["reason"] == "profile approved"
+    assert json.loads(row["data_json"]) == {"from": "rejected", "to": "new"}
+
+
+def test_reopen_job_for_refilter_refuses_a_shipped_job(tmp_path):
+    conn = _conn(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(conn, run_id, Job(source="a", url="http://x", dedupe_key="k", title="T"))
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", ("sent", job_id))
+    conn.commit()
+
+    with pytest.raises(IllegalTransition):
+        reopen_job_for_refilter(conn, job_id, reason="profile approved")
+
+    assert get_job_status(conn, job_id) == JobStatus.sent
+    assert conn.execute("SELECT COUNT(*) FROM job_events").fetchone()[0] == 0
+
+
+def test_log_job_event_without_a_job_is_allowed(tmp_path):
+    conn = _conn(tmp_path)
+    log_job_event(conn, None, "note", reason="run started", data={"n": 1})
+    row = conn.execute("SELECT job_id, event, data_json FROM job_events").fetchone()
+    assert row["job_id"] is None
+    assert row["event"] == "note"
+    assert json.loads(row["data_json"]) == {"n": 1}
+
+
+def test_latest_parsed_jd_returns_the_most_recent_parse(tmp_path):
+    conn = _conn(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(conn, run_id, Job(source="a", url="http://x", dedupe_key="k", title="T"))
+
+    assert latest_parsed_jd(conn, job_id) is None
+    log_stage(conn, "parsed_jds", job_id=job_id, data={"title_seniority": "unknown"})
+    log_stage(conn, "parsed_jds", job_id=job_id, data={"title_seniority": "junior"})
+
+    assert latest_parsed_jd(conn, job_id) == {"title_seniority": "junior"}
