@@ -3,7 +3,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from atlas.config import Settings, settings_for_profile
-from atlas.filters import NON_JOB_LISTING_PHRASES, _parse_salary, apply_hard_filters
+from atlas.filters import (
+    NON_JOB_LISTING_PHRASES,
+    _parse_salary,
+    apply_cheap_filters,
+    apply_hard_filters,
+)
 from atlas.schemas import CandidateProfile, ExperienceLevel, Job, ParsedJD, RemoteType, Seniority
 
 
@@ -249,3 +254,72 @@ def test_non_job_listing_records_the_matched_phrase_as_evidence():
     )
     rejection = next(r for r in result.rejections if r.rule_id == "non_job_listing")
     assert "talent community" in rejection.evidence
+
+
+def test_cheap_filter_passes_a_clean_junior_remote_job():
+    result = apply_cheap_filters(
+        _job(
+            title="Junior Python Developer",
+            location="Remote",
+            description_raw="Junior role. 0-2 years experience. Fully remote.",
+        ),
+        _settings(),
+    )
+    assert result.passed
+    assert result.rejections == []
+
+
+def test_cheap_filter_rejects_senior_title():
+    result = apply_cheap_filters(_job(title="Senior Software Engineer"), _settings())
+    assert not result.passed
+    assert any(r.rule_id == "senior_title" for r in result.rejections)
+
+
+def test_cheap_filter_rejects_too_much_experience_from_regex():
+    result = apply_cheap_filters(
+        _job(description_raw="We need 5+ years of experience."), _settings()
+    )
+    assert not result.passed
+    assert any(r.rule_id == "too_much_experience" for r in result.rejections)
+
+
+def test_cheap_filter_rejects_non_job_listing():
+    result = apply_cheap_filters(_job(title="Talent Pool - Software Engineer"), _settings())
+    assert not result.passed
+    assert any(r.rule_id == "non_job_listing" for r in result.rejections)
+
+
+def test_cheap_filter_rejects_stale_job():
+    settings = _settings()
+    settings.filters.max_job_age_days = 30
+    old = datetime.now(UTC) - timedelta(days=90)
+    result = apply_cheap_filters(_job(posted_at=old), settings)
+    assert not result.passed
+    assert any(r.rule_id == "stale_job" for r in result.rejections)
+
+
+def test_cheap_filter_rejects_blacklisted_company():
+    settings = _settings()
+    settings.companies.blacklist_companies = ["BadCorp"]
+    result = apply_cheap_filters(_job(company="BadCorp Inc"), settings)
+    assert not result.passed
+    assert any(r.rule_id == "blacklisted_company" for r in result.rejections)
+
+
+def test_cheap_filter_rejects_remote_when_remote_not_allowed():
+    settings = _settings()
+    settings.targets.remote_ok = False
+    result = apply_cheap_filters(
+        _job(title="Backend Engineer", description_raw="This role is fully remote."), settings
+    )
+    assert not result.passed
+    assert any(r.rule_id == "location_mismatch" for r in result.rejections)
+
+
+def test_cheap_filter_defers_non_remote_location_to_llm():
+    # The regex parse cannot see a remote type here, but the LLM parse could still
+    # resolve the job to remote, so the cheap pass must not reject on location.
+    settings = _settings()
+    settings.targets.locations = ["Bengaluru"]
+    result = apply_cheap_filters(_job(title="Backend Engineer", location="Berlin"), settings)
+    assert result.passed

@@ -16,8 +16,22 @@ from atlas.db import (
     upsert_job,
 )
 from atlas.job_status import IllegalTransition, JobStatus, reset_for_retry
-from atlas.pipeline import RESUMABLE_STATUSES, load_jobs, process_job, run_pipeline
-from atlas.schemas import CandidateProfile, Job, Proficiency, Recommendation, Skill
+from atlas.pipeline import (
+    RESUMABLE_STATUSES,
+    LLMCallBudgetExceeded,
+    _BudgetedClient,
+    load_jobs,
+    process_job,
+    run_pipeline,
+)
+from atlas.schemas import (
+    CandidateProfile,
+    Job,
+    ParsedJD,
+    Proficiency,
+    Recommendation,
+    Skill,
+)
 
 PARSED = {
     "title": "Junior Python Developer",
@@ -292,4 +306,88 @@ def test_process_job_stores_filter_checks_on_pass(tmp_path):
     assert by_rule["salary_below_floor"]["checked"] is False
     assert by_rule["deal_breaker_skill"]["checked"] is False
     assert by_rule["stale_job"]["checked"] is False
+    conn.close()
+
+
+def test_cheap_rejected_job_is_not_parsed(tmp_path):
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    senior_id, _ = upsert_job(
+        conn,
+        run_id,
+        job.model_copy(
+            update={"url": "http://x/2", "dedupe_key": "k2", "title": "Senior Python Developer"}
+        ),
+    )
+
+    run_pipeline(conn, run_id, profile, get_settings(), _client())
+
+    assert (
+        conn.execute("SELECT COUNT(*) FROM parsed_jds WHERE job_id = ?", (senior_id,)).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute("SELECT status FROM jobs WHERE id = ?", (senior_id,)).fetchone()["status"]
+        == "rejected"
+    )
+    conn.close()
+
+
+def test_max_jobs_per_run_counts_only_survivors(tmp_path):
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    for i in range(3):
+        upsert_job(
+            conn,
+            run_id,
+            job.model_copy(update={"url": f"http://x/{i}", "dedupe_key": f"k{i}"}),
+        )
+    settings = get_settings().model_copy(deep=True)
+    settings.run.max_jobs_per_run = 2
+
+    results = run_pipeline(conn, run_id, profile, settings, _client())
+
+    assert len(results) == 2
+    conn.close()
+
+
+def test_limit_overrides_max_jobs_per_run(tmp_path):
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    for i in range(3):
+        upsert_job(
+            conn,
+            run_id,
+            job.model_copy(update={"url": f"http://x/{i}", "dedupe_key": f"k{i}"}),
+        )
+    settings = get_settings().model_copy(deep=True)
+    settings.run.max_jobs_per_run = 1
+
+    results = run_pipeline(conn, run_id, profile, settings, _client(), limit=2)
+
+    assert len(results) == 2
+    conn.close()
+
+
+def test_budgeted_client_refuses_to_exceed_the_cap():
+    wrapped = _BudgetedClient(_client(), 2)
+    wrapped.call_json(schema=ParsedJD, system="structured requirements", user="x")
+    wrapped.call_json(schema=ParsedJD, system="structured requirements", user="x")
+    with pytest.raises(LLMCallBudgetExceeded):
+        wrapped.call_json(schema=ParsedJD, system="structured requirements", user="x")
+
+
+def test_run_pipeline_stops_when_llm_budget_is_exhausted(tmp_path, caplog):
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    for i in range(2):
+        upsert_job(
+            conn,
+            run_id,
+            job.model_copy(update={"url": f"http://x/{i}", "dedupe_key": f"k{i}"}),
+        )
+    settings = get_settings().model_copy(deep=True)
+    settings.run.max_llm_calls_per_run = 1
+
+    with caplog.at_level(logging.WARNING, logger="atlas.pipeline"):
+        results = run_pipeline(conn, run_id, profile, settings, _client())
+
+    assert "budget" in caplog.text.lower()
+    assert results == []
     conn.close()

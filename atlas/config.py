@@ -157,6 +157,13 @@ class ScheduleConfig(BaseModel):
     daily_hour: int = 9
 
 
+class RunConfig(BaseModel):
+    """Per-run work caps: bound how much one run can cost."""
+
+    max_jobs_per_run: int = 25
+    max_llm_calls_per_run: int = 100
+
+
 class Secrets(BaseModel):
     """Values sourced from the environment / .env. Never written to disk."""
 
@@ -181,6 +188,7 @@ class Settings(BaseModel):
     ranking: RankingConfig = Field(default_factory=RankingConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    run: RunConfig = Field(default_factory=RunConfig)
     secrets: Secrets = Field(default_factory=Secrets)
 
 

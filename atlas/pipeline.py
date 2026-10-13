@@ -18,14 +18,14 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from .config import Settings, get_settings
 from .db import log_stage, reset_job_for_retry, set_job_status
 from .decision import evaluate_decision
 from .evaluator import evaluate_job
 from .evidence import EvidenceValidationError
-from .filters import apply_hard_filters
+from .filters import apply_cheap_filters, apply_hard_filters
 from .jd_parser import parse_jd
 from .job_status import JobStatus, transition
 from .llm import LLMClient
@@ -58,6 +58,53 @@ RESUMABLE_STATUSES: tuple[JobStatus, ...] = (
     JobStatus.evaluated,
     JobStatus.verified,
 )
+
+
+def _log_filter_result(
+    conn: sqlite3.Connection, job_id: int | None, filter_result: FilterResult
+) -> None:
+    """Persist a filter verdict exactly the way the full pass always has."""
+    checks_data = {"checks": [check.model_dump() for check in filter_result.checks]}
+    if filter_result.passed:
+        log_stage(conn, "filter_results", job_id=job_id, passed=True, data=checks_data)
+    else:
+        for rejection in filter_result.rejections:
+            log_stage(
+                conn,
+                "filter_results",
+                job_id=job_id,
+                passed=False,
+                rule_id=rejection.rule_id,
+                evidence=rejection.evidence,
+                data=checks_data,
+            )
+
+
+class LLMCallBudgetExceeded(RuntimeError):
+    """Raised when a run hits its ``max_llm_calls_per_run`` cap."""
+
+
+class _BudgetedClient:
+    """Wrap an LLM client and refuse to exceed a per-run logical-call cap.
+
+    Every attribute except ``call_json`` delegates to the wrapped client, so the
+    wrapper is a drop-in for the pipeline. ``call_json`` counts logical stage
+    calls (parse/evaluate/verify/decide), not the transport retries inside them.
+    """
+
+    def __init__(self, inner: LLMClient, max_calls: int | None) -> None:
+        self._inner = inner
+        self._max = max_calls
+        self.calls = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def call_json(self, *args: Any, **kwargs: Any) -> Any:
+        if self._max is not None and self.calls >= self._max:
+            raise LLMCallBudgetExceeded(f"per-run LLM call cap reached ({self._max} calls)")
+        self.calls += 1
+        return self._inner.call_json(*args, **kwargs)
 
 
 def _job_fields(job_id: int | None, job: Job) -> dict[str, Any]:
@@ -181,6 +228,7 @@ def process_job(
     *,
     cache: dict | None = None,
     conn: sqlite3.Connection | None = None,
+    cheap_result: FilterResult | None = None,
 ) -> ProcessedJob:
     result = ProcessedJob(job_id=job_id, job=job)
     if conn is not None and job_id is not None:
@@ -189,8 +237,20 @@ def process_job(
         # finished instead of tripping the (strict) forward state machine.
         reset_job_for_retry(conn, job_id)
     result.advance(JobStatus.parsed, conn)
-
     job_fields = _job_fields(job_id, job)
+
+    # Cheap, LLM-free gate: rules whose regex value is a guaranteed lower bound on
+    # the merged (regex + LLM) value. A rejection here costs zero LLM calls and can
+    # never disagree with the full post-parse pass below.
+    if cheap_result is None:
+        cheap_result = apply_cheap_filters(job, settings)
+    if not cheap_result.passed:
+        result.filter_result = cheap_result
+        if conn is not None:
+            _log_filter_result(conn, job_id, cheap_result)
+        result.advance(JobStatus.rejected, conn)
+        result.final_recommendation = Recommendation.skip
+        return result
 
     with traced_stage(
         "pipeline.parse",
@@ -220,20 +280,7 @@ def process_job(
         )
     result.filter_result = filter_result
     if conn is not None:
-        checks_data = {"checks": [check.model_dump() for check in filter_result.checks]}
-        if filter_result.passed:
-            log_stage(conn, "filter_results", job_id=job_id, passed=True, data=checks_data)
-        else:
-            for rejection in filter_result.rejections:
-                log_stage(
-                    conn,
-                    "filter_results",
-                    job_id=job_id,
-                    passed=False,
-                    rule_id=rejection.rule_id,
-                    evidence=rejection.evidence,
-                    data=checks_data,
-                )
+        _log_filter_result(conn, job_id, filter_result)
     if not filter_result.passed:
         result.advance(JobStatus.rejected, conn)
         result.final_recommendation = Recommendation.skip
@@ -409,12 +456,13 @@ def run_pipeline(
     settings = settings or get_settings()
     cache = cache if cache is not None else {}
     processed: list[ProcessedJob] = []
+    max_jobs = limit if limit is not None else settings.run.max_jobs_per_run
     if resume:
         # Process every job no decision has ruled on yet, not just brand-new rows.
-        jobs = load_jobs(conn, limit=limit, statuses=RESUMABLE_STATUSES, undecided=True)
+        jobs = load_jobs(conn, statuses=RESUMABLE_STATUSES, undecided=True)
     else:
-        jobs = load_jobs(conn, limit=limit)
-    logger.info("Pipeline: processing %d job(s)", len(jobs))
+        jobs = load_jobs(conn)
+    logger.info("Pipeline: %d candidate job(s) available", len(jobs))
     skipped = conn.execute(
         "SELECT COUNT(*) FROM jobs WHERE status != ?", (JobStatus.new.value,)
     ).fetchone()[0]
@@ -424,8 +472,21 @@ def run_pipeline(
             skipped,
         )
 
+    # Cheap, LLM-free pre-screen. The cap counts only jobs that SURVIVE the gate
+    # (newest first); anything cheap-rejected before the cap is stored for zero
+    # LLM calls, and scanning stops the moment the survivor cap is reached.
+    to_process: list[tuple[int, Job, FilterResult]] = []
+    survivors = 0
+    for job_id, job in jobs:
+        if survivors >= max_jobs:
+            break
+        cheap = apply_cheap_filters(job, settings)
+        to_process.append((job_id, job, cheap))
+        if cheap.passed:
+            survivors += 1
+
     progress: dict[str, Any] = {
-        "total": len(jobs),
+        "total": len(to_process),
         "done": 0,
         "parsed": 0,
         "filtered_out": 0,
@@ -440,11 +501,24 @@ def run_pipeline(
             on_progress(dict(progress))
 
     _report()
-    with traced_stage("pipeline.run", stage="run", run_id=run_id, jobs=len(jobs)) as run_span:
-        for job_id, job in jobs:
+    budgeted = cast(LLMClient, _BudgetedClient(client, settings.run.max_llm_calls_per_run))
+    with traced_stage("pipeline.run", stage="run", run_id=run_id, jobs=len(to_process)) as run_span:
+        for job_id, job, cheap in to_process:
             try:
-                result = process_job(client, job_id, job, profile, settings, cache=cache, conn=conn)
+                result = process_job(
+                    budgeted,
+                    job_id,
+                    job,
+                    profile,
+                    settings,
+                    cache=cache,
+                    conn=conn,
+                    cheap_result=cheap,
+                )
                 processed.append(result)
+            except LLMCallBudgetExceeded as exc:
+                logger.warning("LLM call budget reached; stopping run: %s", exc)
+                break
             except Exception as exc:  # noqa: BLE001 - one bad job must not kill the run
                 logger.warning("job %s failed: %s", job_id, exc)
                 continue

@@ -33,6 +33,13 @@ filters:
   # At most this many jobs per digest.
   top_k: 10
 
+run:
+  # Jobs actually processed per run: the cap counts only jobs that survive the
+  # cheap, LLM-free gate, most recent first.
+  max_jobs_per_run: 25
+  # Hard cap on logical LLM stage calls in one run; the run stops cleanly at it.
+  max_llm_calls_per_run: 100
+
 models:
   extractor: "openai/gpt-oss-120b"
   evaluator: "openai/gpt-oss-120b"
