@@ -16,18 +16,25 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
 
 from .config import Settings, get_settings
-from .db import log_stage, reset_job_for_retry, set_job_status
+from .db import (
+    get_job_status,
+    latest_parsed_jd,
+    log_stage,
+    reopen_job_for_refilter,
+    reset_job_for_retry,
+    set_job_status,
+)
 from .decision import evaluate_decision
 from .evaluator import evaluate_job
 from .evidence import EvidenceValidationError
 from .filters import apply_cheap_filters, apply_hard_filters
-from .jd_parser import parse_jd
-from .job_status import JobStatus, transition
+from .jd_parser import parse_jd, parse_jd_regex_only
+from .job_status import REFILTERABLE, JobStatus, transition
 from .llm import LLMClient
 from .observability import traced_stage
 from .schemas import (
@@ -229,6 +236,61 @@ def load_jobs(
         )
         out.append((row["id"], job))
     return out
+
+
+@dataclass
+class RefilterSummary:
+    """What one :func:`reapply_filters` pass examined and revived."""
+
+    examined: int = 0
+    reopened: int = 0
+    reopened_ids: list[int] = field(default_factory=list)
+
+
+def reapply_filters(
+    conn: sqlite3.Connection,
+    profile: CandidateProfile,
+    settings: Settings,
+    *,
+    reason: str,
+) -> RefilterSummary:
+    """Re-run hard filters over undecided jobs and revive any a profile change flips.
+
+    Run when the approved profile changes (profile approval) and at the start of
+    every run. It examines every undecided job whose status a profile change can
+    flip (``rejected``/``needs_review``): the stored parsed JD is re-run through
+    the current hard filters, or, when there is no stored parse (a job rejected by
+    the LLM-free pre-screen), a regex-only parse is used. A job that now passes is
+    re-opened to ``new`` via the single approved transition, recording ``reason``.
+    ``ranked``/``sent`` jobs — and any other undecided state still mid-run — are
+    never selected, so ``sent ⊆ passed`` keeps holding.
+
+    LLM-free by construction: it never calls a client, so re-filtering costs no
+    quota and stays bounded even over a large job table.
+    """
+    summary = RefilterSummary()
+    for job_id, job in load_jobs(conn, statuses=None, undecided=True):
+        status = get_job_status(conn, job_id)
+        if status not in REFILTERABLE:
+            continue
+        summary.examined += 1
+        parsed = _parsed_for_refilter(conn, job_id, job)
+        if apply_hard_filters(job, parsed, profile, settings).passed:
+            reopen_job_for_refilter(conn, job_id, reason=reason)
+            summary.reopened += 1
+            summary.reopened_ids.append(job_id)
+    return summary
+
+
+def _parsed_for_refilter(conn: sqlite3.Connection, job_id: int, job: Job) -> ParsedJD:
+    """The parse to re-filter with: the stored one, else a regex-only fallback."""
+    stored = latest_parsed_jd(conn, job_id)
+    if stored is not None:
+        try:
+            return ParsedJD.model_validate(stored)
+        except ValueError:
+            pass
+    return parse_jd_regex_only(job.title or "", job.description_raw or "")
 
 
 def process_job(

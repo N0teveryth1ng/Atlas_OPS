@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import REPO_ROOT
-from .job_status import JobStatus, reset_for_retry, transition
+from .job_status import JobStatus, reopen_for_refilter, reset_for_retry, transition
 from .schemas import CandidateProfile, Job
 
 DEFAULT_DB_PATH = REPO_ROOT / "atlas.db"
@@ -156,6 +156,15 @@ CREATE TABLE IF NOT EXISTS eval_history (
     name         TEXT,
     passed       INTEGER,
     metrics_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS job_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     INTEGER REFERENCES jobs(id),
+    event      TEXT NOT NULL,
+    reason     TEXT,
+    created_at TEXT NOT NULL,
+    data_json  TEXT
 );
 """
 
@@ -464,6 +473,61 @@ def reset_job_for_retry(conn: sqlite3.Connection, job_id: int) -> JobStatus:
     return resolved
 
 
+def log_job_event(
+    conn: sqlite3.Connection,
+    job_id: int | None,
+    event: str,
+    *,
+    reason: str | None = None,
+    data: dict[str, Any] | None = None,
+) -> int:
+    """Record a job lifecycle event (e.g. a re-filter re-open) with its reason."""
+    cur = conn.execute(
+        "INSERT INTO job_events (job_id, event, reason, created_at, data_json) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (job_id, event, reason, _now(), json.dumps(data or {})),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def reopen_job_for_refilter(conn: sqlite3.Connection, job_id: int, *, reason: str) -> JobStatus:
+    """Re-open a rejected/needs-review job to ``new`` and record why.
+
+    Uses the explicit re-filter helper (never the forward graph). ``ranked`` and
+    ``sent`` jobs — and every other state — raise ``IllegalTransition``, so a
+    shipped outcome can never be reconsidered here. ``reason`` is persisted to
+    ``job_events`` so the re-open is auditable.
+    """
+    current = get_job_status(conn, job_id)
+    resolved = reopen_for_refilter(current)
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (resolved.value, job_id))
+    conn.commit()
+    log_job_event(
+        conn,
+        job_id,
+        "reopened_for_refilter",
+        reason=reason,
+        data={"from": current.value, "to": resolved.value},
+    )
+    return resolved
+
+
+def latest_parsed_jd(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
+    """The latest stored parsed JD for a job, or ``None`` if it was never parsed."""
+    row = conn.execute(
+        "SELECT data_json FROM parsed_jds WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    if row is None or not row["data_json"]:
+        return None
+    try:
+        loaded = json.loads(row["data_json"])
+    except (TypeError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 # --------------------------------------------------------------------------- #
 # Application status (manual dashboard bookkeeping)
 # --------------------------------------------------------------------------- #
@@ -494,7 +558,7 @@ def shippable_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """
     return conn.execute("""
         SELECT j.id, j.title, j.company, j.location, j.source, j.url, j.status,
-               j.application_status, j.description_raw,
+               j.application_status, j.description_raw, j.posted_at, j.fetched_at,
                (SELECT d.data_json FROM decisions d WHERE d.job_id = j.id
                 ORDER BY d.id DESC LIMIT 1) AS decision_json,
                (SELECT e.data_json FROM evaluations e WHERE e.job_id = j.id

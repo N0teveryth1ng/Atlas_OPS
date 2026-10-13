@@ -70,6 +70,29 @@ def reset_for_retry(status: JobStatus) -> JobStatus:
     raise IllegalTransition(f"cannot retry a job in terminal state: {status.value}")
 
 
+#: States a filter re-run may revive when the approved profile changes. Their
+#: verdict came from a filter decision, not from shipping, so it can be
+#: recomputed. ``ranked``/``sent`` are deliberately excluded: an already-decided,
+#: shipped outcome must never be reconsidered, and the remaining states are still
+#: progressing through the normal run.
+REFILTERABLE: frozenset[JobStatus] = frozenset({JobStatus.rejected, JobStatus.needs_review})
+
+
+def reopen_for_refilter(status: JobStatus) -> JobStatus:
+    """Return ``new`` for a rejected/needs-review job a filter re-run may revive.
+
+    This is the one state change a profile change is allowed to make, and it must
+    only be reached from a profile approval or the start of a run. ``ranked`` and
+    ``sent`` (already decided and shipped) raise, as do ``new`` and the
+    mid-pipeline states: those are either unaffected or handled by the normal run.
+    Kept separate from the forward graph in ``ALLOWED`` so a shipped outcome can
+    never be reopened through it.
+    """
+    if status in REFILTERABLE:
+        return JobStatus.new
+    raise IllegalTransition(f"cannot re-open a {status.value} job for re-filtering")
+
+
 def can_transition(current: JobStatus, new: JobStatus) -> bool:
     return new in ALLOWED.get(current, frozenset())
 
