@@ -21,6 +21,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -28,6 +29,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from .config import get_settings
 from .db import (
     APPLICATION_STATUSES,
     connect,
@@ -408,6 +410,31 @@ def _recorded_text(value: Any) -> str:
     if len(text) >= 16 and text[4] == "-" and text[10] in {"T", " "}:
         return text[:16].replace("T", " ") + " UTC"
     return text
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _undecided_visible(row: sqlite3.Row, max_age_days: int, now: datetime) -> bool:
+    """Whether an undecided job is fresh enough for "Not yet evaluated".
+
+    A job undecided for longer than ``max_age_days`` is stale and hidden, so the
+    list reflects the current profile instead of an ever-growing backlog. The age
+    is measured from ``posted_at`` when present, else from ``fetched_at``; a job
+    with neither date stays visible because its age is unknown, not stale.
+    """
+    for key in ("posted_at", "fetched_at"):
+        dt = _parse_dt(row[key])
+        if dt is not None:
+            return (now - dt).days <= max_age_days
+    return True
 
 
 def _render_check(check: dict[str, Any]) -> str:
@@ -944,11 +971,13 @@ def create_app(
         visible = [row for row in matched if str(row["source"] or "").lower() not in _TEST_SOURCES]
         decided: list[sqlite3.Row] = []
         undecided: list[sqlite3.Row] = []
+        max_age = get_settings().filters.max_job_age_days
+        now = datetime.now(UTC)
         for row in visible:
             outcome = str(_load_json(row["decision_json"]).get("outcome") or "").lower()
             if outcome in _SHOWN_OUTCOMES:
                 decided.append(row)
-            elif not outcome:
+            elif not outcome and _undecided_visible(row, max_age, now):
                 # passed every hard filter but no decision row was ever stored
                 undecided.append(row)
             # a stored SKIP is decided; it is neither shown nor "not yet evaluated"
@@ -1225,6 +1254,10 @@ def create_app(
                 )
             profile.approved = True
             save_profile(conn, profile)
+            from .config import settings_for_profile
+            from .pipeline import reapply_filters
+
+            reapply_filters(conn, profile, settings_for_profile(profile), reason="profile approved")
         finally:
             conn.close()
         return RedirectResponse(url="/", status_code=303)

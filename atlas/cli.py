@@ -155,6 +155,13 @@ def cmd_profile(args: argparse.Namespace) -> int:
         conn = connect()
         init_db(conn)
         save_profile(conn, profile)
+        from .pipeline import reapply_filters
+
+        refilter = reapply_filters(
+            conn, profile, settings_for_profile(profile), reason="profile approved"
+        )
+        if refilter.reopened:
+            print(f"Re-filter: re-opened {refilter.reopened} job(s) for the new profile.")
         conn.close()
         print("Profile approved and saved to the database.")
     return 0
@@ -173,6 +180,13 @@ def cmd_review(args: argparse.Namespace) -> int:
         conn = connect()
         init_db(conn)
         save_profile(conn, profile)
+        from .pipeline import reapply_filters
+
+        refilter = reapply_filters(
+            conn, profile, settings_for_profile(profile), reason="profile approved"
+        )
+        if refilter.reopened:
+            print(f"Re-filter: re-opened {refilter.reopened} job(s) for the new profile.")
         conn.close()
         print("Profile approved and saved to the database.")
     return 0
@@ -193,7 +207,7 @@ def _execute_run(
     from .db import emailed_job_ids, mark_digest_sent, save_digest
     from .digest import build_digest, render_html, render_text
     from .feedback import load_and_apply
-    from .pipeline import run_pipeline
+    from .pipeline import reapply_filters, run_pipeline
 
     settings = get_settings()
     conn = connect(database)
@@ -210,6 +224,13 @@ def _execute_run(
     settings, tuning = load_and_apply(conn, settings)
     if tuning.feedback_count:
         print(f"Tuning: {tuning.summary()}")
+
+    # A profile change can revive jobs a previous run rejected or flagged for
+    # review. Re-run the LLM-free hard filters over every undecided job and
+    # re-open the ones the current profile now passes, at the start of the run.
+    refilter = reapply_filters(conn, profile, settings, reason="run started")
+    if refilter.reopened:
+        print(f"Re-filter: re-opened {refilter.reopened} job(s) for this run.")
 
     client = _make_client()
     run_id = start_run(conn, run_kind)

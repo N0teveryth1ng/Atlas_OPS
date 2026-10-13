@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -381,3 +382,84 @@ def test_kit_post_rejects_cross_origin(tmp_path):
     client = TestClient(create_app(tmp_path / "dash.db"))
     response = client.post(f"/jobs/{job_id}/kit", headers={"origin": "http://evil.example"})
     assert response.status_code == 403
+
+
+def test_index_hides_undecided_jobs_older_than_the_max_age(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    fresh_id, _ = upsert_job(
+        conn, run_id, Job(source="test", url="http://x/fresh", dedupe_key="f", title="Fresh Role")
+    )
+    log_stage(conn, "filter_results", job_id=fresh_id, passed=True)
+    old_id, _ = upsert_job(
+        conn,
+        run_id,
+        Job(
+            source="test",
+            url="http://x/old",
+            dedupe_key="o",
+            title="Stale Role",
+            posted_at=datetime.now(UTC) - timedelta(days=40),
+        ),
+    )
+    log_stage(conn, "filter_results", job_id=old_id, passed=True)
+    conn.close()
+
+    text = TestClient(create_app(tmp_path / "dash.db")).get("/").text
+    assert "Fresh Role" in text
+    assert "Stale Role" not in text
+    assert "Not yet evaluated (1)" in text
+
+
+def test_profile_approval_reopens_rejected_jobs_the_profile_now_passes(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn,
+        run_id,
+        Job(
+            source="test",
+            url="http://x/berlin",
+            dedupe_key="berlin",
+            title="Backend Engineer",
+            location="Berlin",
+            remote_type="onsite",
+            description_raw="Backend Engineer in our Berlin office.",
+        ),
+    )
+    log_stage(
+        conn,
+        "filter_results",
+        job_id=job_id,
+        passed=False,
+        rule_id="location_mismatch",
+        evidence="location 'Berlin' not in ['Pune']",
+    )
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", ("rejected", job_id))
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.post(
+        "/profile",
+        data={
+            "level": "junior",
+            "months": "12",
+            "skills": "python:strong",
+            "target_roles": "backend",
+            "locations": "Berlin",
+            "ambiguities": "",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    conn = connect(tmp_path / "dash.db")
+    status = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()["status"]
+    event = conn.execute(
+        "SELECT event, reason FROM job_events WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    conn.close()
+    assert status == "new"
+    assert event["event"] == "reopened_for_refilter"
+    assert event["reason"] == "profile approved"
