@@ -309,6 +309,44 @@ def test_process_job_stores_filter_checks_on_pass(tmp_path):
     conn.close()
 
 
+def test_cheap_rejection_is_tagged_and_keeps_the_same_evidence_format(tmp_path):
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    senior_id, _ = upsert_job(
+        conn,
+        run_id,
+        job.model_copy(
+            update={"url": "http://x/2", "dedupe_key": "k2", "title": "Senior Python Developer"}
+        ),
+    )
+
+    run_pipeline(conn, run_id, profile, get_settings(), _client())
+
+    row = conn.execute(
+        "SELECT rule_id, evidence, data_json FROM filter_results WHERE job_id = ? AND passed = 0",
+        (senior_id,),
+    ).fetchone()
+    assert row["rule_id"] == "senior_title"
+    assert row["evidence"] == "title seniority=senior"
+    assert json.loads(row["data_json"])["cheap"] is True
+    conn.close()
+
+
+def test_post_llm_rejection_is_not_tagged_cheap(tmp_path):
+    conn, run_id, profile, job_id, _job = _setup(tmp_path)
+    settings = get_settings().model_copy(deep=True)
+    settings.filters.deal_breaker_skills = ["python"]
+
+    run_pipeline(conn, run_id, profile, settings, _client())
+
+    row = conn.execute(
+        "SELECT rule_id, data_json FROM filter_results WHERE job_id = ? AND passed = 0",
+        (job_id,),
+    ).fetchone()
+    assert row["rule_id"] == "deal_breaker_skill"
+    assert json.loads(row["data_json"])["cheap"] is False
+    conn.close()
+
+
 def test_cheap_rejected_job_is_not_parsed(tmp_path):
     conn, run_id, profile, _job_id, job = _setup(tmp_path)
     senior_id, _ = upsert_job(

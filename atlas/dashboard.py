@@ -1264,15 +1264,19 @@ def create_app(
                     else title
                 )
                 evidence_cell = html.escape(str(row["evidence"] or "-"))
-                checks = _load_json(row["data_json"]).get("checks", [])
+                data = _load_json(row["data_json"])
+                checks = data.get("checks", [])
                 if checks:
                     evidence_cell += "<br>checked: " + "; ".join(
                         html.escape(_render_check(check)) for check in checks
                     )
+                rule_cell = html.escape(str(row["rule_id"] or "-"))
+                if data.get("cheap"):
+                    rule_cell += ' <em title="decided without an LLM call">cheap</em>'
                 parts.append(
                     f"<tr><td>{int(row['id'])}</td><td>{link}</td>"
                     f"<td>{html.escape(str(row['company'] or '-'))}</td>"
-                    f"<td>{html.escape(str(row['rule_id'] or '-'))}</td>"
+                    f"<td>{rule_cell}</td>"
                     f"<td>{evidence_cell}</td>"
                     f"<td>{html.escape(_recorded_text(row['filter_created_at']))}</td></tr>\n"
                 )
