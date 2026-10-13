@@ -61,10 +61,22 @@ RESUMABLE_STATUSES: tuple[JobStatus, ...] = (
 
 
 def _log_filter_result(
-    conn: sqlite3.Connection, job_id: int | None, filter_result: FilterResult
+    conn: sqlite3.Connection,
+    job_id: int | None,
+    filter_result: FilterResult,
+    *,
+    cheap: bool = False,
 ) -> None:
-    """Persist a filter verdict exactly the way the full pass always has."""
-    checks_data = {"checks": [check.model_dump() for check in filter_result.checks]}
+    """Persist a filter verdict exactly the way the full pass always has.
+
+    ``cheap=True`` marks a rejection the LLM-free pre-screen decided; the tag
+    rides along in the stored data so the dashboard can label it. The rule id and
+    evidence are stored in the same columns and format either way.
+    """
+    checks_data = {
+        "checks": [check.model_dump() for check in filter_result.checks],
+        "cheap": cheap,
+    }
     if filter_result.passed:
         log_stage(conn, "filter_results", job_id=job_id, passed=True, data=checks_data)
     else:
@@ -247,7 +259,7 @@ def process_job(
     if not cheap_result.passed:
         result.filter_result = cheap_result
         if conn is not None:
-            _log_filter_result(conn, job_id, cheap_result)
+            _log_filter_result(conn, job_id, cheap_result, cheap=True)
         result.advance(JobStatus.rejected, conn)
         result.final_recommendation = Recommendation.skip
         return result

@@ -237,6 +237,33 @@ def test_rejected_page_shows_what_was_checked(tmp_path, monkeypatch):
     assert "stale_job: skipped - posted date unknown" in response.text
 
 
+def test_rejected_page_marks_cheap_rejections(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "pw")
+    conn = connect(tmp_path / "dash.db")
+    init_db(conn)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn, run_id, Job(source="s", url="http://a/13", dedupe_key="a13", title="Too Senior")
+    )
+    log_stage(
+        conn,
+        "filter_results",
+        job_id=job_id,
+        passed=False,
+        rule_id="senior_title",
+        evidence="title seniority=senior",
+        data={"checks": [], "cheap": True},
+    )
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    client.post("/login", data={"password": "pw"})
+    response = client.get("/rejected")
+    assert "senior_title" in response.text
+    assert "cheap" in response.text
+
+
 def _recorded_filter_date(conn, job_id):
     conn.execute(
         "UPDATE filter_results SET created_at = ? WHERE job_id = ?",
