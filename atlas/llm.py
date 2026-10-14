@@ -162,13 +162,13 @@ class LLMClient:
                 retry_after = None
                 try:
                     if last_exc is not None and hasattr(last_exc, "response"):
-                        resp = getattr(last_exc, "response")
+                        resp = last_exc.response
                         if resp is not None:
                             status_code = getattr(resp, "status_code", None)
                             headers = getattr(resp, "headers", {}) or {}
                             retry_after = headers.get("retry-after") or headers.get("Retry-After") or headers.get("x-ratelimit-reset")
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("failed to extract retry headers from LLM exception: %s", exc)
                 logger.info(
                     "LLM retry %s/%s status=%s retry_after=%s model=%s call_type=%s",
                     attempt,
