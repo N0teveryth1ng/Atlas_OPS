@@ -201,6 +201,7 @@ def collect(
                     continue
                 pooled.append(normalized)
                 kept += 1
+                item.kept += 1
             label = query or f"{collector.name} (board)"
             result.query_yield[label] = result.query_yield.get(label, 0) + kept
         elapsed = round(time.monotonic() - source_started, 2)
@@ -221,6 +222,9 @@ def collect(
             )
 
     deduped = dedupe_jobs(pooled)
+    for job in deduped:
+        if job.source in yields:
+            yields[job.source].kept = 0
     for job in deduped:
         if job.source in yields:
             yields[job.source].kept += 1
