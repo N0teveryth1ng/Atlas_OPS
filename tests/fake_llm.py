@@ -52,17 +52,25 @@ def make_client(
     verifier=None,
     project_relevance=None,
     critic=None,
+    first_error=None,
 ):
     """Route canned payloads by inspecting the system prompt.
 
     Missing LLM dimensions default to benign values so existing tests that only
     exercise parse/evaluate/verify keep working without opting in.
+
+    ``first_error`` (an exception instance) is raised on the very first transport
+    call only, so a test can prove retry/pacing behaviour without a network.
     """
 
     project = project_relevance if project_relevance is not None else _BENIGN_PROJECT_RELEVANCE
     critic_payload = critic if critic is not None else _BENIGN_CRITIC
+    state = {"raised": False}
 
     def handler(kwargs):
+        if first_error is not None and not state["raised"]:
+            state["raised"] = True
+            raise first_error
         system = kwargs["messages"][0]["content"]
         if "adversarial reviewer" in system:
             payload = verifier

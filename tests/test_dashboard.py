@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from atlas import cli
+from atlas import dashboard as dash
 from atlas.dashboard import create_app
 from atlas.db import (
     connect,
@@ -463,3 +464,67 @@ def test_profile_approval_reopens_rejected_jobs_the_profile_now_passes(tmp_path)
     assert status == "new"
     assert event["event"] == "reopened_for_refilter"
     assert event["reason"] == "profile approved"
+
+
+def _with_status(**fields):
+    """Swap in a canned live pipeline status, restoring the global afterwards."""
+    return _StatusOverride(fields)
+
+
+class _StatusOverride:
+    def __init__(self, fields):
+        self._fields = fields
+        self._saved = None
+
+    def __enter__(self):
+        self._saved = dict(dash._pipeline_status)
+        dash._pipeline_status.update(self._fields)
+        return self
+
+    def __exit__(self, *exc):
+        dash._pipeline_status.clear()
+        dash._pipeline_status.update(self._saved)
+        return False
+
+
+def test_status_shows_live_job_step_calls_waiting_and_eta(tmp_path):
+    import time
+
+    with _with_status(
+        running=True,
+        stage="processing",
+        started_at=time.time() - 30,
+        finished_at=None,
+        recovered_run_id=None,
+        progress={
+            "total": 10,
+            "done": 5,
+            "current_job_id": 42,
+            "current_job_title": "Senior Widget Engineer",
+            "current_step": "evaluate",
+            "llm_calls": 3,
+            "llm_calls_cap": 100,
+            "rate_limit_wait": 12.0,
+            "rate_limit_reason": "rate limit",
+        },
+    ):
+        text = TestClient(create_app(tmp_path / "dash.db")).get("/status").text
+
+    assert "Current job: 42 — Senior Widget Engineer" in text
+    assert "Step: evaluate" in text
+    assert "LLM calls: 3 / 100" in text
+    assert "Waiting for Groq" in text
+    assert "retry in 12" in text
+    assert "ETA: ~" in text
+
+
+def test_status_hides_restored_banner_while_a_run_is_active(tmp_path):
+    with _with_status(running=True, stage="processing", recovered_run_id=33):
+        text = TestClient(create_app(tmp_path / "dash.db")).get("/status").text
+    assert "restored from the database" not in text
+    assert "last recorded run #33" not in text
+
+    with _with_status(running=False, stage="failed", recovered_run_id=33, result="failed"):
+        text = TestClient(create_app(tmp_path / "dash.db")).get("/status").text
+    assert "last recorded run #33" in text
+    assert "restored from the database" in text

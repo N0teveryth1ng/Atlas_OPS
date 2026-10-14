@@ -60,6 +60,27 @@ def test_collect_dedupes_filters_and_logs_yield():
     conn.close()
 
 
+def test_collect_reports_nonzero_kept_in_the_source_end_event():
+    jobs = [
+        _job(url="http://a", description_raw="<p>desc</p>"),
+        _job(url="http://b", description_raw="<p>desc</p>"),
+        _job(url="http://old", posted_at=NOW - timedelta(days=30)),
+    ]
+    source = FakeCollector("fake", jobs)
+    events: list[dict] = []
+
+    result = collect([source], ["q1"], settings=Settings(), now=NOW, on_source=events.append)
+
+    end = next(event for event in events if event["phase"] == "end")
+    # The live per-source count must reflect the fresh rows this source found,
+    # not zero: this is what the dashboard shows while collecting.
+    assert end["kept"] == 2
+    assert end["fetched"] == 3
+    # The final per-source count is the post-dedupe unique total.
+    assert result.source_yields[0].kept == 1
+    assert result.query_yield["q1"] == 2
+
+
 def test_collect_merges_cross_source_duplicates():
     desc = "Long identical description. " * 20
     a = FakeCollector("src_a", [_job(source="src_a", url="http://a", description_raw=desc)])
