@@ -96,6 +96,9 @@ def _blank_pipeline_status() -> dict[str, Any]:
         "started_at": None,
         "finished_at": None,
         "result": None,
+        # Cleared on every new run so a live run never shows the stale
+        # "restored run" banner from a previous process.
+        "recovered_run_id": None,
     }
 
 
@@ -1377,13 +1380,52 @@ def create_app(
         else:
             elapsed = "-"
         current = status.get("current_source") or "-"
+        prog = status.get("progress") or status.get("stages") or {}
+
+        def _scalar(key: str) -> str:
+            value = prog.get(key)
+            return html.escape(str(value)) if value not in (None, "") else "-"
+
+        current_job = "-"
+        job_id = prog.get("current_job_id")
+        job_title = prog.get("current_job_title")
+        if job_id is not None:
+            label = f"{job_id} — {job_title}" if job_title else str(job_id)
+            current_job = html.escape(label)
+        current_step = _scalar("current_step")
+        calls_used = prog.get("llm_calls")
+        calls_cap = prog.get("llm_calls_cap")
+        if calls_cap is not None:
+            llm_calls = html.escape(f"{calls_used if calls_used is not None else 0} / {calls_cap}")
+        else:
+            llm_calls = "-"
+        waiting = ""
+        wait_seconds = prog.get("rate_limit_wait")
+        if status.get("running") and wait_seconds:
+            reason = prog.get("rate_limit_reason") or "rate limit"
+            waiting = (
+                '<p class="warn">Waiting for Groq '
+                f"{html.escape(str(reason))}, retry in {html.escape(str(wait_seconds))}s…</p>\n"
+            )
+        eta = "-"
+        total = prog.get("total")
+        done = prog.get("done")
+        if started and isinstance(total, int) and isinstance(done, int) and 0 < done < total:
+            per_job = (time.time() - started) / done
+            eta = f"~{per_job * (total - done):.0f}s"
         recovered = ""
-        if status.get("recovered_run_id") is not None:
+        if status.get("recovered_run_id") is not None and not status.get("running"):
             recovered = (
                 f"<p>Showing last recorded run #{html.escape(str(status['recovered_run_id']))} "
                 f"(result: {html.escape(str(status.get('result') or '-'))}) — "
                 "restored from the database after a restart.</p>\n"
             )
+        live = (
+            f"<p>Current job: {current_job} &nbsp; "
+            f"Step: {current_step} &nbsp; "
+            f"LLM calls: {llm_calls} &nbsp; "
+            f"ETA: {html.escape(eta)}</p>\n"
+        )
         body = (
             _HEAD
             + _nav()
@@ -1392,6 +1434,8 @@ def create_app(
             + f"Stage: {html.escape(str(status['stage']))} &nbsp; "
             + f"Current source: {html.escape(str(current))} &nbsp; "
             + f"Elapsed: {html.escape(elapsed)}</p>\n"
+            + live
+            + waiting
             + recovered
             + f"<p>Per-stage counts:</p><ul>{stages}</ul>\n"
             + f"<p>Per-source results:</p><ul>{sources}</ul>\n"

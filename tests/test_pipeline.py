@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import ClassVar
 
 import pytest
 from fake_llm import make_client
@@ -519,4 +520,66 @@ def test_reapply_filters_never_reopens_a_shipped_job(tmp_path):
     assert summary.reopened == 0
     assert summary.examined == 0
     assert get_job_status(conn, job_id) == JobStatus.sent
+    conn.close()
+
+
+class _RateLimitResponse:
+    status_code = 429
+    headers: ClassVar[dict[str, str]] = {"retry-after": "11"}
+
+
+class _RateLimitError(Exception):
+    def __init__(self) -> None:
+        super().__init__("429 Too Many Requests")
+        self.response = _RateLimitResponse()
+
+
+def test_run_pipeline_reports_live_job_step_and_rate_limit_wait(tmp_path, monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    conn, run_id, profile, job_id, job = _setup(tmp_path)
+    client = make_client(
+        parsed=PARSED, verdict=EVAL, verifier=VERIFY_OK, first_error=_RateLimitError()
+    )
+
+    snapshots: list[dict] = []
+    run_pipeline(
+        conn,
+        run_id,
+        profile,
+        get_settings(),
+        client,
+        on_progress=snapshots.append,
+    )
+
+    # A 429 with Retry-After is surfaced to the live progress while running.
+    assert any(
+        snap.get("rate_limit_wait") == 11.0 and snap.get("rate_limit_reason") == "rate limit"
+        for snap in snapshots
+    )
+    # The current job and its LLM step are visible while it is processed.
+    assert any(snap.get("current_job_id") == job_id for snap in snapshots)
+    assert any(snap.get("current_job_title") == job.title for snap in snapshots)
+    steps = {snap.get("current_step") for snap in snapshots}
+    assert {"parse", "evaluate", "verify", "decision"} <= steps
+    # LLM calls used and the cap come through for the /status display.
+    assert any(
+        snap.get("llm_calls_cap") == get_settings().run.max_llm_calls_per_run for snap in snapshots
+    )
+    assert any((snap.get("llm_calls") or 0) > 0 for snap in snapshots)
+    conn.close()
+
+
+def test_run_pipeline_clears_live_fields_when_finished(tmp_path, monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    conn, run_id, profile, _job_id, _job = _setup(tmp_path)
+    client = make_client(parsed=PARSED, verdict=EVAL, verifier=VERIFY_OK)
+
+    snapshots: list[dict] = []
+    run_pipeline(conn, run_id, profile, get_settings(), client, on_progress=snapshots.append)
+
+    last = snapshots[-1]
+    assert last["current_job_id"] is None
+    assert last["current_job_title"] is None
+    assert last["current_step"] is None
+    assert last["done"] == last["total"]
     conn.close()

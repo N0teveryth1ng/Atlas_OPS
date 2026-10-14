@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import Any, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
@@ -39,6 +40,32 @@ class LLMError(RuntimeError):
 def _looks_like_json_mode_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "response_format" in text or "json_object" in text or "json mode" in text
+
+
+_DURATION_RE = re.compile(r"(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?")
+
+
+def _retry_after_seconds(value: Any) -> float | None:
+    """Parse a Retry-After / rate-limit-reset header into seconds.
+
+    Accepts plain seconds (``"12"``), Groq's duration form (``"1m2.5s"``) and
+    ``"0s"``. Returns ``None`` when the value is missing or unparseable.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    match = _DURATION_RE.fullmatch(text)
+    if match and (match.group(1) or match.group(2)):
+        minutes = float(match.group(1) or 0)
+        seconds = float(match.group(2) or 0)
+        return minutes * 60 + seconds
+    return None
 
 
 class _ChatCompletions(Protocol):
@@ -88,6 +115,17 @@ class LLMClient:
         self.max_validation_retries = max_validation_retries
         self.max_api_retries = max_api_retries
 
+        # Observability hook: called with ``(seconds, reason)`` right before the
+        # client sleeps (either to pace on the token budget or to back off after a
+        # 429). The dashboard uses it to show "waiting for Groq rate limit". It is
+        # a no-op when unset so the library never depends on a UI.
+        self.on_wait: Callable[[float, str], None] | None = None
+        # Last rate-limit headers seen on a response. ``None`` until the first
+        # successful call, at which point proactive token pacing can begin.
+        self._remaining_tokens: int | None = None
+        self._limit_tokens: int | None = None
+        self._tokens_reset: float = 0.0
+
         self._client: _GroqLike
         if client is not None:
             self._client = client
@@ -116,6 +154,67 @@ class LLMClient:
             if isinstance(value, int) and not isinstance(value, bool):
                 usage[key] = usage.get(key, 0) + value
 
+    @staticmethod
+    def _response_headers(response: Any) -> Any:
+        """Best-effort access to a provider response's headers.
+
+        The Groq SDK exposes them on the pydantic response (``response.headers``)
+        or on the wrapped httpx response (``response._raw_response.headers``);
+        fakes may expose neither, so every access is guarded.
+        """
+        for owner in (response, getattr(response, "_raw_response", None)):
+            headers = getattr(owner, "headers", None)
+            if headers:
+                return headers
+        return None
+
+    def _read_rate_limit_headers(self, response: Any) -> None:
+        headers = self._response_headers(response)
+        if not headers:
+            return
+
+        def _int(name: str) -> int | None:
+            value = headers.get(name)
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        remaining = _int("x-ratelimit-remaining-tokens")
+        if remaining is not None:
+            self._remaining_tokens = remaining
+        limit = _int("x-ratelimit-limit-tokens")
+        if limit is not None:
+            self._limit_tokens = limit
+        reset = headers.get("x-ratelimit-reset-tokens")
+        seconds = _retry_after_seconds(reset)
+        if seconds is not None:
+            self._tokens_reset = seconds
+
+    def _notify_wait(self, seconds: float, reason: str) -> None:
+        if self.on_wait is not None:
+            self.on_wait(max(0.0, float(seconds)), reason)
+
+    def _pace(self, messages: list[dict[str, str]]) -> None:
+        """Proactively wait on the token budget instead of waiting for a 429.
+
+        After the first response the client knows ``x-ratelimit-remaining-tokens``.
+        If that is below a rough estimate of the next call's cost, sleep until the
+        window resets (capped) and tell the caller via ``on_wait``. With no header
+        seen yet this is a no-op.
+        """
+        if self._remaining_tokens is None:
+            return
+        estimate = max(500, sum(len(m.get("content", "")) for m in messages) // 4)
+        if self._remaining_tokens >= estimate:
+            return
+        wait = self._tokens_reset if self._tokens_reset > 0 else 5.0
+        wait = min(wait, 65.0)
+        self._notify_wait(wait, "token budget")
+        time.sleep(wait)
+        # Assume the window refilled; the next response's header will correct us.
+        self._remaining_tokens = self._limit_tokens
+
     def _create_once(
         self,
         messages: list[dict[str, str]],
@@ -125,10 +224,12 @@ class LLMClient:
         json_mode: bool,
         usage: dict[str, int] | None = None,
     ) -> str:
+        self._pace(messages)
         kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         response = self._client.chat.completions.create(**kwargs)
+        self._read_rate_limit_headers(response)
         if usage is not None:
             self._record_usage(response, usage)
         return response.choices[0].message.content or ""
@@ -166,30 +267,28 @@ class LLMClient:
                         if resp is not None:
                             status_code = getattr(resp, "status_code", None)
                             headers = getattr(resp, "headers", {}) or {}
-                            retry_after = (
-                                headers.get("retry-after")
-                                or headers.get("Retry-After")
-                                or headers.get("x-ratelimit-reset")
-                            )
+                            retry_after = headers.get("retry-after") or headers.get("Retry-After")
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("failed to extract retry headers from LLM exception: %s", exc)
+                effective_status = status_code or (
+                    "429" if "rate limit" in exc_text or "429" in exc_text else None
+                )
                 logger.info(
                     "LLM retry %s/%s status=%s retry_after=%s model=%s call_type=%s",
                     attempt,
                     self.max_api_retries,
-                    status_code
-                    or ("429" if "rate limit" in exc_text or "429" in exc_text else "unknown"),
+                    effective_status or "unknown",
                     retry_after or "-",
                     model,
                     schema_name or "-",
                 )
                 if attempt < self.max_api_retries:
-                    sleep = (
-                        int(retry_after)
-                        if retry_after and str(retry_after).isdigit()
-                        else 2 ** (attempt - 1)
-                    )
-                    time.sleep(min(sleep, 60))
+                    parsed_retry = _retry_after_seconds(retry_after)
+                    sleep = parsed_retry if parsed_retry is not None else 2 ** (attempt - 1)
+                    capped = min(sleep, 60.0)
+                    if str(effective_status) == "429" or parsed_retry is not None:
+                        self._notify_wait(capped, "rate limit")
+                    time.sleep(capped)
         raise LLMError(f"LLM transport failed after {self.max_api_retries} attempts: {last_exc}")
 
     # -- structured call -------------------------------------------------- #

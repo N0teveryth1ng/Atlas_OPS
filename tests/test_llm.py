@@ -1,7 +1,16 @@
+import logging
+from typing import ClassVar
+
 import pytest
 from pydantic import BaseModel
 
-from atlas.llm import LLMClient, LLMError, _looks_like_json_mode_error, extract_json
+from atlas.llm import (
+    LLMClient,
+    LLMError,
+    _looks_like_json_mode_error,
+    _retry_after_seconds,
+    extract_json,
+)
 
 
 class Item(BaseModel):
@@ -106,3 +115,105 @@ def test_client_requires_api_key():
 def test_client_builds_groq_transport():
     client = LLMClient(api_key="test-key")
     assert client.default_model
+
+
+class _RateLimitResponse:
+    status_code = 429
+    headers: ClassVar[dict[str, str]] = {"retry-after": "9"}
+
+
+class _RateLimitError(Exception):
+    def __init__(self, message: str = "429 Too Many Requests") -> None:
+        super().__init__(message)
+        self.response = _RateLimitResponse()
+
+
+def test_retry_log_includes_status_retry_after_model_and_call_type(monkeypatch, caplog):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    fake = FakeClient([_RateLimitError(), '{"value": 3}'])
+    client = LLMClient(client=fake, default_model="openai/gpt-oss-120b", max_api_retries=3)
+
+    with caplog.at_level(logging.INFO, logger="atlas.llm"):
+        item = client.call_json(schema=Item, system="s", user="u")
+
+    assert item.value == 3
+    retry_lines = [r.getMessage() for r in caplog.records if "LLM retry" in r.getMessage()]
+    assert retry_lines, "expected an INFO retry log line"
+    line = retry_lines[0]
+    assert "status=429" in line
+    assert "retry_after=9" in line
+    assert "model=openai/gpt-oss-120b" in line
+    assert "call_type=Item" in line
+
+
+def test_429_notifies_wait_callback_with_retry_after(monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    fake = FakeClient([_RateLimitError(), '{"value": 3}'])
+    client = LLMClient(client=fake, max_api_retries=3)
+    waits: list[tuple[float, str]] = []
+    client.on_wait = lambda seconds, reason: waits.append((seconds, reason))
+
+    client.call_json(schema=Item, system="s", user="u")
+
+    assert waits == [(9.0, "rate limit")]
+
+
+def test_token_pacing_waits_on_remaining_tokens(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    class _Msg2:
+        def __init__(self, content):
+            self.content = content
+
+    class _Choice2:
+        def __init__(self, content):
+            self.message = _Msg2(content)
+
+    class _Resp2:
+        def __init__(self, content):
+            self.choices = [_Choice2(content)]
+            self.headers = {
+                "x-ratelimit-remaining-tokens": "10",
+                "x-ratelimit-limit-tokens": "8000",
+                "x-ratelimit-reset-tokens": "3s",
+            }
+
+    class _Completions2:
+        def create(self, **kwargs):
+            return _Resp2('{"value": 1}')
+
+    class _Chat2:
+        def __init__(self):
+            self.completions = _Completions2()
+
+    class _Client2:
+        def __init__(self):
+            self.chat = _Chat2()
+
+    client = LLMClient(client=_Client2())
+    waits: list[tuple[float, str]] = []
+    client.on_wait = lambda seconds, reason: waits.append((seconds, reason))
+
+    client.call_json(schema=Item, system="s", user="u")  # learns remaining=10
+    client.call_json(schema=Item, system="s", user="u")  # 10 < estimate -> pace
+
+    assert (3.0, "token budget") in waits
+    assert sleeps == [3.0]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("12", 12.0),
+        ("0s", 0.0),
+        ("1m2.5s", 62.5),
+        ("2m", 120.0),
+        ("1.5s", 1.5),
+        (None, None),
+        ("", None),
+        ("bogus", None),
+    ],
+)
+def test_retry_after_seconds_parsing(value, expected):
+    assert _retry_after_seconds(value) == expected

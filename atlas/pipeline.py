@@ -119,6 +119,16 @@ class _BudgetedClient:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
+    @property
+    def on_wait(self) -> Any:
+        return getattr(self._inner, "on_wait", None)
+
+    @on_wait.setter
+    def on_wait(self, callback: Any) -> None:
+        # Setting the attribute on the wrapper would shadow __getattr__, so the
+        # callback must be installed on the wrapped client itself.
+        self._inner.on_wait = callback
+
     def call_json(self, *args: Any, **kwargs: Any) -> Any:
         if self._max is not None and self.calls >= self._max:
             raise LLMCallBudgetExceeded(f"per-run LLM call cap reached ({self._max} calls)")
@@ -303,8 +313,14 @@ def process_job(
     cache: dict | None = None,
     conn: sqlite3.Connection | None = None,
     cheap_result: FilterResult | None = None,
+    on_step: Callable[[str], None] | None = None,
 ) -> ProcessedJob:
     result = ProcessedJob(job_id=job_id, job=job)
+
+    def _step(name: str) -> None:
+        if on_step is not None:
+            on_step(name)
+
     if conn is not None and job_id is not None:
         # A job left mid-pipeline by an interrupted run has no decision to
         # preserve; rewind it to `new` via the explicit retry path so it can be
@@ -333,6 +349,7 @@ def process_job(
         prompt_version="jd_parser",
         **job_fields,
     ):
+        _step("parse")
         parsed = parse_jd(client, title=job.title or "", description=job.description_raw or "")
     result.parsed = parsed
     result.needs_review = parsed.confidence < settings.filters.min_parse_confidence
@@ -347,6 +364,7 @@ def process_job(
         )
 
     with traced_stage("pipeline.filters", stage="filters", **job_fields) as filters_span:
+        _step("filters")
         filter_result = apply_hard_filters(job, parsed, profile, settings)
         filters_span.set_metadata(
             passed=filter_result.passed,
@@ -367,6 +385,7 @@ def process_job(
 
     result.advance(JobStatus.passed_filters, conn)
     with traced_stage("pipeline.skill_match", stage="skill_match", **job_fields) as skill_span:
+        _step("skill_match")
         skill_match = match_skills(
             parsed.must_have_skills, parsed.nice_to_have_skills, profile.skills
         )
@@ -384,6 +403,7 @@ def process_job(
             prompt_version="evaluator",
             **job_fields,
         ) as evaluator_span:
+            _step("evaluate")
             verdict = evaluate_job(
                 client,
                 profile=profile,
@@ -407,6 +427,7 @@ def process_job(
             prompt_version="verifier",
             **job_fields,
         ) as verifier_span:
+            _step("verify")
             verifier = verify_job(
                 client,
                 profile=profile,
@@ -441,6 +462,7 @@ def process_job(
             prompt_version="decision",
             **job_fields,
         ) as decision_span:
+            _step("decision")
             decision = evaluate_decision(
                 client,
                 profile=profile,
@@ -559,6 +581,8 @@ def run_pipeline(
         if cheap.passed:
             survivors += 1
 
+    budgeted = cast(LLMClient, _BudgetedClient(client, settings.run.max_llm_calls_per_run))
+
     progress: dict[str, Any] = {
         "total": len(to_process),
         "done": 0,
@@ -568,16 +592,45 @@ def run_pipeline(
         "evaluated": 0,
         "verified": 0,
         "decided": 0,
+        "current_job_id": None,
+        "current_job_title": None,
+        "current_step": None,
+        "llm_calls": 0,
+        "llm_calls_cap": settings.run.max_llm_calls_per_run,
+        "rate_limit_wait": None,
+        "rate_limit_reason": None,
     }
 
     def _report() -> None:
         if on_progress is not None:
             on_progress(dict(progress))
 
+    def _on_step(step: str) -> None:
+        progress["current_step"] = step
+        progress["rate_limit_wait"] = None
+        progress["rate_limit_reason"] = None
+        progress["llm_calls"] = getattr(budgeted, "calls", 0)
+        _report()
+
+    def _on_wait(seconds: float, reason: str) -> None:
+        progress["rate_limit_wait"] = round(float(seconds), 1)
+        progress["rate_limit_reason"] = reason
+        _report()
+
+    # Route the client's rate-limit waits into the live progress so /status can
+    # show "waiting for Groq rate limit" while the run is mid-call. ``on_wait`` is
+    # a no-op on clients that do not implement it (e.g. hand-rolled test doubles).
+    if hasattr(budgeted, "on_wait"):
+        budgeted.on_wait = _on_wait
+
     _report()
-    budgeted = cast(LLMClient, _BudgetedClient(client, settings.run.max_llm_calls_per_run))
     with traced_stage("pipeline.run", stage="run", run_id=run_id, jobs=len(to_process)) as run_span:
         for job_id, job, cheap in to_process:
+            progress["current_job_id"] = job_id
+            progress["current_job_title"] = job.title
+            progress["current_step"] = "start"
+            progress["llm_calls"] = getattr(budgeted, "calls", 0)
+            _report()
             try:
                 result = process_job(
                     budgeted,
@@ -588,6 +641,7 @@ def run_pipeline(
                     cache=cache,
                     conn=conn,
                     cheap_result=cheap,
+                    on_step=_on_step,
                 )
                 processed.append(result)
             except LLMCallBudgetExceeded as exc:
@@ -596,6 +650,10 @@ def run_pipeline(
             except Exception as exc:  # noqa: BLE001 - one bad job must not kill the run
                 logger.warning("job %s failed: %s", job_id, exc)
                 continue
+            finally:
+                progress["current_step"] = None
+                progress["rate_limit_wait"] = None
+                progress["rate_limit_reason"] = None
             progress["done"] += 1
             if result.parsed is not None:
                 progress["parsed"] += 1
@@ -609,7 +667,12 @@ def run_pipeline(
                 progress["verified"] += 1
             if result.decision is not None:
                 progress["decided"] += 1
+            progress["llm_calls"] = getattr(budgeted, "calls", 0)
             _report()
+        progress["current_job_id"] = None
+        progress["current_job_title"] = None
+        progress["current_step"] = None
+        _report()
         run_span.set_metadata(
             processed=len(processed),
             filtered_out=sum(
