@@ -16,8 +16,9 @@ model; every surfaced job carries a match reason and every rejection logs a reas
 
 ## Interface
 CLI + scheduled run + local web dashboard (`/setup`, `/profile`, Find jobs, results,
-`/rejected`). Dashboard is password-guarded and refuses to bind non-loopback without
-`DASHBOARD_PASSWORD`. Email delivery cancelled (local digest only).
+`/rejected`, owner-only `/add` with a `/add/progress` polling page). Dashboard is
+password-guarded and refuses to bind non-loopback without `DASHBOARD_PASSWORD`.
+Email delivery cancelled (local digest only).
 
 ## Sources
 Remotive, RemoteOK, Himalayas (multi-page search). Adzuna (no keys configured),
@@ -30,12 +31,14 @@ Deterministic pre-filter rejects before any LLM call; per-run caps
 `max_llm_tokens_per_run: 120000`); per-day cap
 (`max_llm_tokens_per_day: 200000`). A Groq daily-limit 429 or the per-run token cap
 PAUSES the run (jobs stay resumable). Find jobs refuses to start when today's tokens
-are >= 90% of the daily cap or a daily-limit pause is still in effect.
+are >= 90% of the daily cap or a daily-limit pause is still in effect. The Groq SDK
+is built with `max_retries=0`: all retrying, pacing and daily-limit detection live
+in our own wrapper.
 
 ## Non-goals
 auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so);
-tailored resume builder and "Add a job" page are planned, not built (see HANDOFF.md
-"Planned and not built").
+tailored resume builder is planned, not built (see HANDOFF.md "Planned and not
+built"). The "Add a job" page is built (PRs #33/#34).
 
 ## Metrics
 Targets: precision@10 >= 80%, ~0 seniority pass-throughs.
@@ -43,9 +46,9 @@ UNVERIFIED: current measured values, because there is no verified human-labelled
 yet (G5 / DEC6 BLOCKED). Current eval figures are synthetic smoke tests only.
 
 ## Current state (2026-10-15)
-`main` @ `11a408b`, 1100 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #31
-(SHA range `8abeaa1..11a408b`). See HANDOFF.md for detail.
+Code state as of PR #34, 1111 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #34
+(base `8abeaa1`). See HANDOFF.md for detail.
 
 ## Owner-only (blocking completion)
 Label 40 real JDs (15 traps, 10 apply) into `eval/labels.jsonl` + `label-check`;

@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-15)
 
-- Code state as of PR #31 (`11a408b`), in sync with `origin/main` (`## main...origin/main`).
-- This state is the cumulative result of PRs **#24 to #31** (SHA range `8abeaa1..11a408b`).
-- Tests: **1100 passed** (`python -m pytest -q`).
+- Code state as of PR #34, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #34** (base `8abeaa1`).
+- Tests: **1111 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #31
+## Merged PRs #24 to #34
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -40,6 +40,9 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #29 | `7a73982` | 2026-10-14T07:44:27Z | taskd/followup-status-pacing | feat(status): live job/step/ETA on /status + Groq token-budget pacing |
 | #30 | `f16a05c` | 2026-10-15T05:24:31Z | taskd/daily-limit-and-token-cap | feat(budget): pause on Groq daily limit and cap per-run tokens |
 | #31 | `11a408b` | 2026-10-15T06:54:09Z | taskd/find-daily-limit-guard | feat(dashboard): refuse Find jobs when Groq daily limit is near or paused |
+| #32 | `a15c1a1` | 2026-10-15T10:45:52Z | docs/handoff-complete | docs(handoff): refresh HANDOFF/PRD to current state; add Task D evidence, planned-not-built, owner-only |
+| #33 | `eead966` | 2026-10-15T11:41:53Z | taske/add-a-job | feat(dashboard): owner-only Add a job page running the same pipeline |
+| #34 | `—` | 2026-10-15T | task/add-background-progress | feat(dashboard): run Add a job in the background with a progress page |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -54,8 +57,12 @@ kind, #23 non-job-listing filter.
   (only APPLY/REVIEW decisions; SKIP hidden; undecided rows under "Not yet evaluated";
   stored APPLY with unknown seniority shown as REVIEW with a warning; source=manual
   hidden) with APLD / NTAPLD / PEND bookkeeping -> `/rejected` with filter rule +
-  reason -> `/health`. `DASHBOARD_PASSWORD` login (constant-time compare, same-origin
-  CSRF, HTML escaping); refuses to bind non-loopback without the password.
+  reason -> `/health`. **Add a job** (`/add`, owner-only; PR #33) pastes a JD and
+  runs the same pipeline; since PR #34 it evaluates in a background thread and
+  redirects (303) to `/add/progress`, which polls `/api/add-status` (current step,
+  Groq rate-limit wait, LLM calls / tokens) and renders the decision when done.
+  `DASHBOARD_PASSWORD` login (constant-time compare, same-origin CSRF, HTML
+  escaping); refuses to bind non-loopback without the password.
 - Pipeline: profile -> query planner -> collectors -> normalize/dedupe (SQLite) -> JD
   parser (regex + LLM) -> hard filters (code) -> skill match -> evaluator (LLM) ->
   adversarial verifier -> ranker -> decision engine (APPLY/REVIEW/SKIP) -> digest +
@@ -64,7 +71,7 @@ kind, #23 non-job-listing filter.
   LLM call + token caps; hard filters re-applied on profile approval and every run
   start; abandoned runs are failed and live progress persists (run recovery).
 
-## Groq budget controls (PRs #28-#31)
+## Groq budget controls (PRs #28-#31, #34)
 
 - Free tier (chat models): ~30 requests/min and ~1000 requests/day; token windows
   ~8K tokens/min and ~200K tokens/day. 429 responses carry `Retry-After` and
@@ -72,6 +79,10 @@ kind, #23 non-job-listing filter.
 - Caps in `config.yaml` / `RunConfig`:
   `max_jobs_per_run: 12`, `max_llm_calls_per_run: 100`,
   `max_llm_tokens_per_run: 120000`, `max_llm_tokens_per_day: 200000`.
+- All transport retrying happens in our own wrapper (PR #34): the Groq SDK is
+  built with `max_retries=0`, so its internal 2-retry backoff can no longer bypass
+  our pacing, wait callbacks or daily-limit detection. Each retry logs
+  `status`, `Retry-After`, `model`, `call_type` and the remaining token header.
 - Per-run token cap: `_BudgetedClient(..., max_tokens=120000)` raises
   `LLMTokenBudgetExceeded`; `run_pipeline` catches it and PAUSES (does not fail) so
   jobs stay resumable.
@@ -180,8 +191,9 @@ Nothing below is implemented. Each needs the owner's go-ahead.
   single-column, ATS-friendly PDF/DOCX output. JD wording is used only for skills the
   owner genuinely has. Produces a diff against the base resume; the owner approves
   before any use. No auto-submission.
-- **(b) "Add a job" dashboard page.** Owner pastes a JD's text and link; it is evaluated
-  through the same pipeline with `source = "owner_added"`. The URL is **never fetched**.
+- **(b) "Add a job" dashboard page.** BUILT (PR #33; background + progress page in
+  PR #34). Owner pastes a JD's text and link; it is evaluated through the same
+  pipeline with `source = "owner_added"`. The URL is **never fetched**.
 - **(c) YC jobs source.** CLOSED by owner (ToS prohibits automated reading); see Task D.
   Alternatives: Add a job, company ATS pages in `companies.yaml`, owner browsing.
 - **(d) Phase 8b assisted / auto apply.** Blocked until every gate is GO and the owner
