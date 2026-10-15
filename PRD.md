@@ -22,8 +22,7 @@ CLI + scheduled run + local web dashboard (`/setup`, `/profile`, Find jobs, resu
 ## Sources
 Remotive, RemoteOK, Himalayas (multi-page search). Adzuna (no keys configured),
 Greenhouse/Lever/Ashby (code exists; may be unreachable/unkeyed). YC jobs source is
-planned and blocked pending the owner's decision on the Task D ToS report
-(see HANDOFF.md).
+CLOSED by owner (ToS prohibits automated reading); see HANDOFF.md for alternatives.
 
 ## Cost / budget controls
 Deterministic pre-filter rejects before any LLM call; per-run caps

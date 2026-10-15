@@ -34,6 +34,7 @@ from .db import (
     APPLICATION_STATUSES,
     connect,
     fail_stale_runs,
+    finish_run,
     get_latest_profile,
     init_db,
     latest_kit_data,
@@ -45,11 +46,13 @@ from .db import (
     set_application_status,
     shippable_job,
     shippable_jobs,
+    start_run,
     tokens_used_today,
+    upsert_job,
 )
 from .digest import is_http_url
 from .kit import ApplicationKit, generate_kit, render_kit_text
-from .llm import LLMClient, LLMError
+from .llm import GroqDailyLimitReached, LLMClient, LLMError
 from .profile_agent import build_profile as _build_profile_impl
 from .profile_agent import normalize_skill_name
 from .schemas import (
@@ -76,6 +79,8 @@ DATA_DIR.mkdir(exist_ok=True)
 
 MAX_UPLOAD_MB = 5
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+#: Cap on a pasted job description; the owner pastes text, never a URL fetch.
+MAX_JD_CHARS = 20000
 _SESSION_TTL = 3600 * 24 * 7
 
 logger = logging.getLogger(__name__)
@@ -167,8 +172,9 @@ def _check_auth(request: Request) -> bool:
 
 def _nav() -> str:
     return (
-        '<nav><a href="/">Home</a><a href="/setup">Setup</a><a href="/profile">Profile</a>'
-        '<a href="/rejected">Rejected</a><a href="/status">Status</a></nav>'
+        '<nav><a href="/">Home</a><a href="/add">Add job</a><a href="/setup">Setup</a>'
+        '<a href="/profile">Profile</a><a href="/rejected">Rejected</a>'
+        '<a href="/status">Status</a></nav>'
     )
 
 
@@ -444,6 +450,32 @@ def start_pipeline(database: Path | None = None) -> bool:
     thread = threading.Thread(target=_run_pipeline_worker, args=(database,), daemon=True)
     thread.start()
     return True
+
+
+def _try_begin_single_run() -> bool:
+    """Claim the one-run lock for a synchronous single-job "Add a job" evaluation.
+
+    Uses the same lock and flag ``start_pipeline`` uses, so a pasted job and a
+    full Find-jobs run can never be in flight at the same time. Returns
+    ``False`` when a run (background or otherwise) is already going.
+    """
+    with _pipeline_lock:
+        if _pipeline_status["running"]:
+            return False
+        _pipeline_status.update(_blank_pipeline_status())
+        _pipeline_status["running"] = True
+        _pipeline_status["stage"] = "processing"
+        _pipeline_status["started_at"] = time.time()
+    return True
+
+
+def _end_single_run(result: str = "ok") -> None:
+    """Release the one-run lock claimed by :func:`_try_begin_single_run`."""
+    with _pipeline_lock:
+        _pipeline_status["running"] = False
+        _pipeline_status["stage"] = result
+        _pipeline_status["result"] = result
+        _pipeline_status["finished_at"] = time.time()
 
 
 # --------------------------------------------------------------------------- #
@@ -834,6 +866,129 @@ def _open(database: Path | None) -> sqlite3.Connection:
     conn = connect(database)
     init_db(conn)
     return conn
+
+
+def _add_form(
+    error: str | None = None,
+    notice: str | None = None,
+    *,
+    title: str = "",
+    company: str = "",
+    location: str = "",
+    apply_url: str = "",
+    description: str = "",
+) -> str:
+    """The "Add a job" form. Values are re-filled and HTML-escaped on error."""
+    parts = [_HEAD, _nav(), "<h1>Add a job</h1>\n"]
+    parts.append(
+        "<p>Paste a job you found yourself. The description is evaluated through "
+        "the same pipeline as collected jobs; the apply link is stored only and "
+        "<strong>never fetched</strong>.</p>\n"
+    )
+    if error:
+        parts.append(f'<p class="error">{html.escape(error)}</p>\n')
+    if notice:
+        parts.append(f'<p class="notice">{html.escape(notice)}</p>\n')
+    parts.append(
+        '<form method="post" action="/add">'
+        f'<p><label>Title:<br><input type="text" name="title" '
+        f'value="{html.escape(title, quote=True)}"></label></p>'
+        f'<p><label>Company:<br><input type="text" name="company" '
+        f'value="{html.escape(company, quote=True)}"></label></p>'
+        f'<p><label>Location:<br><input type="text" name="location" '
+        f'value="{html.escape(location, quote=True)}"></label></p>'
+        f'<p><label>Apply URL (optional, http/https):<br><input type="text" name="apply_url" '
+        f'value="{html.escape(apply_url, quote=True)}"></label></p>'
+        f"<p><label>Job description (required, max {MAX_JD_CHARS:,} characters):<br>"
+        f'<textarea name="description" rows="14">{html.escape(description)}</textarea></label></p>'
+        '<button type="submit">Evaluate job</button></form>'
+    )
+    parts.append('<p><a href="/">Back to results</a></p>\n')
+    parts.append(_TABLE_FOOT)
+    return "".join(parts)
+
+
+def _evidence_items(items: list[Any]) -> str:
+    """Render a list of Evidence objects (quote + source) as <li> rows."""
+    if not items:
+        return "<li>-</li>\n"
+    out = []
+    for item in items:
+        quote = html.escape(str(getattr(item, "quote", "") or ""))
+        source = getattr(item, "source", "")
+        source = getattr(source, "value", source)
+        out.append(f"<li>&ldquo;{quote}&rdquo; <em>({html.escape(str(source))})</em></li>\n")
+    return "".join(out)
+
+
+def _add_outcome_html(result: Any) -> str:
+    """Render the decision, score and reasons (or the rejection) for one job."""
+    filter_result = getattr(result, "filter_result", None)
+    if filter_result is not None and not filter_result.passed:
+        rejections = getattr(filter_result, "rejections", []) or []
+        parts = [
+            "<h2>Rejected</h2>\n",
+            '<p class="error">Rejected by a hard filter. No LLM was called for this job.</p>\n',
+            "<ul>\n",
+        ]
+        for rejection in rejections:
+            parts.append(
+                f"<li>rule <strong>{html.escape(str(rejection.rule_id))}</strong>: "
+                f"{html.escape(str(rejection.evidence))}</li>\n"
+            )
+        parts.append("</ul>\n")
+        return "".join(parts)
+    decision = getattr(result, "decision", None)
+    if decision is None:
+        return (
+            "<h2>No decision</h2>\n"
+            '<p class="warn">The job was saved but no decision was stored '
+            "(it needs a human review or the run paused).</p>\n"
+        )
+    outcome = getattr(decision.outcome, "value", decision.outcome)
+    score = getattr(decision, "match_score", 0.0)
+    parts = [
+        f"<h2>Decision: {html.escape(str(outcome).upper())}</h2>\n",
+        f"<p>Match score: <strong>{html.escape(str(score))}</strong></p>\n",
+        "<h3>Reasons for</h3>\n<ul>\n",
+        _evidence_items(getattr(decision, "reasons_for", [])),
+        "</ul>\n",
+        "<h3>Reasons against</h3>\n<ul>\n",
+        _evidence_items(getattr(decision, "reasons_against", [])),
+        "</ul>\n",
+    ]
+    return "".join(parts)
+
+
+def _add_result_page(
+    job_id: int | None = None,
+    *,
+    body: str = "",
+    duplicate: bool = False,
+    paused: str | None = None,
+) -> str:
+    parts = [_HEAD, _nav(), "<h1>Add a job</h1>\n"]
+    if duplicate:
+        parts.append(
+            '<p class="notice">This job is already in your list (it matched an '
+            "existing entry by company, title and location).</p>\n"
+        )
+        if job_id is not None:
+            parts.append(
+                f'<p><a href="/jobs/{job_id}/kit">Open the existing job</a> &middot; '
+                '<a href="/">Back to results</a></p>\n'
+            )
+        else:
+            parts.append('<p><a href="/">Back to results</a></p>\n')
+    elif paused is not None:
+        parts.append(f'<p class="warn">{html.escape(paused)}</p>\n')
+        parts.append("<p>The job was saved and left undecided; the next run will pick it up.</p>\n")
+        parts.append('<p><a href="/">Back to results</a></p>\n')
+    else:
+        parts.append(body)
+        parts.append('<p><a href="/">Back to results</a></p>\n')
+    parts.append(_TABLE_FOOT)
+    return "".join(parts)
 
 
 def _recover_runs(database: Path | None) -> None:
@@ -1405,6 +1560,145 @@ def create_app(
             return HTMLResponse(body)
         start_pipeline(database)
         return RedirectResponse(url="/status", status_code=303)
+
+    @app.get("/add", response_class=HTMLResponse)
+    def add_get(request: Request) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        return HTMLResponse(_add_form())
+
+    @app.post("/add")
+    def add_post(
+        request: Request,
+        title: Annotated[str, Form()] = "",
+        company: Annotated[str, Form()] = "",
+        location: Annotated[str, Form()] = "",
+        apply_url: Annotated[str, Form()] = "",
+        description: Annotated[str, Form()] = "",
+    ) -> Response:
+        # A pasted job is evaluated through the exact same stages as a collected
+        # one, but synchronously, so the owner sees the decision immediately.
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+
+        title = title.strip()
+        company = company.strip()
+        location = location.strip()
+        apply_url = apply_url.strip()
+        description = description.strip()
+
+        def form_error(message: str) -> HTMLResponse:
+            return HTMLResponse(
+                _add_form(
+                    error=message,
+                    title=title,
+                    company=company,
+                    location=location,
+                    apply_url=apply_url,
+                    description=description,
+                ),
+                status_code=422,
+            )
+
+        if not title:
+            return form_error("Add a job title.")
+        if not description:
+            return form_error("Paste the job description text (required).")
+        if len(description) > MAX_JD_CHARS:
+            return form_error(f"Job description is too long: max {MAX_JD_CHARS:,} characters.")
+        if apply_url and not is_http_url(apply_url):
+            return form_error("The apply URL must be an http(s) link.")
+
+        blocked = groq_daily_limit_message(database)
+        if blocked is not None:
+            logger.warning("add refused: %s", blocked)
+            return HTMLResponse(
+                _add_result_page(
+                    body=f'<p class="warn">{html.escape(blocked)}</p>\n'
+                    "<p>The job was not saved. Try again after the reset.</p>"
+                )
+            )
+
+        if not _try_begin_single_run():
+            return HTMLResponse(
+                _add_result_page(
+                    body='<p class="warn">A run is already in progress. '
+                    "Try again when it finishes.</p>"
+                )
+            )
+
+        try:
+            try:
+                conn = _open(database)
+            except sqlite3.Error as exc:
+                return HTMLResponse(
+                    _add_result_page(body=f'<p class="error">{html.escape(str(exc))}</p>')
+                )
+            try:
+                profile = get_latest_profile(conn)
+                if profile is None or not profile.approved:
+                    return HTMLResponse(
+                        _add_result_page(
+                            body='<p class="error">No approved profile. Go to '
+                            '<a href="/setup">Setup</a> first.</p>'
+                        )
+                    )
+
+                from .config import settings_for_profile
+                from .normalize import normalize_job
+                from .pipeline import (
+                    LLMCallBudgetExceeded,
+                    LLMTokenBudgetExceeded,
+                    process_single_job,
+                )
+
+                settings = settings_for_profile(profile, get_settings())
+                run_id = start_run(conn, "add")
+                job = Job(
+                    source="owner_added",
+                    title=title or None,
+                    company=company or None,
+                    location=location or None,
+                    url=apply_url,
+                    description_raw=description,
+                )
+                job = normalize_job(job)
+                job_id, created = upsert_job(conn, run_id, job)
+                if not created:
+                    finish_run(conn, run_id, "done", {"duplicate": True})
+                    return HTMLResponse(_add_result_page(job_id=job_id, duplicate=True))
+
+                client = _make_kit_client()
+                try:
+                    result = process_single_job(conn, job_id, job, profile, settings, client)
+                except GroqDailyLimitReached as exc:
+                    finish_run(conn, run_id, "paused", {"reason": "daily"})
+                    return HTMLResponse(_add_result_page(paused=str(exc)))
+                except LLMTokenBudgetExceeded:
+                    finish_run(conn, run_id, "paused", {"reason": "tokens"})
+                    return HTMLResponse(
+                        _add_result_page(
+                            paused=(
+                                "Paused: per-run token cap reached "
+                                f"({settings.run.max_llm_tokens_per_run} tokens)"
+                            )
+                        )
+                    )
+                except LLMCallBudgetExceeded:
+                    finish_run(conn, run_id, "paused", {"reason": "calls"})
+                    return HTMLResponse(
+                        _add_result_page(paused="Paused: per-run LLM call cap reached.")
+                    )
+                finish_run(conn, run_id, "done")
+                return HTMLResponse(_add_result_page(body=_add_outcome_html(result)))
+            finally:
+                conn.close()
+        finally:
+            _end_single_run()
 
     @app.get("/status", response_class=HTMLResponse)
     def status_get(request: Request) -> Response:
