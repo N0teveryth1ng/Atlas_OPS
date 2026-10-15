@@ -12,6 +12,7 @@ from atlas import cli
 from atlas import dashboard as dash
 from atlas.dashboard import create_app
 from atlas.db import (
+    add_llm_tokens,
     connect,
     get_latest_profile,
     init_db,
@@ -528,3 +529,35 @@ def test_status_hides_restored_banner_while_a_run_is_active(tmp_path):
         text = TestClient(create_app(tmp_path / "dash.db")).get("/status").text
     assert "last recorded run #33" in text
     assert "restored from the database" in text
+
+
+def test_status_shows_paused_daily_limit_message(tmp_path):
+    with _with_status(
+        running=False,
+        stage="paused",
+        result="paused",
+        recovered_run_id=None,
+        progress={
+            "paused": True,
+            "pause_reason": "daily",
+            "pause_message": "Paused: Groq daily limit reached, resets in about 5.0h",
+            "pause_reset_seconds": 18000.0,
+        },
+    ):
+        text = TestClient(create_app(tmp_path / "dash.db")).get("/status").text
+
+    assert "Paused: Groq daily limit reached, resets in about 5.0h" in text
+
+
+def test_status_shows_tokens_used_today(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    add_llm_tokens(conn, 12345)
+    conn.close()
+
+    with _with_status(running=False, stage="done", recovered_run_id=None):
+        text = TestClient(create_app(db)).get("/status").text
+
+    assert "Tokens used today" in text
+    assert "12,345" in text

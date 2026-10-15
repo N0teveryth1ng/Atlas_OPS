@@ -9,6 +9,7 @@ import pytest
 
 from atlas.db import (
     _parse_iso,
+    add_llm_tokens,
     connect,
     emailed_job_ids,
     fail_stale_runs,
@@ -26,6 +27,7 @@ from atlas.db import (
     save_digest,
     save_profile,
     start_run,
+    tokens_used_today,
     update_run_summary,
     upsert_job,
 )
@@ -266,3 +268,25 @@ def test_latest_parsed_jd_returns_the_most_recent_parse(tmp_path):
     log_stage(conn, "parsed_jds", job_id=job_id, data={"title_seniority": "junior"})
 
     assert latest_parsed_jd(conn, job_id) == {"title_seniority": "junior"}
+
+
+def test_tokens_used_today_starts_at_zero(tmp_path):
+    conn = _conn(tmp_path)
+    assert tokens_used_today(conn) == 0
+
+
+def test_add_llm_tokens_accumulates_and_isolates_days(tmp_path):
+    conn = _conn(tmp_path)
+    assert add_llm_tokens(conn, 1000, day="2026-10-01") == 1000
+    assert add_llm_tokens(conn, 250, day="2026-10-01") == 1250
+    assert add_llm_tokens(conn, 500, day="2026-10-02") == 500
+
+    assert tokens_used_today(conn, day="2026-10-01") == 1250
+    assert tokens_used_today(conn, day="2026-10-02") == 500
+
+
+def test_add_llm_tokens_ignores_nonpositive_delta(tmp_path):
+    conn = _conn(tmp_path)
+    add_llm_tokens(conn, 400, day="2026-10-01")
+    assert add_llm_tokens(conn, 0, day="2026-10-01") == 400
+    assert add_llm_tokens(conn, -50, day="2026-10-01") == 400

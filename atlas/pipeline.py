@@ -22,6 +22,7 @@ from typing import Any, cast
 
 from .config import Settings, get_settings
 from .db import (
+    add_llm_tokens,
     get_job_status,
     latest_parsed_jd,
     log_stage,
@@ -35,7 +36,7 @@ from .evidence import EvidenceValidationError
 from .filters import apply_cheap_filters, apply_hard_filters
 from .jd_parser import parse_jd, parse_jd_regex_only
 from .job_status import REFILTERABLE, JobStatus, transition
-from .llm import LLMClient
+from .llm import GroqDailyLimitReached, LLMClient
 from .observability import traced_stage
 from .schemas import (
     CandidateProfile,
@@ -103,18 +104,30 @@ class LLMCallBudgetExceeded(RuntimeError):
     """Raised when a run hits its ``max_llm_calls_per_run`` cap."""
 
 
+class LLMTokenBudgetExceeded(RuntimeError):
+    """Raised when a run hits its ``max_llm_tokens_per_run`` cap."""
+
+
 class _BudgetedClient:
-    """Wrap an LLM client and refuse to exceed a per-run logical-call cap.
+    """Wrap an LLM client and refuse to exceed a per-run call or token cap.
 
     Every attribute except ``call_json`` delegates to the wrapped client, so the
     wrapper is a drop-in for the pipeline. ``call_json`` counts logical stage
-    calls (parse/evaluate/verify/decide), not the transport retries inside them.
+    calls (parse/evaluate/verify/decide), not the transport retries inside them,
+    and refuses to start a call once the run has spent its token budget.
     """
 
-    def __init__(self, inner: LLMClient, max_calls: int | None) -> None:
+    def __init__(
+        self, inner: LLMClient, max_calls: int | None, max_tokens: int | None = None
+    ) -> None:
         self._inner = inner
         self._max = max_calls
+        self._max_tokens = max_tokens
         self.calls = 0
+
+    @property
+    def tokens_used(self) -> int:
+        return int(getattr(self._inner, "tokens_used", 0) or 0)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
@@ -132,6 +145,8 @@ class _BudgetedClient:
     def call_json(self, *args: Any, **kwargs: Any) -> Any:
         if self._max is not None and self.calls >= self._max:
             raise LLMCallBudgetExceeded(f"per-run LLM call cap reached ({self._max} calls)")
+        if self._max_tokens is not None and self.tokens_used >= self._max_tokens:
+            raise LLMTokenBudgetExceeded(f"per-run token cap reached ({self._max_tokens} tokens)")
         self.calls += 1
         return self._inner.call_json(*args, **kwargs)
 
@@ -581,7 +596,14 @@ def run_pipeline(
         if cheap.passed:
             survivors += 1
 
-    budgeted = cast(LLMClient, _BudgetedClient(client, settings.run.max_llm_calls_per_run))
+    budgeted = cast(
+        LLMClient,
+        _BudgetedClient(
+            client,
+            settings.run.max_llm_calls_per_run,
+            settings.run.max_llm_tokens_per_run,
+        ),
+    )
 
     progress: dict[str, Any] = {
         "total": len(to_process),
@@ -597,8 +619,14 @@ def run_pipeline(
         "current_step": None,
         "llm_calls": 0,
         "llm_calls_cap": settings.run.max_llm_calls_per_run,
+        "tokens_used": 0,
+        "tokens_cap": settings.run.max_llm_tokens_per_run,
         "rate_limit_wait": None,
         "rate_limit_reason": None,
+        "paused": False,
+        "pause_reason": None,
+        "pause_message": None,
+        "pause_reset_seconds": None,
     }
 
     def _report() -> None:
@@ -615,6 +643,33 @@ def run_pipeline(
     def _on_wait(seconds: float, reason: str) -> None:
         progress["rate_limit_wait"] = round(float(seconds), 1)
         progress["rate_limit_reason"] = reason
+        _report()
+
+    # Persist how many tokens this run has spent against today's Groq budget. The
+    # client counts every response's usage, so the delta since the last job is the
+    # amount to add for the day.
+    recorded_tokens = 0
+
+    def _flush_tokens() -> None:
+        nonlocal recorded_tokens
+        if conn is None:
+            return
+        delta = budgeted.tokens_used - recorded_tokens
+        if delta > 0:
+            add_llm_tokens(conn, delta)
+            recorded_tokens = budgeted.tokens_used
+        progress["tokens_used"] = budgeted.tokens_used
+
+    def _pause(reason: str, message: str, reset_seconds: float | None = None) -> None:
+        progress["paused"] = True
+        progress["pause_reason"] = reason
+        progress["pause_message"] = message
+        progress["pause_reset_seconds"] = reset_seconds
+        progress["current_step"] = None
+        progress["rate_limit_wait"] = None
+        progress["rate_limit_reason"] = None
+        _flush_tokens()
+        logger.warning("run paused: %s", message)
         _report()
 
     # Route the client's rate-limit waits into the live progress so /status can
@@ -644,6 +699,19 @@ def run_pipeline(
                     on_step=_on_step,
                 )
                 processed.append(result)
+            except GroqDailyLimitReached as exc:
+                # Daily quota is spent: stop and leave this and every remaining job
+                # undecided so the next run resumes them. Never mark them failed.
+                _pause("daily", str(exc), reset_seconds=exc.reset_seconds)
+                break
+            except LLMTokenBudgetExceeded as exc:
+                _pause(
+                    "tokens",
+                    f"Paused: per-run token cap reached "
+                    f"({settings.run.max_llm_tokens_per_run} tokens)",
+                )
+                logger.warning("token budget reached; stopping run: %s", exc)
+                break
             except LLMCallBudgetExceeded as exc:
                 logger.warning("LLM call budget reached; stopping run: %s", exc)
                 break
@@ -668,7 +736,9 @@ def run_pipeline(
             if result.decision is not None:
                 progress["decided"] += 1
             progress["llm_calls"] = getattr(budgeted, "calls", 0)
+            _flush_tokens()
             _report()
+        _flush_tokens()
         progress["current_job_id"] = None
         progress["current_job_title"] = None
         progress["current_step"] = None

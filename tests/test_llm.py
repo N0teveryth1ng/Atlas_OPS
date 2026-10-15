@@ -5,8 +5,11 @@ import pytest
 from pydantic import BaseModel
 
 from atlas.llm import (
+    DAILY_LIMIT_RETRY_AFTER_SECONDS,
+    GroqDailyLimitReached,
     LLMClient,
     LLMError,
+    _looks_like_daily_limit,
     _looks_like_json_mode_error,
     _retry_after_seconds,
     extract_json,
@@ -217,3 +220,131 @@ def test_token_pacing_waits_on_remaining_tokens(monkeypatch):
 )
 def test_retry_after_seconds_parsing(value, expected):
     assert _retry_after_seconds(value) == expected
+
+
+class _DailyLimitResponse:
+    status_code = 429
+    headers: ClassVar[dict[str, str]] = {"retry-after": "3600"}
+
+
+class _DailyLimitError(Exception):
+    def __init__(self, message: str = "429 Too Many Requests") -> None:
+        super().__init__(message)
+        self.response = _DailyLimitResponse()
+
+
+def test_long_retry_after_raises_daily_limit_without_sleeping(monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda seconds: sleeps.append(seconds))
+    fake = FakeClient([_DailyLimitError(), '{"value": 3}'])
+    client = LLMClient(client=fake, max_api_retries=3)
+
+    with pytest.raises(GroqDailyLimitReached) as excinfo:
+        client.call_json(schema=Item, system="s", user="u")
+
+    # Sleeping for an hour would never finish the run, so the client must refuse.
+    assert sleeps == []
+    assert excinfo.value.reset_seconds == 3600.0
+    assert "daily limit" in str(excinfo.value).lower()
+    assert "1.0h" in str(excinfo.value)
+
+
+def test_daily_limit_message_raises_even_without_long_retry_after(monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    exc = Exception(
+        "Rate limit reached for openai/gpt-oss-120b on tokens per day (TPD): "
+        "Limit 200000, Used 200000."
+    )
+    fake = FakeClient([exc])
+    client = LLMClient(client=fake, max_api_retries=3)
+
+    with pytest.raises(GroqDailyLimitReached):
+        client.call_json(schema=Item, system="s", user="u")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("tokens per day (TPD) exceeded", True),
+        ("requests per day limit", True),
+        ("Daily limit reached", True),
+        ("Please try again in 5s", False),
+        ("per day", True),
+        ("rate limit reached, retry shortly", False),
+    ],
+)
+def test_looks_like_daily_limit(text, expected):
+    assert _looks_like_daily_limit(text) is expected
+
+
+def test_short_429_still_retries_not_daily(monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    fake = FakeClient([_RateLimitError(), '{"value": 3}'])
+    client = LLMClient(client=fake, max_api_retries=3)
+
+    assert client.call_json(schema=Item, system="s", user="u").value == 3
+
+
+def test_retry_after_threshold_is_boundary(monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+
+    class _Resp:
+        status_code = 429
+
+        def __init__(self, retry_after: str) -> None:
+            self.headers = {"retry-after": retry_after}
+
+    class _Err(Exception):
+        def __init__(self, retry_after: str) -> None:
+            super().__init__("429 Too Many Requests")
+            self.response = _Resp(retry_after)
+
+    just_over = str(int(DAILY_LIMIT_RETRY_AFTER_SECONDS) + 1)
+    with pytest.raises(GroqDailyLimitReached):
+        LLMClient(client=FakeClient([_Err(just_over)]), max_api_retries=3).call_json(
+            schema=Item, system="s", user="u"
+        )
+
+    with pytest.raises(LLMError) as excinfo:
+        LLMClient(client=FakeClient([_Err("30")]), max_api_retries=2).call_json(
+            schema=Item, system="s", user="u"
+        )
+    assert not isinstance(excinfo.value, GroqDailyLimitReached)
+
+
+class _Usage:
+    def __init__(self, total: int) -> None:
+        self.prompt_tokens = total
+        self.completion_tokens = 0
+        self.total_tokens = total
+
+
+class _UsageResp:
+    def __init__(self, content: str, total: int) -> None:
+        self.choices = [_Choice(content)]
+        self.usage = _Usage(total)
+
+
+class _UsageCompletions:
+    def create(self, **kwargs):
+        return _UsageResp('{"value": 1}', 700)
+
+
+class _UsageChat:
+    def __init__(self) -> None:
+        self.completions = _UsageCompletions()
+
+
+class _UsageClient:
+    def __init__(self) -> None:
+        self.chat = _UsageChat()
+
+
+def test_tokens_used_accumulates_across_calls():
+    client = LLMClient(client=_UsageClient())
+    assert client.tokens_used == 0
+
+    client.call_json(schema=Item, system="s", user="u")
+    client.call_json(schema=Item, system="s", user="u")
+
+    assert client.tokens_used == 1400

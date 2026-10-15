@@ -45,6 +45,7 @@ from .db import (
     set_application_status,
     shippable_job,
     shippable_jobs,
+    tokens_used_today,
 )
 from .digest import is_http_url
 from .kit import ApplicationKit, generate_kit, render_kit_text
@@ -356,7 +357,13 @@ def _run_pipeline_worker(database: Path | None = None) -> None:
             database=database,
         )
         _pipeline_status["counts"] = _db_counts(database)
-        if code == 0:
+        progress = _pipeline_status.get("progress") or {}
+        if code == 0 and (progress.get("paused") or _pipeline_status.get("stage") == "paused"):
+            # The run stopped cleanly on the daily quota or the per-run token cap.
+            # Keep the paused stage so /status shows the reason, not a false "done".
+            _pipeline_status["stage"] = "paused"
+            _pipeline_status["result"] = "paused"
+        elif code == 0:
             _pipeline_status["stage"] = "done"
             _pipeline_status["result"] = "ok"
         else:
@@ -1407,6 +1414,22 @@ def create_app(
                 '<p class="warn">Waiting for Groq '
                 f"{html.escape(str(reason))}, retry in {html.escape(str(wait_seconds))}s…</p>\n"
             )
+        paused = ""
+        if status.get("stage") == "paused" or prog.get("paused"):
+            message = prog.get("pause_message") or "Paused"
+            paused = f'<p class="warn">{html.escape(str(message))}</p>\n'
+        try:
+            _conn = _open(database)
+            try:
+                tokens_today = tokens_used_today(_conn)
+            finally:
+                _conn.close()
+        except sqlite3.Error:
+            tokens_today = 0
+        tokens_line = (
+            f"<p>Tokens used today: ~{html.escape(f'{tokens_today:,}')} "
+            f"(this run: {html.escape(str(prog.get('tokens_used') or 0))})</p>\n"
+        )
         eta = "-"
         total = prog.get("total")
         done = prog.get("done")
@@ -1435,7 +1458,9 @@ def create_app(
             + f"Current source: {html.escape(str(current))} &nbsp; "
             + f"Elapsed: {html.escape(elapsed)}</p>\n"
             + live
+            + tokens_line
             + waiting
+            + paused
             + recovered
             + f"<p>Per-stage counts:</p><ul>{stages}</ul>\n"
             + f"<p>Per-source results:</p><ul>{sources}</ul>\n"

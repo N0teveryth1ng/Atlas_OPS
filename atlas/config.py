@@ -162,6 +162,9 @@ class RunConfig(BaseModel):
 
     max_jobs_per_run: int = 25
     max_llm_calls_per_run: int = 100
+    #: Hard cap on tokens (prompt + completion) one run may spend, counted from
+    #: the usage each response reports. The run stops cleanly at it.
+    max_llm_tokens_per_run: int = 120000
 
 
 class Secrets(BaseModel):
