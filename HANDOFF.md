@@ -1,165 +1,253 @@
 # HANDOFF.md
 
-## State
-- main is AHEAD of origin/main (local commits only, not pushed): Steps 2-5 (pipeline resume + profile-pref filters + seniority review veto + filter audit) on top of cabe0c6
-- tests: 970 passed (verified: `python -m pytest -q` -> 970 passed in 19.02s)
-- lint/type: `ruff check atlas tests` -> All checks passed; `black --check atlas tests` -> 90 files unchanged; `mypy atlas` -> no issues in 49 source files
-- eval: `python -m atlas.cli eval` -> 100.0% year-extraction (19/19), 0 pass-throughs, 100.0% ontology skill (19/19), 21.1% baseline, both PASS (metrics unchanged vs 951 baseline)
-- selfcheck --fast: 21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6)
-- selfcheck --full and T5: not re-run this session
-- selfcheck exits 1 whenever any gate is BLOCKED; that is expected here, not a new failure.
+## State (verified 2026-10-15)
 
-## Recent commits
-db9d3ec feat(filters): audit passing filter results; surface checks in /rejected and explain
-71ae5da feat(decision): soft-veto unknown/mid seniority to REVIEW, drop display override
-3e5e3ea feat(config): apply approved profile prefs to filter settings at run time
-72a43a5 fix(pipeline): process undecided jobs and report per-stage/per-source progress
-cabe0c6 fix(dashboard): show only decided APPLY/REVIEW rows, flag unknown seniority
-814f4c9 test: isolate dashboard env so DASHBOARD_PASSWORD cannot leak between tests
-55d6b99 docs(handoff): record groq model verification and session status
-651426f docs: web dashboard flow, password guard, and handoff update
-4f0b8ba chore: gitignore personal resume.pdf
-e13b3e3 chore(dashboard): lint/format fixes and document DASHBOARD_PASSWORD
-528d8c8 test(dashboard): cover upload limits, auth, lock, filtering
-91b7326 feat(dashboard): web UI for setup, profile approval, find jobs, results
-c905591 STEP6a: add web UI tests
-aa2557d STEP5b: pass host to create_app and enforce password check
-8c4a91b fix: sqlite3.Row access without .get()
-e318b46 fix: preserve index behavior when decision missing
-08b925e feat: add MIT license and document BrainTrace observability
-80ea58f test: build path fixtures at runtime so selfcheck A4 stays green
-edda227 feat: add optional Braintrust observability with PII redaction
-4a883ef Update README.md (#13)
-bca0f70 docs: add pipeline architecture diagram to README (#12)
-320b266 docs: complete handoff files (update rules/actions)
-9ae42c8 docs: complete handoff files
-5218bfd docs: add AGENTS.md, PRD.md, HANDOFF.md for session handoff
-d6e4a4f test(label-check): add cli_never_writes_labels test
-61f50e9 test(label-check): restore tests and cover pool/duplicate/url rules
-4a4be87 feat(label-check): validate pool membership, duplicates, and url match (read-only)
-1671f6b feat(cli): add read-only 'atlas label-check' for label validation
-ebb9362 docs(preflight): record current state, block owner gates, keep raw JD pool local
-3e3197c feat(decision): apply/review/skip decision engine, CLI, prompts, selfcheck (#11)
+- `main` @ `11a408b`, in sync with `origin/main` (`## main...origin/main`).
+- This state is the cumulative result of PRs **#24 to #31** (SHA range `8abeaa1..11a408b`).
+- Tests: **1100 passed** (`python -m pytest -q`).
+- Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
+  clean (line length 100); `mypy atlas` clean.
+- Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
 
-## Done
-Web dashboard (FastAPI, no Jinja): /setup (PDF <=5MB + description), /profile
-(review/edit/approve, pipeline blocked until approved), Find jobs (background
-thread, one-run lock), /status + /api/status, results table (only APPLY/REVIEW
-decisions; SKIP hidden; no-decision rows listed under "Not yet evaluated"; a
-stored APPLY whose seniority is unknown is shown as REVIEW with a visible
-warning; source=manual rows hidden) with APLD/NTAPLD/PEND buttons, /rejected
-with filter rule/reason, /health probe. /profile approval now requires at least
-one location or "anywhere". DASHBOARD_PASSWORD login (constant-time compare,
-same-origin CSRF, HTML escaping); refuses to bind non-loopback without the
-password. db.py shippable_jobs/rejected_jobs added; CandidateProfile.locations
-added. Procfile now runs the guarded CLI entrypoint. 951 tests pass;
-ruff/black/mypy pass; selfcheck fast 21 PASS / 0 FAIL / 2 BLOCKED.
-Dashboard tests are env-isolated (tests/conftest.py clears DASHBOARD_PASSWORD /
-ATLAS_DB) so order does not matter.
+```
+False rejects (apply->skip): []
+Label inconsistencies:       []
+RESULT:                      PASS
+Braintrust: published year_extraction_accuracy -> https://www.braintrust.dev/app/My%20Project
 
-From this session (Steps 2-5, committed 72a43a5 / 3e5e3ea / 71ae5da / db9d3ec):
-- Pipeline runs resume through RETRYABLE pre-decision states and decide every
-  undecided job, reporting per-stage/per-source progress to the /status page;
-  `reset_for_retry` keeps `process_job` legal. 970 tests pass.
-- Approved profile prefs (locations / remote-any / target roles / experience)
-  are applied to filter settings at run time via `settings_for_profile`
-  (locations empty -> remote-ok; years fall back to level if no months).
-- Seniority `unknown`/`mid` becomes a soft REVIEW veto in the decision engine
-  (unknown -> everyone, mid -> fresher only); dashboard shows the stored
-  outcome verbatim with an informational warning, no display override.
-- Hard filters now record a per-rule audit (rule_id, value, limit, or
-  skipped_reason) into filter_results.data_json; /rejected and `explain
-  <job_id>` render a "checked" line per rule. Eval metrics unchanged.
+== Skill matching ==
+Skill cases:                 19
+Baseline (set-overlap):      21.1% (4/19)
+Ontology matcher:            100.0% (19/19) target >= 95%
+Matcher failures:            []
+RESULT:                      PASS
+Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/My%20Project
+```
 
-From earlier: label-check read-only; 22 collected labeling tests.
-Braintrust (BrainTrace) observability: MIT license, PII-redacted LLM tracing via
-atlas/observability.py, and eval metrics published as named scores
-(year_extraction_accuracy, skill_matching_accuracy, llm_precision_at_k) into
-Braintrust project atlasops (3c5416f9-ff13-4c16-9a07-71d0e5a8c090).
+- `selfcheck --fast`: **21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6)**. It exits 1 whenever
+  any gate is BLOCKED; that is expected here, not a new failure.
+- `selfcheck --full` not re-run this session.
 
-## Not done this session
-- Groq models API call is blocked from the sandbox (Cloudflare `error code: 1010`);
-  model ids were cross-checked against Groq's published catalogue instead
-  (`openai/gpt-oss-120b` and `qwen/qwen3.8-27b` both live on Groq; verifier is a
-  different family from the evaluator). Re-run the /models check on a real
-  network before relying on it.
-- "claims not verified with a command" final list: see the end of the session
-  transcript that produced commit 651426f.
+## Merged PRs #24 to #31
 
-## Not done/hold
-Phase 8/PR B on hold.
+| PR | commit | merged (UTC) | branch | title |
+|---|---|---|---|---|
+| #24 | `8abeaa1` | 2026-10-13T02:33:58Z | pr1/run-recovery-and-progress | fix(runs): fail abandoned runs and persist live run progress |
+| #25 | `b2cebd1` | 2026-10-13T03:45:20Z | taskb/cheap-prefilter-and-run-budgets | Task B: cheap deterministic pre-filter + per-run cost caps |
+| #26 | `585cb17` | 2026-10-13T04:20:51Z | fix/flaky-collection-timeout-test | fix(sourcing): make whole-collection timeout deterministic |
+| #27 | `b3139e6` | 2026-10-13T13:58:09Z | taskc/reapply-filters-on-profile-change | feat: re-apply hard filters on profile approval and every run start |
+| #28 | `795f010` | 2026-10-14T04:57:08Z | taskd/groq-pacing-logging-status | perf: Groq retry logging + fix source kept counts |
+| #29 | `7a73982` | 2026-10-14T07:44:27Z | taskd/followup-status-pacing | feat(status): live job/step/ETA on /status + Groq token-budget pacing |
+| #30 | `f16a05c` | 2026-10-15T05:24:31Z | taskd/daily-limit-and-token-cap | feat(budget): pause on Groq daily limit and cap per-run tokens |
+| #31 | `11a408b` | 2026-10-15T06:54:09Z | taskd/find-daily-limit-guard | feat(dashboard): refuse Find jobs when Groq daily limit is near or paused |
 
-## Owner-only blocked
-1. >=40 real JDs from eval/labeling_pool.jsonl into eval/labels.jsonl (>=15 traps, >=10 apply), run atlas label-check (G5/DEC6 inputs)
-2. confirm API-key rotation (Groq/Gemini/Resend)
-3. mutmut under WSL/Linux (T5)
-4. authorize live eval --with-llm (G6)
-5. sign off review_sample.md
-G1 stays BLOCKED until owner confirms.
+Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
+kind, #23 non-job-listing filter.
 
-## Limitations
-RemoteOK+Remotive only; likely senior-heavy; golden set 20 synthetic; proves consistency, not real-world precision.
+## What the app does now
 
-Gate counts above were taken from a real run; re-run the commands in "How to run" before relying on them.
+- Interface: CLI (`python -m atlas.cli`) + scheduler + local web dashboard. Email
+  delivery is cancelled; the digest is local.
+- Dashboard flow: `/setup` (resume PDF <= 5MB + description) -> `/profile`
+  (review / edit / approve; pipeline blocked until approved) -> **Find jobs**
+  (background thread, one-run lock) -> `/status` + `/api/status` -> results table
+  (only APPLY/REVIEW decisions; SKIP hidden; undecided rows under "Not yet evaluated";
+  stored APPLY with unknown seniority shown as REVIEW with a warning; source=manual
+  hidden) with APLD / NTAPLD / PEND bookkeeping -> `/rejected` with filter rule +
+  reason -> `/health`. `DASHBOARD_PASSWORD` login (constant-time compare, same-origin
+  CSRF, HTML escaping); refuses to bind non-loopback without the password.
+- Pipeline: profile -> query planner -> collectors -> normalize/dedupe (SQLite) -> JD
+  parser (regex + LLM) -> hard filters (code) -> skill match -> evaluator (LLM) ->
+  adversarial verifier -> ranker -> decision engine (APPLY/REVIEW/SKIP) -> digest +
+  dashboard -> feedback.
+- Cost controls: deterministic pre-filter rejects failures before any LLM call; per-run
+  LLM call + token caps; hard filters re-applied on profile approval and every run
+  start; abandoned runs are failed and live progress persists (run recovery).
 
-## Owner decisions
-- Fresher, about 3 months internship; experience tolerance 1 year.
-- Interface: CLI + scheduled run (email delivery cancelled) PLUS the web dashboard (/setup -> /profile -> find -> results) added this session.
-- auto_applications/ bots disabled from the pipeline, kept for Phase 8.
-- History purge + key rotation chosen; rotation NOT yet confirmed (G1 stays BLOCKED).
-- Merge workflow: always create a PR and merge it; never wait for or ask for owner approval to merge. PRs are merged as soon as CI is green (use the normal merge; admin bypass only if branch protection needs a review the author cannot self-provide).
-- Sources: existing feeds + Adzuna + Greenhouse/Lever/Ashby; second Groq model as verifier.
+## Groq budget controls (PRs #28-#31)
 
-## Also done (earlier phases)
-Profile/input modes, query planner, collectors, normalize/dedupe, JD parser, hard filters, skill matching, evaluator + verifier + ranker, digest + Resend email + scheduler, feedback + tuning, selfcheck runner, seniority matrix, decision engine, evidence-quote validation, job status machine, label-check. Earlier commits: 21fb374 (audit), f4bb4a0 (remediation), 3e3197c (decision engine).
+- Free tier (chat models): ~30 requests/min and ~1000 requests/day; token windows
+  ~8K tokens/min and ~200K tokens/day. 429 responses carry `Retry-After` and
+  `x-ratelimit-*` headers. Roughly 6-9K tokens per fully processed job.
+- Caps in `config.yaml` / `RunConfig`:
+  `max_jobs_per_run: 12`, `max_llm_calls_per_run: 100`,
+  `max_llm_tokens_per_run: 120000`, `max_llm_tokens_per_day: 200000`.
+- Per-run token cap: `_BudgetedClient(..., max_tokens=120000)` raises
+  `LLMTokenBudgetExceeded`; `run_pipeline` catches it and PAUSES (does not fail) so
+  jobs stay resumable.
+- Daily-limit pause: a 429 that indicates a daily limit (or `Retry-After` > 120s)
+  raises `GroqDailyLimitReached`; `run_pipeline` PAUSES with `paused`,
+  `pause_reason="daily"`, `pause_message`, `pause_reset_seconds`. `/status` shows
+  `Paused: Groq daily limit reached, resets in about Xh`. Per-UTC-day tokens are
+  recorded in the `llm_usage` table (`add_llm_tokens` / `tokens_used_today`).
+- Find-jobs guard (PR #31): `/find` refuses to start and renders
+  `Groq daily limit reached, resets in about Xh` when today's tokens are >= 90% of
+  `max_llm_tokens_per_day`, or a daily-limit pause is still in effect.
 
-## More limitations
-Adzuna has no keys; Greenhouse/Lever/Ashby were unreachable from the sandbox; verifier is the same provider family as the evaluator.
+## Model verification (DONE)
+
+- Live `GET https://api.groq.com/openai/v1/models` returns **403 (Cloudflare) unless a
+  `User-Agent` header is sent**; with `User-Agent: atlas/1.0` it returns 200.
+- Configured ids verified present live: extractor `openai/gpt-oss-120b`,
+  evaluator `openai/gpt-oss-120b`, verifier `qwen/qwen3.8-27b`.
+- Full live list (11): `allam-2-7b`, `canopylabs/orpheus-arabic-saudi`,
+  `canopylabs/orpheus-v1-english`, `meta-llama/llama-prompt-guard-2-22m`,
+  `meta-llama/llama-prompt-guard-2-86m`, `openai/gpt-oss-120b`,
+  `openai/gpt-oss-20b`, `openai/gpt-oss-safeguard-20b`, `qwen/qwen3.8-27b`,
+  `whisper-large-v3`, `whisper-large-v3-turbo`.
+
+## Task D: YC jobs source (PENDING owner decision)
+
+The agent must not close this; the owner decides. Evidence follows, verbatim.
+
+### robots.txt
+
+URL: `https://www.ycombinator.com/robots.txt`
+
+```
+User-Agent: *
+Disallow: /verify/*
+Disallow: /library?categories=*&*
+Allow: /library?categories=*
+Disallow: /library?*
+Disallow: /companies?*
+Allow: /
+
+User-Agent: facebookexternalhit
+Allow: /verify/*
+
+User-Agent: Twitterbot
+Allow: /verify/*
+
+User-Agent: LinkedInBot
+Allow: /verify/*
+```
+
+URL: `https://www.workatastartup.com/robots.txt`
+
+```
+User-Agent: *
+Disallow:
+```
+
+### Terms of service
+
+URL: `https://www.ycombinator.com/legal#tou` (Y Combinator Terms of Use; the "Site"
+is defined as "the Y Combinator website (including all subdomains)"). Lines relied on:
+
+> "obtain or attempt to access or otherwise obtain any materials or information
+> through any means not intentionally made available or provided for through the Site."
+
+> "**Commercial Use**: Unless otherwise expressly authorized herein or in the Site, you
+> agree not to display, distribute, license, perform, publish, reproduce, duplicate,
+> copy, create derivative works from, modify, sell, resell, exploit, transfer or upload
+> for any commercial purposes, any portion of the Site, use of the Site, or access to
+> the Site."
+
+> "you agree not to modify, copy, frame, **scrape**, rent, lease, loan, sell, distribute
+> or create derivative works based on the Site or the Site Content, in whole or in part
+> ... In connection with your use of the Site you will not engage in or use any
+> **data mining, robots, scraping or similar data gathering or extraction methods**. If
+> you are blocked by Y Combinator from accessing the Site (including by blocking your IP
+> address), you agree not to implement any measures to circumvent such blocking (e.g.,
+> by masking your IP address or using a proxy IP address). Any use of the Site or the
+> Site Content other than as specifically authorized herein is strictly prohibited."
+
+URL: `https://www.workatastartup.com/terms` (Work at a Startup "Job Seeker User
+Agreement"; the page's "Terms of Use" link points to
+`https://www.ycombinator.com/legal/#tou`). Lines relied on:
+
+> "You will not misuse Work at a Startup access for unauthorized commercial purposes or
+> for your own gain."
+
+> "This Job Seeker User Agreement is incorporated into and part of YC's Terms of Use."
+
+Status: **PENDING owner decision — not closed by the agent.** Finding: robots.txt is
+permissive for both hosts (`/jobs` is not disallowed on YC; WaaS allows all), but the
+applicable Terms of Service explicitly prohibit scraping / data mining / robots and
+commercial reproduction, so automated reading of the public jobs pages is **not
+permitted by the ToS**.
+
+## Planned and not built
+
+Nothing below is implemented. Each needs the owner's go-ahead.
+
+- **(a) Tailored resume builder.** Rewrites and reorders content drawn only from the
+  approved profile; every generated line must trace back to a profile fact. Plain
+  single-column, ATS-friendly PDF/DOCX output. JD wording is used only for skills the
+  owner genuinely has. Produces a diff against the base resume; the owner approves
+  before any use. No auto-submission.
+- **(b) "Add a job" dashboard page.** Owner pastes a JD's text and link; it is evaluated
+  through the same pipeline with `source = "owner_added"`. The URL is **never fetched**.
+- **(c) YC jobs source.** Blocked pending the owner's decision on the Task D ToS report
+  above.
+- **(d) Phase 8b assisted / auto apply.** Blocked until every gate is GO and the owner
+  explicitly says so.
+- **(e) Groq tier decision.** Decide between the paid Developer tier and staying on the
+  ~200K tokens-per-day free limit.
+
+## Owner-only
+
+These cannot be done by the agent and are not marked PASS on the agent's own authority.
+
+1. Label **40 real JDs** (>= 15 traps, >= 10 apply) from `eval/labeling_pool.jsonl` into
+   `eval/labels.jsonl` and run `atlas label-check` (feeds G5 / DEC6). The agent must not
+   create, edit, or relabel `eval/labels.jsonl`.
+2. Rotate **ALL** keys (Groq, Gemini, Resend, Braintrust) and confirm (G1).
+3. Run `mutmut` under WSL/Linux (G2 / T5).
+4. Authorize the live `python -m atlas.cli eval --with-llm` run (G6, spend).
+5. Sign off `review_sample.md` (G11).
+6. One complete browser run: upload -> approve -> Find jobs to completion, with
+   screenshots.
 
 ## How to run
-Entry point is `python -m atlas.cli`. Global flags: `-h/--help`, `--version`.
-Verified against `python -m atlas.cli --help` on 2026-10-05; all 12 commands below match the real parser.
 
-Commands and their flags (from `python -m atlas.cli --help` and per-command `--help`):
-- `profile [--resume RESUME] [--describe DESCRIBE] [--describe-file DESCRIBE_FILE] [--out OUT] [--yes]`
-- `review [--yes] [path]`
-- `status`
-- `run [--collect] [--limit LIMIT]`
-- `decide [--limit LIMIT]`
-- `explain job_id`
-- `label-check [--labels LABELS] [--pool POOL]`
-- `schedule [--hour HOUR] [--no-collect] [--limit LIMIT] [--no-immediate]`
-- `collect`
-- `eval [--golden GOLDEN] [--with-llm]`
-- `selfcheck [--fast] [--full] [--report REPORT]`
-- `feedback [--reason {too_senior,wrong_stack,bad_company,wrong_location,other,good_fit}] [--note NOTE] [--export] [job_id] [{good,bad}]`
-- `dashboard [--host HOST] [--port PORT]` (also `uvicorn app:app` for local; Procfile guards non-loopback with DASHBOARD_PASSWORD)
+Entry point is `python -m atlas.cli`. Commands:
+`profile`, `review`, `status`, `run [--collect] [--limit]`, `decide [--limit]`,
+`explain job_id`, `label-check [--labels] [--pool]`, `schedule`, `collect`,
+`eval [--golden] [--with-llm]`, `selfcheck [--fast] [--full] [--report]`,
+`feedback`, `dashboard [--host] [--port]`.
 
-Gates:
+Gates (before any commit):
+
 ```
 python -m pytest -q
 ruff check atlas tests
 black --check atlas tests
 mypy atlas
 python -m atlas.cli selfcheck --fast
-python -m atlas.cli selfcheck --full
-python -m atlas.cli eval
-python -m atlas.cli label-check
 ```
 
-## Process lessons
-Agent summaries were wrong several times (invented test counts, a commit holding only a temp file, placeholder output, edits reported but not saved). Verify every claim with raw command output in your own terminal.
+Additional: `python -m atlas.cli selfcheck --full`, `python -m atlas.cli eval`,
+`python -m atlas.cli label-check`.
 
-## Next actions
-1. Owner labels >=40 JDs from eval/labeling_pool.jsonl into eval/labels.jsonl, runs label-check.
-2. Owner confirms API-key rotation.
-3. Owner runs mutmut under WSL/Linux (T5).
-4. Re-run selfcheck --full and the preflight.
-5. Only if verdict is GO, plan PR B (apply layer).
-6. Verify Groq model ids via the live /models API on a real network.
+## Limitations
+
+- Golden set is synthetic (20 cases); the staged 70-JD pool is unlabelled, so every
+  percentage is a smoke-test figure, not real accuracy. Precision@10 and seniority
+  false-positive rate against real data are BLOCKED by G5.
+- Source coverage gap: the staged pool is RemoteOK + Remotive only; Adzuna has no keys
+  and Greenhouse/Lever/Ashby were unreachable from the sandbox.
+- Verifier is a different model but the same provider family (Groq), not fully
+  independent.
+- `--fast` replaces LLM calls with fixtures; `--full` does not make live LLM calls, so
+  live-LLM determinism is unverified.
+- Mutation coverage unknown (T5 blocked).
+
+## Owner decisions (standing)
+
+- Fresher profile: ~3 months internship; experience tolerance 1 year.
+- Interface: CLI + scheduled run PLUS web dashboard (email delivery cancelled).
+- auto_applications/ bots disabled, kept for Phase 8.
+- Merge workflow: always create a PR and merge it once CI is green; never wait for
+  owner approval to merge; normal merge, admin bypass only if branch protection needs
+  a review the author cannot self-provide.
+- Sources: existing feeds + Adzuna + Greenhouse/Lever/Ashby; second Groq model as
+  verifier.
 
 ## Starting a new session
+
 1. Read AGENTS.md, PRD.md, and this HANDOFF.md.
 2. Run `git log --oneline -10` and `git status -sb`.
-3. Report whether those two match what HANDOFF.md claims *before* changing anything.
-4. If they disagree, say so and stop; do not assume HANDOFF.md is the correct one.
+3. Confirm they match this file before changing anything; if they disagree, say so and
+   stop.
