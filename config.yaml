@@ -42,6 +42,9 @@ run:
   # Hard cap on tokens (prompt + completion) in one run; the run stops cleanly
   # at it so a single run cannot exhaust Groq's daily budget.
   max_llm_tokens_per_run: 120000
+  # Approximate Groq free-tier daily token budget. Once 90% of it is spent,
+  # "Find jobs" refuses to start until the daily quota resets.
+  max_llm_tokens_per_day: 200000
 
 models:
   extractor: "openai/gpt-oss-120b"

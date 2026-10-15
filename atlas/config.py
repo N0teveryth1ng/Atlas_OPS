@@ -165,6 +165,9 @@ class RunConfig(BaseModel):
     #: Hard cap on tokens (prompt + completion) one run may spend, counted from
     #: the usage each response reports. The run stops cleanly at it.
     max_llm_tokens_per_run: int = 120000
+    #: Approximate Groq daily token budget (free tier TPD). Once today's tracked
+    #: usage reaches 90% of this, "Find jobs" refuses to start until it resets.
+    max_llm_tokens_per_day: int = 200000
 
 
 class Secrets(BaseModel):
