@@ -21,7 +21,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -251,6 +251,59 @@ def _db_counts(database: Path | None) -> dict[str, int]:
         }
     finally:
         conn.close()
+
+
+def _reset_hours_from_midnight(now: datetime) -> float:
+    """Hours until the next UTC midnight, when Groq's daily quota resets."""
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return ((midnight + timedelta(days=1)) - now).total_seconds() / 3600.0
+
+
+def groq_daily_limit_message(
+    database: Path | None = None, *, now: datetime | None = None
+) -> str | None:
+    """Why "Find jobs" must refuse to start now, or ``None`` when it may proceed.
+
+    Two triggers: today's tracked token usage has reached 90% of the configured
+    daily budget, or the most recent run paused on Groq's daily limit and its
+    reset window has not elapsed yet.
+    """
+    now = now or datetime.now(UTC)
+    limit = get_settings().run.max_llm_tokens_per_day
+    try:
+        conn = _open(database)
+    except sqlite3.Error:
+        return None
+    try:
+        used = tokens_used_today(conn)
+        row = latest_run(conn)
+    finally:
+        conn.close()
+
+    hours = _reset_hours_from_midnight(now)
+    if limit > 0 and used >= 0.9 * limit:
+        return f"Groq daily limit reached, resets in about {hours:.1f}h"
+
+    if row is not None and row["status"] == "paused":
+        summary = _load_json(row["summary_json"])
+        if summary.get("pause_reason") == "daily":
+            reset_seconds = summary.get("pause_reset_seconds")
+            finished = row["finished_at"]
+            if reset_seconds and finished:
+                try:
+                    finished_at = datetime.fromisoformat(str(finished))
+                except ValueError:
+                    finished_at = None
+                if finished_at is not None:
+                    remaining = (
+                        finished_at + timedelta(seconds=float(reset_seconds)) - now
+                    ).total_seconds() / 3600.0
+                    if remaining > 0:
+                        return f"Groq daily limit reached, resets in about {remaining:.1f}h"
+                    return None
+            # A daily pause with no known reset window is treated as still active.
+            return f"Groq daily limit reached, resets in about {hours:.1f}h"
+    return None
 
 
 def _run_pipeline_worker(database: Path | None = None) -> None:
@@ -1336,6 +1389,20 @@ def create_app(
         denied = require_auth(request)
         if denied:
             return denied
+        blocked = groq_daily_limit_message(database)
+        if blocked is not None:
+            # Do not start a run that would only hit the same wall: show the
+            # reason and let the owner retry after the quota resets.
+            logger.warning("find refused: %s", blocked)
+            body = (
+                _HEAD
+                + _nav()
+                + "<h1>Find jobs</h1>\n"
+                + f'<p class="warn">{html.escape(blocked)}</p>\n'
+                + '<p><a href="/status">Back to status</a></p>\n'
+                + _TABLE_FOOT
+            )
+            return HTMLResponse(body)
         start_pipeline(database)
         return RedirectResponse(url="/status", status_code=303)
 

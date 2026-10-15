@@ -14,6 +14,7 @@ from atlas.dashboard import create_app
 from atlas.db import (
     add_llm_tokens,
     connect,
+    finish_run,
     get_latest_profile,
     init_db,
     log_stage,
@@ -561,3 +562,100 @@ def test_status_shows_tokens_used_today(tmp_path):
 
     assert "Tokens used today" in text
     assert "12,345" in text
+
+
+def _seed_paused_run(conn, *, reason="daily", reset_seconds=3600.0, finished=None):
+    run_id = start_run(conn, "run")
+    finish_run(
+        conn,
+        run_id,
+        "paused",
+        summary={
+            "stage": "paused",
+            "result": "paused",
+            "pause_reason": reason,
+            "pause_message": "Paused: Groq daily limit reached, resets in about 1.0h",
+            "pause_reset_seconds": reset_seconds,
+        },
+    )
+    if finished is not None:
+        conn.execute("UPDATE runs SET finished_at = ? WHERE id = ?", (finished, run_id))
+        conn.commit()
+    return run_id
+
+
+def _daily_limit() -> int:
+    from atlas.config import get_settings
+
+    return get_settings().run.max_llm_tokens_per_day
+
+
+def test_groq_daily_limit_message_none_when_under_threshold(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    add_llm_tokens(conn, 1000)
+    conn.close()
+
+    assert dash.groq_daily_limit_message(db) is None
+
+
+def test_groq_daily_limit_message_when_tokens_reach_90_percent(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    add_llm_tokens(conn, int(_daily_limit() * 0.9))
+    conn.close()
+
+    message = dash.groq_daily_limit_message(db)
+    assert message is not None
+    assert message.startswith("Groq daily limit reached, resets in about ")
+    assert message.endswith("h")
+
+
+def test_groq_daily_limit_message_when_pause_still_in_effect(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    _seed_paused_run(conn)
+    conn.close()
+
+    message = dash.groq_daily_limit_message(db)
+    assert message is not None
+    assert "resets in about" in message
+
+
+def test_groq_daily_limit_message_clears_after_pause_window(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    past = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+    _seed_paused_run(conn, reset_seconds=3600.0, finished=past)
+    conn.close()
+
+    assert dash.groq_daily_limit_message(db) is None
+
+
+def test_groq_daily_limit_message_ignores_non_daily_pause(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    _seed_paused_run(conn, reason="tokens")
+    conn.close()
+
+    assert dash.groq_daily_limit_message(db) is None
+
+
+def test_find_refuses_when_daily_limit_reached(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = connect(db)
+    init_db(conn)
+    add_llm_tokens(conn, _daily_limit())
+    conn.close()
+
+    with _with_status(running=False, stage="idle", recovered_run_id=None):
+        response = TestClient(create_app(db)).post("/find")
+
+    assert response.status_code == 200
+    assert "Groq daily limit reached, resets in about" in response.text
+    assert dash._pipeline_status["running"] is False
