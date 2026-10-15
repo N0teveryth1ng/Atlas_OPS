@@ -172,7 +172,7 @@ class LLMClient:
 
             if not api_key:
                 raise LLMError("GROQ_API_KEY is not set. Add it to .env before running LLM calls.")
-            self._client = cast(_GroqLike, Groq(api_key=api_key))
+            self._client = cast(_GroqLike, Groq(api_key=api_key, max_retries=0))
 
     # -- transport -------------------------------------------------------- #
 
@@ -338,14 +338,25 @@ class LLMClient:
                         f"Paused: Groq daily limit reached, resets in about {hours}",
                         reset_seconds=parsed_retry,
                     )
+                try:
+                    headers = (
+                        self._response_headers(getattr(last_exc, "response", None))
+                        if last_exc
+                        else None
+                    )
+                    xremain = headers.get("x-ratelimit-remaining-tokens") if headers else None
+                except Exception as exc_hdr:  # noqa: BLE001
+                    logger.debug("failed to extract rl headers from last exception: %s", exc_hdr)
+                    xremain = None
                 logger.info(
-                    "LLM retry %s/%s status=%s retry_after=%s model=%s call_type=%s",
+                    "LLM retry %s/%s status=%s retry_after=%s model=%s call_type=%s x-rl-remaining-tokens=%s",
                     attempt,
                     self.max_api_retries,
                     effective_status or "unknown",
                     retry_after or "-",
                     model,
                     schema_name or "-",
+                    xremain or "-",
                 )
                 if attempt < self.max_api_retries:
                     sleep = parsed_retry if parsed_retry is not None else 2 ** (attempt - 1)

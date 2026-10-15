@@ -559,6 +559,9 @@ def process_single_job(
     profile: CandidateProfile,
     settings: Settings,
     client: LLMClient,
+    *,
+    on_step: Callable[[str], None] | None = None,
+    on_wait: Callable[[float, str], None] | None = None,
 ) -> ProcessedJob:
     """Run every pipeline stage for one job under the per-run caps.
 
@@ -578,8 +581,10 @@ def process_single_job(
             settings.run.max_llm_tokens_per_run,
         ),
     )
+    if on_wait is not None and hasattr(budgeted, "on_wait"):
+        budgeted.on_wait = on_wait
     try:
-        return process_job(budgeted, job_id, job, profile, settings, conn=conn)
+        return process_job(budgeted, job_id, job, profile, settings, conn=conn, on_step=on_step)
     finally:
         delta = budgeted.tokens_used - start_tokens
         if delta > 0:
