@@ -37,9 +37,43 @@ class LLMError(RuntimeError):
     """Raised when a structured call cannot produce a valid object."""
 
 
+class GroqDailyLimitReached(LLMError):
+    """Raised when Groq reports the *daily* quota is spent.
+
+    Distinct from a short per-minute throttle: sleeping will not help inside this
+    run, so the caller stops cleanly and leaves the remaining jobs pending.
+    """
+
+    def __init__(self, message: str, reset_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.reset_seconds = reset_seconds
+
+
 def _looks_like_json_mode_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "response_format" in text or "json_object" in text or "json mode" in text
+
+
+def _looks_like_daily_limit(text: str) -> bool:
+    """True when an error body names a per-day quota rather than a per-minute one."""
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "tokens per day",
+            "requests per day",
+            "per day",
+            "tpd",
+            "rpd",
+            "daily limit",
+            "daily quota",
+        )
+    )
+
+
+#: A 429 with a Retry-After longer than this is treated as a spent daily quota
+#: (per-minute windows reset in well under a minute), never as a short throttle.
+DAILY_LIMIT_RETRY_AFTER_SECONDS = 120.0
 
 
 _DURATION_RE = re.compile(r"(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?")
@@ -125,6 +159,10 @@ class LLMClient:
         self._remaining_tokens: int | None = None
         self._limit_tokens: int | None = None
         self._tokens_reset: float = 0.0
+        # Cumulative tokens (prompt + completion) the provider reported for every
+        # successful response this client has made. The pipeline reads this to
+        # enforce the per-run token cap and to record usage for the day.
+        self.tokens_used: int = 0
 
         self._client: _GroqLike
         if client is not None:
@@ -138,8 +176,7 @@ class LLMClient:
 
     # -- transport -------------------------------------------------------- #
 
-    @staticmethod
-    def _record_usage(response: Any, usage: dict[str, int]) -> None:
+    def _record_usage(self, response: Any, usage: dict[str, int]) -> None:
         """Accumulate token counts from ``response.usage`` into ``usage``.
 
         ``getattr`` rather than attribute access: a test fake is free to return a
@@ -153,6 +190,17 @@ class LLMClient:
             value = getattr(reported, key, None)
             if isinstance(value, int) and not isinstance(value, bool):
                 usage[key] = usage.get(key, 0) + value
+        # The instance counter is cumulative across every response this client has
+        # seen (all logical calls and every retry inside them). Add only this
+        # response's own total so nothing is double-counted.
+        total = getattr(reported, "total_tokens", None)
+        if isinstance(total, int) and not isinstance(total, bool):
+            self.tokens_used += total
+            return
+        prompt = getattr(reported, "prompt_tokens", None)
+        completion = getattr(reported, "completion_tokens", None)
+        if isinstance(prompt, int) and isinstance(completion, int):
+            self.tokens_used += prompt + completion
 
     @staticmethod
     def _response_headers(response: Any) -> Any:
@@ -273,6 +321,23 @@ class LLMClient:
                 effective_status = status_code or (
                     "429" if "rate limit" in exc_text or "429" in exc_text else None
                 )
+                parsed_retry = _retry_after_seconds(retry_after)
+                # A long Retry-After or an explicit per-day message means the daily
+                # quota is spent: sleeping cannot help inside this run, so stop now
+                # and let the caller keep the remaining jobs pending.
+                if _looks_like_daily_limit(exc_text) or (
+                    parsed_retry is not None and parsed_retry > DAILY_LIMIT_RETRY_AFTER_SECONDS
+                ):
+                    hours = f"{parsed_retry / 3600:.1f}h" if parsed_retry else "a while"
+                    logger.warning(
+                        "Groq daily limit reached; stopping run (status=%s retry_after=%s)",
+                        effective_status or "unknown",
+                        retry_after or "-",
+                    )
+                    raise GroqDailyLimitReached(
+                        f"Paused: Groq daily limit reached, resets in about {hours}",
+                        reset_seconds=parsed_retry,
+                    )
                 logger.info(
                     "LLM retry %s/%s status=%s retry_after=%s model=%s call_type=%s",
                     attempt,
@@ -283,7 +348,6 @@ class LLMClient:
                     schema_name or "-",
                 )
                 if attempt < self.max_api_retries:
-                    parsed_retry = _retry_after_seconds(retry_after)
                     sleep = parsed_retry if parsed_retry is not None else 2 ** (attempt - 1)
                     capped = min(sleep, 60.0)
                     if str(effective_status) == "429" or parsed_retry is not None:

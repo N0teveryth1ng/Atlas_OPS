@@ -135,6 +135,53 @@ def test_run_persists_progress_into_run_summary(tmp_path, monkeypatch):
     assert summary["digest"]["processed"] == 1
 
 
+def test_run_marks_summary_paused_when_the_llm_pauses(tmp_path, monkeypatch):
+    dbfile = tmp_path / "t.db"
+    setup = connect(dbfile)
+    init_db(setup)
+    save_profile(setup, CandidateProfile(full_name="A", target_roles=["Backend"], approved=True))
+    setup.close()
+
+    result = SourcingResult(source_yields=[], persisted_job_sources={})
+
+    def _pausing_pipeline(*args, **kwargs):
+        on_progress = kwargs.get("on_progress")
+        if on_progress is not None:
+            on_progress(
+                {
+                    "total": 3,
+                    "done": 2,
+                    "paused": True,
+                    "pause_reason": "daily",
+                    "pause_message": "Paused: Groq daily limit reached, resets in about 1.0h",
+                    "pause_reset_seconds": 3600.0,
+                    "tokens_used": 5000,
+                }
+            )
+        return []
+
+    monkeypatch.setattr(cli, "connect", lambda *args, **kwargs: connect(dbfile))
+    monkeypatch.setattr(cli, "_make_client", lambda: object())
+    monkeypatch.setattr(sourcing, "run_sourcing", lambda *args, **kwargs: result)
+    monkeypatch.setattr(pipeline, "run_pipeline", _pausing_pipeline)
+
+    args = Namespace(collect=True, limit=None, email=False)
+    rc = cli._execute_run(args, run_kind="run")
+    assert rc == 0
+
+    conn = connect(dbfile)
+    row = conn.execute("SELECT status, summary_json FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+
+    assert row["status"] == "paused"
+    summary = json.loads(row["summary_json"])
+    assert summary["stage"] == "paused"
+    assert summary["result"] == "paused"
+    assert summary["paused"] is True
+    assert summary["pause_reason"] == "daily"
+    assert "daily limit" in summary["pause_message"]
+
+
 def test_explain_shows_filter_checks(tmp_path, monkeypatch, capsys):
     dbfile = tmp_path / "t.db"
     conn = connect(dbfile)

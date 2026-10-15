@@ -166,11 +166,20 @@ CREATE TABLE IF NOT EXISTS job_events (
     created_at TEXT NOT NULL,
     data_json  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS llm_usage (
+    day    TEXT PRIMARY KEY,
+    tokens INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _today() -> str:
+    return datetime.now(UTC).date().isoformat()
 
 
 def db_path() -> Path:
@@ -489,6 +498,27 @@ def log_job_event(
     )
     conn.commit()
     return int(cur.lastrowid or 0)
+
+
+def add_llm_tokens(conn: sqlite3.Connection, tokens: int, *, day: str | None = None) -> int:
+    """Add ``tokens`` to today's (or ``day``'s) running LLM token total.
+
+    Returns the new total for the day. A non-positive ``tokens`` is a no-op that
+    still returns the stored total, so callers can flush deltas lazily.
+    """
+    key = day or _today()
+    conn.execute("INSERT OR IGNORE INTO llm_usage (day, tokens) VALUES (?, 0)", (key,))
+    if tokens > 0:
+        conn.execute("UPDATE llm_usage SET tokens = tokens + ? WHERE day = ?", (tokens, key))
+    conn.commit()
+    row = conn.execute("SELECT tokens FROM llm_usage WHERE day = ?", (key,)).fetchone()
+    return int(row["tokens"]) if row is not None else 0
+
+
+def tokens_used_today(conn: sqlite3.Connection, *, day: str | None = None) -> int:
+    """Tokens Groq reported today, or 0 when nothing has been recorded yet."""
+    row = conn.execute("SELECT tokens FROM llm_usage WHERE day = ?", (day or _today(),)).fetchone()
+    return int(row["tokens"]) if row is not None else 0
 
 
 def reopen_job_for_refilter(conn: sqlite3.Connection, job_id: int, *, reason: str) -> JobStatus:

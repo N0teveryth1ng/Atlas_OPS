@@ -307,6 +307,13 @@ def _execute_run(
             source_errors=dict(sourcing_result.source_errors),
         )
 
+    last_progress: dict[str, Any] = {}
+
+    def _on_progress(progress: dict[str, Any]) -> None:
+        last_progress.clear()
+        last_progress.update(progress)
+        emit("processing", **progress)
+
     results = run_pipeline(
         conn,
         run_id,
@@ -315,8 +322,24 @@ def _execute_run(
         client,
         limit=getattr(args, "limit", None),
         resume=True,
-        on_progress=lambda progress: emit("processing", **progress),
+        on_progress=_on_progress,
     )
+    if last_progress.get("paused"):
+        # Groq's daily quota is spent (or the run hit its token cap): stop cleanly,
+        # leave the remaining jobs undecided so the next run resumes them, and
+        # record the reason in the run summary for /status.
+        message = str(last_progress.get("pause_message") or "Paused")
+        run_summary["stage"] = "paused"
+        run_summary["result"] = "paused"
+        run_summary["paused"] = True
+        run_summary["pause_reason"] = last_progress.get("pause_reason")
+        run_summary["pause_message"] = message
+        run_summary["pause_reset_seconds"] = last_progress.get("pause_reset_seconds")
+        run_summary["tokens_used"] = last_progress.get("tokens_used")
+        print(message)
+        finish_run(conn, run_id, "paused", summary=run_summary)
+        conn.close()
+        return 0
     from .job_status import InvariantViolation, JobStatus, assert_sent_subset
 
     needs_review = [r for r in results if r.status == JobStatus.needs_review]

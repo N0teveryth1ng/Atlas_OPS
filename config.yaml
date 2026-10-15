@@ -36,9 +36,12 @@ filters:
 run:
   # Jobs actually processed per run: the cap counts only jobs that survive the
   # cheap, LLM-free gate, most recent first.
-  max_jobs_per_run: 25
+  max_jobs_per_run: 12
   # Hard cap on logical LLM stage calls in one run; the run stops cleanly at it.
   max_llm_calls_per_run: 100
+  # Hard cap on tokens (prompt + completion) in one run; the run stops cleanly
+  # at it so a single run cannot exhaust Groq's daily budget.
+  max_llm_tokens_per_run: 120000
 
 models:
   extractor: "openai/gpt-oss-120b"

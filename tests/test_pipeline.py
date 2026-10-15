@@ -15,12 +15,14 @@ from atlas.db import (
     save_profile,
     set_job_status,
     start_run,
+    tokens_used_today,
     upsert_job,
 )
 from atlas.job_status import IllegalTransition, JobStatus, reopen_for_refilter, reset_for_retry
 from atlas.pipeline import (
     RESUMABLE_STATUSES,
     LLMCallBudgetExceeded,
+    LLMTokenBudgetExceeded,
     _BudgetedClient,
     load_jobs,
     process_job,
@@ -582,4 +584,107 @@ def test_run_pipeline_clears_live_fields_when_finished(tmp_path, monkeypatch):
     assert last["current_job_title"] is None
     assert last["current_step"] is None
     assert last["done"] == last["total"]
+    conn.close()
+
+
+class _DailyLimitResponse:
+    status_code = 429
+    headers: ClassVar[dict[str, str]] = {"retry-after": "3600"}
+
+
+class _DailyLimitError(Exception):
+    def __init__(self) -> None:
+        super().__init__("429 Too Many Requests")
+        self.response = _DailyLimitResponse()
+
+
+def _two_jobs(conn, run_id, job):
+    for i in range(2):
+        upsert_job(
+            conn,
+            run_id,
+            job.model_copy(update={"url": f"http://x/{i}", "dedupe_key": f"k{i}"}),
+        )
+
+
+def test_run_pipeline_pauses_on_daily_limit_and_leaves_jobs_pending(tmp_path, monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    _two_jobs(conn, run_id, job)
+    client = make_client(
+        parsed=PARSED, verdict=EVAL, verifier=VERIFY_OK, first_error=_DailyLimitError()
+    )
+
+    snapshots: list[dict] = []
+    results = run_pipeline(
+        conn, run_id, profile, get_settings(), client, on_progress=snapshots.append
+    )
+
+    paused = [snap for snap in snapshots if snap.get("paused")]
+    assert paused, "expected a paused progress snapshot"
+    assert paused[-1]["pause_reason"] == "daily"
+    assert "daily limit" in str(paused[-1]["pause_message"]).lower()
+    assert paused[-1]["pause_reset_seconds"] == 3600.0
+    # Nothing was decided, and every job is still resumable — none is failed/rejected.
+    assert results == []
+    statuses = [
+        get_job_status(conn, row["id"]) for row in conn.execute("SELECT id FROM jobs ORDER BY id")
+    ]
+    assert all(status in RESUMABLE_STATUSES for status in statuses)
+    conn.close()
+
+
+class _BurningClient:
+    """Delegate payloads to a real fake client while burning tokens per call."""
+
+    def __init__(self, inner, per_call: int) -> None:
+        self._inner = inner
+        self._per_call = per_call
+        self.tokens_used = 0
+        self.on_wait = None
+
+    def call_json(self, *args, **kwargs):
+        result = self._inner.call_json(*args, **kwargs)
+        self.tokens_used += self._per_call
+        return result
+
+
+def test_budgeted_client_refuses_to_exceed_token_cap():
+    inner = _BurningClient(_client(), per_call=600)
+    inner.tokens_used = 1200
+    wrapped = _BudgetedClient(inner, max_calls=None, max_tokens=1000)
+    with pytest.raises(LLMTokenBudgetExceeded):
+        wrapped.call_json(schema=ParsedJD, system="structured requirements", user="x")
+
+
+def test_run_pipeline_pauses_on_token_cap_and_records_usage(tmp_path, monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    conn, run_id, profile, _job_id, job = _setup(tmp_path)
+    _two_jobs(conn, run_id, job)
+    client = _BurningClient(_client(), per_call=900)
+    settings = get_settings().model_copy(deep=True)
+    settings.run.max_llm_tokens_per_run = 1000
+
+    snapshots: list[dict] = []
+    run_pipeline(conn, run_id, profile, settings, client, on_progress=snapshots.append)
+
+    paused = [snap for snap in snapshots if snap.get("paused")]
+    assert paused, "expected a paused progress snapshot"
+    assert paused[-1]["pause_reason"] == "tokens"
+    assert "token cap" in str(paused[-1]["pause_message"]).lower()
+    assert paused[-1]["tokens_cap"] == 1000
+    # Tokens burned are persisted against today's Groq budget.
+    assert tokens_used_today(conn) > 0
+    conn.close()
+
+
+def test_run_pipeline_records_tokens_used_today(tmp_path, monkeypatch):
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda *_: None)
+    conn, run_id, profile, _job_id, _job = _setup(tmp_path)
+    client = _BurningClient(_client(), per_call=250)
+
+    run_pipeline(conn, run_id, profile, get_settings(), client)
+
+    assert client.tokens_used > 0
+    assert tokens_used_today(conn) == client.tokens_used
     conn.close()
