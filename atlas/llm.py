@@ -163,6 +163,10 @@ class LLMClient:
         # successful response this client has made. The pipeline reads this to
         # enforce the per-run token cap and to record usage for the day.
         self.tokens_used: int = 0
+        # Number of logical ``call_json`` invocations (parse/evaluate/verify/...),
+        # not transport retries. The dashboard's add-progress page reads this to
+        # show how many LLM calls a job has cost so far.
+        self.calls: int = 0
 
         self._client: _GroqLike
         if client is not None:
@@ -380,6 +384,7 @@ class LLMClient:
         """Call the model and validate the reply into ``schema``."""
         model = model or self.default_model
         temperature = self.temperature if temperature is None else temperature
+        self.calls += 1
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
