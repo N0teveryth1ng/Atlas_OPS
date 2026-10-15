@@ -552,6 +552,40 @@ def process_job(
     return result
 
 
+def process_single_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    job: Job,
+    profile: CandidateProfile,
+    settings: Settings,
+    client: LLMClient,
+) -> ProcessedJob:
+    """Run every pipeline stage for one job under the per-run caps.
+
+    The dashboard's "Add a job" page uses this so a pasted job goes through the
+    exact same stages a collected job does (cheap filters -> parse -> skill match
+    -> evaluate -> verify -> decide) and respects ``max_llm_calls_per_run`` and
+    ``max_llm_tokens_per_run``. Tokens spent are recorded against today's budget
+    in a ``finally`` block, so a pause mid-job still counts what it used. A daily
+    quota pause or a cap breach propagates to the caller, which shows the reason.
+    """
+    start_tokens = int(getattr(client, "tokens_used", 0) or 0)
+    budgeted = cast(
+        LLMClient,
+        _BudgetedClient(
+            client,
+            settings.run.max_llm_calls_per_run,
+            settings.run.max_llm_tokens_per_run,
+        ),
+    )
+    try:
+        return process_job(budgeted, job_id, job, profile, settings, conn=conn)
+    finally:
+        delta = budgeted.tokens_used - start_tokens
+        if delta > 0:
+            add_llm_tokens(conn, delta)
+
+
 def run_pipeline(
     conn: sqlite3.Connection,
     run_id: int,

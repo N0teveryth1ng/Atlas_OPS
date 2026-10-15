@@ -2,7 +2,7 @@
 
 ## State (verified 2026-10-15)
 
-- `main` @ `11a408b`, in sync with `origin/main` (`## main...origin/main`).
+- Code state as of PR #31 (`11a408b`), in sync with `origin/main` (`## main...origin/main`).
 - This state is the cumulative result of PRs **#24 to #31** (SHA range `8abeaa1..11a408b`).
 - Tests: **1100 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
@@ -96,12 +96,15 @@ kind, #23 non-job-listing filter.
   `openai/gpt-oss-20b`, `openai/gpt-oss-safeguard-20b`, `qwen/qwen3.8-27b`,
   `whisper-large-v3`, `whisper-large-v3-turbo`.
 
-## Task D: YC jobs source (PENDING owner decision)
+## Task D: YC jobs source
 
-The agent must not close this; the owner decides. Evidence follows, verbatim.
+**Status: CLOSED by owner, ToS prohibits automated reading.**
 
-### robots.txt
+The agent must not build a YC collector. The owner decided to close Task D because the applicable Terms of Service prohibit scraping / data mining / robots and commercial reproduction of the public jobs pages.
 
+### Evidence cited (exact lines, verbatim)
+
+#### robots.txt
 URL: `https://www.ycombinator.com/robots.txt`
 
 ```
@@ -130,8 +133,7 @@ User-Agent: *
 Disallow:
 ```
 
-### Terms of service
-
+#### Terms of service
 URL: `https://www.ycombinator.com/legal#tou` (Y Combinator Terms of Use; the "Site"
 is defined as "the Y Combinator website (including all subdomains)"). Lines relied on:
 
@@ -162,11 +164,12 @@ Agreement"; the page's "Terms of Use" link points to
 
 > "This Job Seeker User Agreement is incorporated into and part of YC's Terms of Use."
 
-Status: **PENDING owner decision — not closed by the agent.** Finding: robots.txt is
-permissive for both hosts (`/jobs` is not disallowed on YC; WaaS allows all), but the
-applicable Terms of Service explicitly prohibit scraping / data mining / robots and
-commercial reproduction, so automated reading of the public jobs pages is **not
-permitted by the ToS**.
+**Finding:** robots.txt is permissive for both hosts (`/jobs` is not disallowed on YC; WaaS allows all), but the applicable Terms of Service explicitly prohibit scraping / data mining / robots and commercial reproduction, so automated reading of the public jobs pages is **not permitted by the ToS**.
+
+### Alternatives (not built)
+- **Add a job** (dashboard page): owner pastes JD text and link; never fetched (`source = "owner_added"`).
+- **Company ATS pages in `companies.yaml`**: ingest from official job postings at known company ATS URLs if permitted by those terms (separate from scraping YC/WaaS lists).
+- **Owner browsing**: owner manually adds relevant jobs.
 
 ## Planned and not built
 
@@ -179,8 +182,8 @@ Nothing below is implemented. Each needs the owner's go-ahead.
   before any use. No auto-submission.
 - **(b) "Add a job" dashboard page.** Owner pastes a JD's text and link; it is evaluated
   through the same pipeline with `source = "owner_added"`. The URL is **never fetched**.
-- **(c) YC jobs source.** Blocked pending the owner's decision on the Task D ToS report
-  above.
+- **(c) YC jobs source.** CLOSED by owner (ToS prohibits automated reading); see Task D.
+  Alternatives: Add a job, company ATS pages in `companies.yaml`, owner browsing.
 - **(d) Phase 8b assisted / auto apply.** Blocked until every gate is GO and the owner
   explicitly says so.
 - **(e) Groq tier decision.** Decide between the paid Developer tier and staying on the
