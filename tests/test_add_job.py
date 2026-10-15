@@ -1,12 +1,17 @@
 """Tests for the "Add a job" dashboard page (Task E).
 
-A pasted job goes through the same pipeline stages a collected job does, but
-synchronously, so these tests exercise the whole path: validation, dedupe, the
-daily-limit guard, the run lock, the decision/rejection rendering, and the
-Braintrust redaction guarantee.
+A pasted job goes through the same pipeline stages a collected job does, but the
+evaluation runs in a background thread: ``POST /add`` redirects to a progress
+page that polls ``/api/add-status`` until the worker is done. These tests
+exercise the whole path: validation, dedupe, the daily-limit guard, the run
+lock, the decision/rejection rendering, and the Braintrust redaction guarantee.
 """
 
 from __future__ import annotations
+
+import threading
+import time
+from typing import ClassVar
 
 from fake_llm import FakeClient, make_client
 from fastapi.testclient import TestClient
@@ -87,14 +92,33 @@ def _form(**overrides):
     return data
 
 
+def _post_and_wait(test_client, data, *, timeout: float = 10.0):
+    """POST ``/add`` and, if it handed off to the worker, wait for the result.
+
+    Returns the final response: either the synchronous validation/guard/duplicate
+    page (not a 303), or the progress page once the background worker finished.
+    """
+    response = test_client.post("/add", data=data, follow_redirects=False)
+    if response.status_code != 303:
+        return response
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = test_client.get("/api/add-status")
+        assert status.status_code == 200
+        if status.json()["done"]:
+            return test_client.get("/add/progress")
+        time.sleep(0.01)
+    raise AssertionError("the background add job did not finish in time")
+
+
 def test_senior_job_rejected_with_zero_llm_calls(tmp_path):
     conn, db = _db(tmp_path)
     conn.close()
     client, fake = _recording_client(_boom)
 
-    response = TestClient(_app(db, client)).post(
-        "/add",
-        data=_form(title="Senior Python Developer", description="Senior role, 8+ years."),
+    response = _post_and_wait(
+        TestClient(_app(db, client)),
+        _form(title="Senior Python Developer", description="Senior role, 8+ years."),
     )
 
     assert response.status_code == 200
@@ -108,7 +132,7 @@ def test_junior_job_reaches_a_decision(tmp_path):
     conn.close()
     client = make_client(parsed=PARSED, verdict=EVAL, verifier=VERIFY_OK)
 
-    response = TestClient(_app(db, client)).post("/add", data=_form())
+    response = _post_and_wait(TestClient(_app(db, client)), _form())
 
     assert response.status_code == 200
     assert "Decision: APPLY" in response.text
@@ -122,7 +146,7 @@ def test_duplicate_paste_is_deduped(tmp_path):
     client = make_client(parsed=PARSED, verdict=EVAL, verifier=VERIFY_OK)
     test_client = TestClient(_app(db, client))
 
-    first = test_client.post("/add", data=_form())
+    first = _post_and_wait(test_client, _form())
     assert "Decision: APPLY" in first.text
 
     second = test_client.post("/add", data=_form(description="A different paste entirely."))
@@ -231,8 +255,9 @@ def test_jd_and_profile_text_never_reach_braintrust(tmp_path):
 
     sdk = install_sdk()
     try:
-        response = TestClient(_app(db, client)).post(
-            "/add", data=_form(description=f"{_JUNIOR_JD} {jd_marker}")
+        response = _post_and_wait(
+            TestClient(_app(db, client)),
+            _form(description=f"{_JUNIOR_JD} {jd_marker}"),
         )
     finally:
         reset_observability()
@@ -242,3 +267,64 @@ def test_jd_and_profile_text_never_reach_braintrust(tmp_path):
     blob = "".join(span.sent() for span in sdk.spans).lower()
     assert jd_marker not in blob
     assert profile_marker not in blob
+
+
+class _RateLimitResponse:
+    status_code = 429
+    headers: ClassVar[dict[str, str]] = {"retry-after": "2"}
+
+
+class _RateLimitError(Exception):
+    def __init__(self, message: str = "429 Too Many Requests") -> None:
+        super().__init__(message)
+        self.response = _RateLimitResponse()
+
+
+def test_progress_page_shows_rate_limit_wait_then_result(tmp_path, monkeypatch):
+    """A 429 pauses the worker; the progress page shows the wait, then the result.
+
+    The 429 is raised by the fake transport, so the retry can only come from our
+    wrapper (the SDK is built with ``max_retries=0``); the wait must be surfaced
+    on the progress page before the retry succeeds and the decision is stored.
+    """
+    conn, db = _db(tmp_path)
+    conn.close()
+    client = make_client(
+        parsed=PARSED, verdict=EVAL, verifier=VERIFY_OK, first_error=_RateLimitError()
+    )
+
+    pause_started = threading.Event()
+    release = threading.Event()
+
+    def slow_sleep(seconds: float) -> None:
+        pause_started.set()
+        release.wait(timeout=10)
+
+    monkeypatch.setattr("atlas.llm.time.sleep", slow_sleep)
+    test_client = TestClient(_app(db, client))
+
+    response = test_client.post("/add", data=_form(), follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/add/progress"
+
+    assert pause_started.wait(timeout=10), "worker never paused for the 429"
+
+    status = test_client.get("/api/add-status").json()
+    assert status["done"] is False
+    assert status["rate_limit_wait"] == 2.0
+    assert status["rate_limit_reason"] == "rate limit"
+
+    progress = test_client.get("/add/progress")
+    assert "Waiting for Groq rate limit, retry in 2.0s" in progress.text
+
+    release.set()
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if test_client.get("/api/add-status").json()["done"]:
+            break
+        time.sleep(0.01)
+
+    result = test_client.get("/add/progress")
+    assert "Decision: APPLY" in result.text
+    assert "Match score" in result.text

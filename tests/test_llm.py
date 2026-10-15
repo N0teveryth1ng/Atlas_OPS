@@ -120,6 +120,25 @@ def test_client_builds_groq_transport():
     assert client.default_model
 
 
+def test_sdk_is_built_with_max_retries_zero(monkeypatch):
+    """All retrying must happen in our wrapper, never inside the Groq SDK."""
+    import groq
+
+    captured: dict[str, object] = {}
+
+    class _FakeGroq:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+            self.chat = None
+
+    monkeypatch.setattr(groq, "Groq", _FakeGroq)
+
+    LLMClient(api_key="test-key")
+
+    assert captured["api_key"] == "test-key"
+    assert captured["max_retries"] == 0
+
+
 class _RateLimitResponse:
     status_code = 429
     headers: ClassVar[dict[str, str]] = {"retry-after": "9"}

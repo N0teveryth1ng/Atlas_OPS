@@ -110,6 +110,25 @@ def _blank_pipeline_status() -> dict[str, Any]:
 
 _pipeline_status: dict[str, Any] = _blank_pipeline_status()
 
+
+def _blank_add_state() -> dict[str, Any]:
+    return {
+        "running": False,
+        "done": False,
+        "job_id": None,
+        "duplicate": False,
+        "paused": None,
+        "result_body": None,
+        "progress": {},
+        "error": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+
+_add_state: dict[str, Any] = _blank_add_state()
+_add_lock = threading.Lock()
+
 _HEAD = """<!doctype html>
 <html lang="en">
 <head>
@@ -476,6 +495,110 @@ def _end_single_run(result: str = "ok") -> None:
         _pipeline_status["stage"] = result
         _pipeline_status["result"] = result
         _pipeline_status["finished_at"] = time.time()
+
+
+def _run_add_job(
+    database: Path | None,
+    run_id: int,
+    job_id: int,
+    job: Job,
+    profile: CandidateProfile,
+    settings: Any,
+    client: LLMClient,
+) -> None:
+    """Evaluate one owner-added job in a background thread.
+
+    Opens its own connection (sqlite connections are thread-affine), then owns
+    the run lock and :data:`_add_state`: it closes the connection, releases the
+    lock, and publishes step / rate-limit-wait progress in ``finally``.
+    """
+    from .pipeline import (
+        LLMCallBudgetExceeded,
+        LLMTokenBudgetExceeded,
+        process_single_job,
+    )
+
+    def _on_step(step: str) -> None:
+        with _add_lock:
+            _add_state["progress"] = {
+                **_add_state["progress"],
+                "current_step": step,
+                "llm_calls": int(getattr(client, "calls", 0) or 0),
+                "tokens_used": int(getattr(client, "tokens_used", 0) or 0),
+                "rate_limit_wait": None,
+                "rate_limit_reason": None,
+            }
+
+    def _on_wait(seconds: float, reason: str) -> None:
+        with _add_lock:
+            _add_state["progress"] = {
+                **_add_state["progress"],
+                "rate_limit_wait": round(float(seconds), 1),
+                "rate_limit_reason": reason,
+                "llm_calls": int(getattr(client, "calls", 0) or 0),
+                "tokens_used": int(getattr(client, "tokens_used", 0) or 0),
+            }
+
+    try:
+        conn = _open(database)
+    except sqlite3.Error as exc:
+        logger.exception("add worker could not open the database")
+        finish_run_err = str(exc)
+        with _add_lock:
+            _add_state["error"] = finish_run_err
+        _end_single_run("failed")
+        return
+
+    try:
+        result = process_single_job(
+            conn,
+            int(job_id),
+            job,
+            profile,
+            settings,
+            client,
+            on_step=_on_step,
+            on_wait=_on_wait,
+        )
+        finish_run(conn, run_id, "done")
+        with _add_lock:
+            _add_state["result_body"] = _add_outcome_html(result)
+    except GroqDailyLimitReached as exc:
+        finish_run(conn, run_id, "paused", {"reason": "daily"})
+        with _add_lock:
+            _add_state["paused"] = str(exc)
+    except LLMTokenBudgetExceeded:
+        finish_run(conn, run_id, "paused", {"reason": "tokens"})
+        with _add_lock:
+            _add_state["paused"] = (
+                f"Paused: per-run token cap reached ({settings.run.max_llm_tokens_per_run} tokens)"
+            )
+    except LLMCallBudgetExceeded:
+        finish_run(conn, run_id, "paused", {"reason": "calls"})
+        with _add_lock:
+            _add_state["paused"] = "Paused: per-run LLM call cap reached."
+    except Exception as exc:
+        logger.exception("add job %s failed", job_id)
+        finish_run(conn, run_id, "failed", {"error": str(exc)})
+        with _add_lock:
+            _add_state["error"] = str(exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            logger.debug("add conn close failed", exc_info=True)
+        with _add_lock:
+            _add_state["progress"] = {
+                **_add_state["progress"],
+                "llm_calls": int(getattr(client, "calls", 0) or 0),
+                "tokens_used": int(getattr(client, "tokens_used", 0) or 0),
+                "rate_limit_wait": None,
+                "rate_limit_reason": None,
+            }
+            _add_state["running"] = False
+            _add_state["done"] = True
+            _add_state["finished_at"] = time.time()
+        _end_single_run()
 
 
 # --------------------------------------------------------------------------- #
@@ -989,6 +1112,93 @@ def _add_result_page(
         parts.append('<p><a href="/">Back to results</a></p>\n')
     parts.append(_TABLE_FOOT)
     return "".join(parts)
+
+
+def _add_result_page_view() -> str:
+    """Render the final ``/add`` result from the current add state."""
+    with _add_lock:
+        state = dict(_add_state)
+    if state.get("error"):
+        return _add_result_page(
+            body=f'<p class="error">{html.escape(str(state["error"]))}</p>\n'
+            "<p>The job was saved and left undecided; the next run will pick it up.</p>\n"
+        )
+    if state.get("paused") is not None:
+        return _add_result_page(paused=str(state["paused"]))
+    if state.get("result_body"):
+        return _add_result_page(body=str(state["result_body"]))
+    return _add_result_page(
+        body='<p class="warn">This job is still being evaluated.</p>\n',
+    )
+
+
+def _add_progress_page() -> str:
+    """Polling page shown right after ``POST /add`` hands off to the worker.
+
+    Renders the current add state server-side (so a reload shows the latest
+    step / rate-limit wait / counters immediately) and keeps polling
+    ``/api/add-status`` to update them live until the worker is done.
+    """
+    with _add_lock:
+        state = dict(_add_state)
+    progress = state.get("progress") or {}
+    step = html.escape(str(progress.get("current_step") or "Starting\u2026"))
+    calls = html.escape(str(progress.get("llm_calls") or 0))
+    tokens = html.escape(str(progress.get("tokens_used") or 0))
+    wait_seconds = progress.get("rate_limit_wait")
+    if wait_seconds:
+        reason = html.escape(str(progress.get("rate_limit_reason") or "rate limit"))
+        wait = (
+            f'<p id="add-wait" class="warn">Waiting for Groq {reason}, '
+            f"retry in {html.escape(str(wait_seconds))}s\u2026</p>\n"
+        )
+    else:
+        wait = '<p id="add-wait" class="warn" hidden></p>\n'
+    body = (
+        "<h1>Evaluating your job</h1>\n"
+        f'<p id="add-step" data-state="running">{step}</p>\n'
+        f"{wait}"
+        f'<p>LLM calls: <strong id="add-calls">{calls}</strong> &middot; '
+        f'Tokens used: <strong id="add-tokens">{tokens}</strong></p>\n'
+        '<p><a href="/add">Add another job</a> &middot; '
+        '<a href="/">Back to results</a></p>\n'
+        "<script>\n"
+        "(async function () {\n"
+        "  const step = document.getElementById('add-step');\n"
+        "  const wait = document.getElementById('add-wait');\n"
+        "  const calls = document.getElementById('add-calls');\n"
+        "  const tokens = document.getElementById('add-tokens');\n"
+        "  while (true) {\n"
+        "    let data = null;\n"
+        "    try {\n"
+        "      const res = await fetch('/api/add-status', {credentials: 'same-origin'});\n"
+        "      if (res.ok) data = await res.json();\n"
+        "    } catch (e) { /* transient poll error: retry below */ }\n"
+        "    if (data) {\n"
+        "      if (data.current_step) step.textContent = data.current_step;\n"
+        "      calls.textContent = String(data.llm_calls ?? 0);\n"
+        "      tokens.textContent = String(data.tokens_used ?? 0);\n"
+        "      if (data.rate_limit_wait) {\n"
+        "        wait.hidden = false;\n"
+        "        const reason = data.rate_limit_reason || 'rate limit';\n"
+        "        wait.textContent = 'Waiting for Groq ' + reason + ', retry in ' +\n"
+        "          data.rate_limit_wait + 's\\u2026';\n"
+        "      } else { wait.hidden = true; }\n"
+        "      if (data.done) {\n"
+        "        step.textContent = 'Finished';\n"
+        "        const res = await fetch('/add/progress', {credentials: 'same-origin'});\n"
+        "        document.open();\n"
+        "        document.write(await res.text());\n"
+        "        document.close();\n"
+        "        return;\n"
+        "      }\n"
+        "    }\n"
+        "    await new Promise(r => setTimeout(r, 1000));\n"
+        "  }\n"
+        "}());\n"
+        "</script>\n"
+    )
+    return _add_result_page(body=body)
 
 
 def _recover_runs(database: Path | None) -> None:
@@ -1635,12 +1845,15 @@ def create_app(
             try:
                 conn = _open(database)
             except sqlite3.Error as exc:
+                _end_single_run()
                 return HTMLResponse(
                     _add_result_page(body=f'<p class="error">{html.escape(str(exc))}</p>')
                 )
             try:
                 profile = get_latest_profile(conn)
                 if profile is None or not profile.approved:
+                    conn.close()
+                    _end_single_run()
                     return HTMLResponse(
                         _add_result_page(
                             body='<p class="error">No approved profile. Go to '
@@ -1650,11 +1863,6 @@ def create_app(
 
                 from .config import settings_for_profile
                 from .normalize import normalize_job
-                from .pipeline import (
-                    LLMCallBudgetExceeded,
-                    LLMTokenBudgetExceeded,
-                    process_single_job,
-                )
 
                 settings = settings_for_profile(profile, get_settings())
                 run_id = start_run(conn, "add")
@@ -1670,35 +1878,82 @@ def create_app(
                 job_id, created = upsert_job(conn, run_id, job)
                 if not created:
                     finish_run(conn, run_id, "done", {"duplicate": True})
+                    conn.close()
+                    _end_single_run()
                     return HTMLResponse(_add_result_page(job_id=job_id, duplicate=True))
 
+                # Hand off to a background thread: the POST returns immediately and
+                # redirects to the progress page, which polls /api/add-status until
+                # done. The worker opens its own connection (sqlite connections are
+                # thread-affine) and owns the run lock and add state.
                 client = _make_kit_client()
-                try:
-                    result = process_single_job(conn, job_id, job, profile, settings, client)
-                except GroqDailyLimitReached as exc:
-                    finish_run(conn, run_id, "paused", {"reason": "daily"})
-                    return HTMLResponse(_add_result_page(paused=str(exc)))
-                except LLMTokenBudgetExceeded:
-                    finish_run(conn, run_id, "paused", {"reason": "tokens"})
-                    return HTMLResponse(
-                        _add_result_page(
-                            paused=(
-                                "Paused: per-run token cap reached "
-                                f"({settings.run.max_llm_tokens_per_run} tokens)"
-                            )
-                        )
-                    )
-                except LLMCallBudgetExceeded:
-                    finish_run(conn, run_id, "paused", {"reason": "calls"})
-                    return HTMLResponse(
-                        _add_result_page(paused="Paused: per-run LLM call cap reached.")
-                    )
-                finish_run(conn, run_id, "done")
-                return HTMLResponse(_add_result_page(body=_add_outcome_html(result)))
-            finally:
+                with _add_lock:
+                    _add_state.update(_blank_add_state())
+                    _add_state["running"] = True
+                    _add_state["job_id"] = job_id
+                    _add_state["started_at"] = time.time()
+                    _add_state["progress"] = {
+                        "current_step": "Starting\u2026",
+                        "llm_calls": 0,
+                        "tokens_used": 0,
+                    }
                 conn.close()
-        finally:
-            _end_single_run()
+                threading.Thread(
+                    target=_run_add_job,
+                    args=(database, run_id, job_id, job, profile, settings, client),
+                    daemon=True,
+                ).start()
+                return RedirectResponse(url="/add/progress", status_code=303)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    logger.debug("conn close failed during error path", exc_info=True)
+                _end_single_run()
+                raise
+        except sqlite3.Error as exc:
+            return HTMLResponse(
+                _add_result_page(body=f'<p class="error">{html.escape(str(exc))}</p>')
+            )
+
+    @app.get("/add/progress", response_class=HTMLResponse)
+    def add_progress_get(request: Request) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        with _add_lock:
+            done = bool(_add_state["done"])
+        # Already finished before the browser asked: render the result directly.
+        if done:
+            return HTMLResponse(_add_result_page_view())
+        return HTMLResponse(_add_progress_page())
+
+    @app.get("/api/add-status")
+    def add_status_get(request: Request) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+        with _add_lock:
+            snapshot = json.loads(json.dumps(_add_state))
+        progress = snapshot.get("progress") or {}
+        return JSONResponse(
+            {
+                "running": snapshot.get("running", False),
+                "done": snapshot.get("done", False),
+                "job_id": snapshot.get("job_id"),
+                "paused": snapshot.get("paused"),
+                "error": snapshot.get("error"),
+                "current_step": progress.get("current_step"),
+                "rate_limit_wait": progress.get("rate_limit_wait"),
+                "rate_limit_reason": progress.get("rate_limit_reason"),
+                "llm_calls": progress.get("llm_calls"),
+                "tokens_used": progress.get("tokens_used"),
+                "started_at": snapshot.get("started_at"),
+                "finished_at": snapshot.get("finished_at"),
+            }
+        )
 
     @app.get("/status", response_class=HTMLResponse)
     def status_get(request: Request) -> Response:
