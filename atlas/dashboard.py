@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.datastructures import FormData
 
 from .config import get_settings
 from .db import (
@@ -60,10 +61,14 @@ from .profile_agent import build_profile as _build_profile_impl
 from .profile_agent import normalize_skill_name
 from .schemas import (
     CandidateProfile,
+    Education,
     EvidenceSource,
+    Experience,
     ExperienceLevel,
     Job,
+    Links,
     Proficiency,
+    Project,
     Seniority,
     Skill,
 )
@@ -1516,28 +1521,304 @@ def _parse_skills(text: str) -> list[Skill]:
         entry = chunk.strip()
         if not entry:
             continue
-        name, _, prof = entry.partition(":")
-        name = name.strip()
+        parts = entry.split(":", 2)
+        name = parts[0].strip()
         if not name:
             continue
+        prof = parts[1].strip() if len(parts) > 1 else ""
+        evidenced_by = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
         try:
-            proficiency = Proficiency(prof.strip().lower())
+            proficiency = Proficiency(prof.lower())
         except ValueError:
             proficiency = Proficiency.familiar
         skills.append(
-            Skill(name=name, canonical_name=normalize_skill_name(name), proficiency=proficiency)
+            Skill(
+                name=name,
+                canonical_name=normalize_skill_name(name),
+                proficiency=proficiency,
+                evidenced_by=evidenced_by,
+            )
         )
     return skills
 
 
-def _profile_page(profile: CandidateProfile, error: str | None = None) -> str:
-    """Render the profile review/edit form (GET and re-render on validation)."""
-    skills = "\n".join(
-        f"{s.name}:{getattr(s.proficiency, 'value', s.proficiency)}" for s in profile.skills
+def _form_list(form: FormData, key: str) -> list[str]:
+    """All values for ``key`` in submission order (missing key -> empty list)."""
+    return [str(value) for value in form.getlist(key)]
+
+
+def _at(values: list[str], index: int) -> str:
+    return values[index] if index < len(values) else ""
+
+
+def _split_items(text: str) -> list[str]:
+    """Split on commas and newlines, stripping blanks (matches old comma split)."""
+    return [
+        part.strip()
+        for part in text.replace("\r", "\n").replace("\n", ",").split(",")
+        if part.strip()
+    ]
+
+
+def _split_lines(text: str) -> list[str]:
+    return [line.strip() for line in text.replace("\r", "\n").split("\n") if line.strip()]
+
+
+def _int_or_none(text: str) -> int | None:
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _truthy(text: str) -> bool:
+    return text.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_experiences(form: FormData, prefix: str) -> list[Experience]:
+    """Rebuild internship/work entries from parallel repeated form fields.
+
+    Every rendered row submits all fields (blank when empty) so the lists stay
+    index-aligned; a row whose every field is blank is dropped, never invented.
+    """
+    roles = _form_list(form, f"{prefix}role")
+    companies = _form_list(form, f"{prefix}company")
+    months = _form_list(form, f"{prefix}months")
+    dates = _form_list(form, f"{prefix}dates")
+    tech = _form_list(form, f"{prefix}tech")
+    descriptions = _form_list(form, f"{prefix}description")
+    count = max(len(roles), len(companies), len(months), len(dates), len(tech), len(descriptions))
+    entries: list[Experience] = []
+    for index in range(count):
+        role = _at(roles, index).strip()
+        company = _at(companies, index).strip()
+        month = _at(months, index)
+        date = _at(dates, index).strip()
+        techs = _split_items(_at(tech, index))
+        description = _split_lines(_at(descriptions, index))
+        if not any((role, company, month.strip(), date, techs, description)):
+            continue
+        entries.append(
+            Experience(
+                role=role or None,
+                company=company or None,
+                duration_months=_int_or_none(month),
+                dates=date or None,
+                tech=techs,
+                description=description,
+            )
+        )
+    return entries
+
+
+def _parse_projects(form: FormData) -> list[Project]:
+    titles = _form_list(form, "project_title")
+    summaries = _form_list(form, "project_summary")
+    outcomes = _form_list(form, "project_outcomes")
+    tech = _form_list(form, "project_tech")
+    count = max(len(titles), len(summaries), len(outcomes), len(tech))
+    entries: list[Project] = []
+    for index in range(count):
+        title = _at(titles, index).strip()
+        summary = _at(summaries, index).strip()
+        outcome = _at(outcomes, index).strip()
+        techs = _split_items(_at(tech, index))
+        if not any((title, summary, outcome, techs)):
+            continue
+        entries.append(
+            Project(
+                title=title or None,
+                summary=summary or None,
+                outcomes=outcome or None,
+                tech=techs,
+            )
+        )
+    return entries
+
+
+def _parse_education(form: FormData) -> list[Education]:
+    degrees = _form_list(form, "education_degree")
+    fields = _form_list(form, "education_field")
+    institutions = _form_list(form, "education_institution")
+    years = _form_list(form, "education_year")
+    expected = _form_list(form, "education_expected")
+    count = max(len(degrees), len(fields), len(institutions), len(years), len(expected))
+    entries: list[Education] = []
+    for index in range(count):
+        degree = _at(degrees, index).strip()
+        field = _at(fields, index).strip()
+        institution = _at(institutions, index).strip()
+        year = _at(years, index)
+        flag = _truthy(_at(expected, index))
+        if not any((degree, field, institution, year.strip(), flag)):
+            continue
+        entries.append(
+            Education(
+                degree=degree or None,
+                field=field or None,
+                institution=institution or None,
+                graduation_year=_int_or_none(year),
+                expected=flag,
+            )
+        )
+    return entries
+
+
+def _parse_links(form: FormData) -> tuple[Links, list[str]]:
+    """Return (links, rejected_labels). Only absolute http/https URLs are kept."""
+    links = Links()
+    rejected: list[str] = []
+    for label in ("github", "linkedin", "portfolio"):
+        raw = str(form.get(label, "")).strip()
+        if not raw:
+            continue
+        if not is_http_url(raw):
+            rejected.append(label)
+            continue
+        setattr(links, label, raw)
+    return links, rejected
+
+
+def _entry_name(experience: Experience) -> str:
+    role = (experience.role or "").strip() or "(role not set)"
+    company = (experience.company or "").strip() or "(company not set)"
+    return f"{role} @ {company}"
+
+
+def _entries_missing_text(
+    internships: list[Experience], work: list[Experience], projects: list[Project]
+) -> list[str]:
+    """Human labels for entries that lack the description/outcome text."""
+    missing: list[str] = []
+    for label, entries in (("internship", internships), ("work", work)):
+        for entry in entries:
+            if not entry.description:
+                missing.append(f"{label}: {_entry_name(entry)}")
+    for project in projects:
+        if not (project.summary or project.outcomes):
+            missing.append(f"project: {(project.title or '').strip() or '(untitled)'}")
+    return missing
+
+
+_SECTION_SCRIPT = """<script>
+function atlasNewRow(templateId, listId) {
+  var tpl = document.getElementById(templateId);
+  var list = document.getElementById(listId);
+  var node = tpl.content.firstElementChild.cloneNode(true);
+  list.appendChild(node);
+}
+document.addEventListener('click', function (event) {
+  var target = event.target;
+  if (target.dataset && target.dataset.removeRow !== undefined) {
+    event.preventDefault();
+    var row = target.closest('[data-row]');
+    if (row) { row.parentNode.removeChild(row); }
+  } else if (target.dataset && target.dataset.addRows) {
+    event.preventDefault();
+    atlasNewRow(target.dataset.addRows, target.dataset.list);
+  }
+});
+</script>"""
+
+
+def _skill_text(profile: CandidateProfile) -> str:
+    return "\n".join(
+        f"{s.name}:{getattr(s.proficiency, 'value', s.proficiency)}"
+        + (f":{s.evidenced_by}" if s.evidenced_by else "")
+        for s in profile.skills
     )
+
+
+def _experience_row(entry: Experience | None) -> str:
+    entry = entry or Experience()
+    tech = ", ".join(entry.tech)
+    description = "\n".join(entry.description)
+    return (
+        "<fieldset data-row>"
+        "<label>Role<br>"
+        f'<input type="text" name="__PREFIX__role" value="{html.escape(entry.role or "")}"></label>'
+        "<label>Company<br>"
+        f'<input type="text" name="__PREFIX__company" value="{html.escape(entry.company or "")}"></label>'
+        "<label>Months (number)<br>"
+        f'<input type="text" name="__PREFIX__months" value="{entry.duration_months if entry.duration_months is not None else ""}"></label>'
+        "<label>Dates (text, e.g. Jun 2024 - Aug 2024)<br>"
+        f'<input type="text" name="__PREFIX__dates" value="{html.escape(entry.dates or "")}"></label>'
+        "<label>Tech (comma separated)<br>"
+        f'<input type="text" name="__PREFIX__tech" value="{html.escape(tech)}"></label>'
+        "<label>Description (one line per bullet)<br>"
+        f'<textarea name="__PREFIX__description" rows="3">{html.escape(description)}</textarea></label>'
+        '<button type="button" data-remove-row>Remove</button>'
+        "</fieldset>"
+    )
+
+
+def _experience_rows(entries: list[Experience], prefix: str) -> str:
+    if not entries:
+        return ""
+    return "".join(_experience_row(entry).replace("__PREFIX__", prefix) for entry in entries)
+
+
+def _project_row(entry: Project | None) -> str:
+    entry = entry or Project()
+    tech = ", ".join(entry.tech)
+    return (
+        "<fieldset data-row>"
+        "<label>Title<br>"
+        f'<input type="text" name="project_title" value="{html.escape(entry.title or "")}"></label>'
+        "<label>Summary<br>"
+        f'<textarea name="project_summary" rows="2">{html.escape(entry.summary or "")}</textarea></label>'
+        "<label>Outcomes<br>"
+        f'<textarea name="project_outcomes" rows="2">{html.escape(entry.outcomes or "")}</textarea></label>'
+        "<label>Tech (comma separated)<br>"
+        f'<input type="text" name="project_tech" value="{html.escape(tech)}"></label>'
+        '<button type="button" data-remove-row>Remove</button>'
+        "</fieldset>"
+    )
+
+
+def _project_rows(entries: list[Project]) -> str:
+    return "".join(_project_row(entry) for entry in entries)
+
+
+def _education_row(entry: Education | None) -> str:
+    entry = entry or Education()
+    expected = "yes" if entry.expected else ""
+    year = entry.graduation_year if entry.graduation_year is not None else ""
+    return (
+        "<fieldset data-row>"
+        "<label>Degree<br>"
+        f'<input type="text" name="education_degree" value="{html.escape(entry.degree or "")}"></label>'
+        "<label>Field<br>"
+        f'<input type="text" name="education_field" value="{html.escape(entry.field or "")}"></label>'
+        "<label>Institution<br>"
+        f'<input type="text" name="education_institution" value="{html.escape(entry.institution or "")}"></label>'
+        "<label>Graduation year<br>"
+        f'<input type="text" name="education_year" value="{year}"></label>'
+        "<label>Expected (not yet graduated) "
+        f'<select name="education_expected"><option value=""></option>'
+        f'<option value="yes"{(" selected" if expected else "")}>yes</option></select></label>'
+        '<button type="button" data-remove-row>Remove</button>'
+        "</fieldset>"
+    )
+
+
+def _education_rows(entries: list[Education]) -> str:
+    return "".join(_education_row(entry) for entry in entries)
+
+
+def _profile_page(
+    profile: CandidateProfile, error: str | None = None, warning: str | None = None
+) -> str:
+    """Render the profile review/edit form (GET and re-render on validation)."""
+    certifications = html.escape("\n".join(profile.certifications))
     parts = [_HEAD, _nav(), "<h1>Profile review</h1>\n"]
     if error:
         parts.append(f'<p class="error">{html.escape(error)}</p>\n')
+    if warning:
+        parts.append(f'<p class="notice">{html.escape(warning)}</p>\n')
     if len(profile.skills) < _MIN_SKILL_WARNING:
         parts.append(
             '<p class="notice">Only '
@@ -1550,16 +1831,50 @@ def _profile_page(profile: CandidateProfile, error: str | None = None) -> str:
         f'<input type="text" name="level" value="{html.escape(profile.experience_level.value)}"></label></p>'
         "<p><label>Total experience (months):<br>"
         f'<input type="text" name="months" value="{profile.total_experience_months}"></label></p>'
-        "<p><label>Skills (one per line, name:proficiency):<br>"
-        f'<textarea name="skills" rows="8">{html.escape(skills)}</textarea></label></p>'
+        "<p><label>Skills (one per line, name:proficiency, optional third part "
+        "name:proficiency:evidenced-by project or internship):<br>"
+        f'<textarea name="skills" rows="8">{html.escape(_skill_text(profile))}</textarea></label></p>'
         "<p><label>Target roles (comma separated):<br>"
         f'<input type="text" name="target_roles" value="{html.escape(", ".join(profile.target_roles))}"></label></p>'
         '<p><label>Locations (comma separated, or "anywhere"):<br>'
         f'<input type="text" name="locations" value="{html.escape(", ".join(profile.locations))}" required></label></p>'
         "<p><label>Ambiguities (comma separated):<br>"
         f'<input type="text" name="ambiguities" value="{html.escape(", ".join(profile.ambiguities))}"></label></p>'
+        "<h2>Links</h2>\n"
+        "<p><label>GitHub (http/https only):<br>"
+        f'<input type="text" name="github" value="{html.escape(profile.links.github or "")}"></label></p>'
+        "<p><label>LinkedIn (http/https only):<br>"
+        f'<input type="text" name="linkedin" value="{html.escape(profile.links.linkedin or "")}"></label></p>'
+        "<p><label>Portfolio (http/https only):<br>"
+        f'<input type="text" name="portfolio" value="{html.escape(profile.links.portfolio or "")}"></label></p>'
+        "<h2>Internships</h2>\n"
+        '<div id="internship-list">'
+        + _experience_rows(profile.internships, "internship_")
+        + "</div>"
+        '<button type="button" data-add-rows="internship-template" data-list="internship-list">Add internship</button>'
+        '<template id="internship-template">'
+        + _experience_row(None).replace("__PREFIX__", "internship_")
+        + "</template>"
+        "<h2>Work experience</h2>\n"
+        '<div id="work-list">' + _experience_rows(profile.work, "work_") + "</div>"
+        '<button type="button" data-add-rows="work-template" data-list="work-list">Add work experience</button>'
+        '<template id="work-template">'
+        + _experience_row(None).replace("__PREFIX__", "work_")
+        + "</template>"
+        "<h2>Projects</h2>\n"
+        '<div id="project-list">' + _project_rows(profile.projects) + "</div>"
+        '<button type="button" data-add-rows="project-template" data-list="project-list">Add project</button>'
+        '<template id="project-template">' + _project_row(None) + "</template>"
+        "<h2>Education</h2>\n"
+        '<div id="education-list">' + _education_rows(profile.education) + "</div>"
+        '<button type="button" data-add-rows="education-template" data-list="education-list">Add education</button>'
+        '<template id="education-template">' + _education_row(None) + "</template>"
+        "<h2>Certifications</h2>\n"
+        "<p><label>Certifications (one per line or comma separated):<br>"
+        f'<textarea name="certifications" rows="4">{certifications}</textarea></label></p>'
         '<button type="submit">Approve profile</button></form>'
     )
+    parts.append(_SECTION_SCRIPT)
     parts.append(_TABLE_FOOT)
     return "".join(parts)
 
@@ -1944,23 +2259,18 @@ def create_app(
         return HTMLResponse(_profile_page(profile))
 
     @app.post("/profile")
-    def profile_post(
-        request: Request,
-        level: str = Form(""),
-        months: str = Form("0"),
-        skills: str = Form(""),
-        target_roles: str = Form(""),
-        locations: str = Form(""),
-        ambiguities: str = Form(""),
-    ) -> Response:
+    async def profile_post(request: Request) -> Response:
         if not _same_origin(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         denied = require_auth(request)
         if denied:
             return denied
+        form = await request.form()
         conn = _open(database)
         try:
             profile = get_latest_profile(conn) or CandidateProfile()
+            level = str(form.get("level", ""))
+            months = str(form.get("months", "0"))
             try:
                 profile.experience_level = ExperienceLevel(level.strip())
             except ValueError:
@@ -1969,10 +2279,18 @@ def create_app(
                 profile.total_experience_months = int(months.strip() or "0")
             except ValueError:
                 pass
-            profile.skills = _parse_skills(skills)
-            profile.target_roles = [r.strip() for r in target_roles.split(",") if r.strip()]
-            profile.locations = [item.strip() for item in locations.split(",") if item.strip()]
-            profile.ambiguities = [item.strip() for item in ambiguities.split(",") if item.strip()]
+            profile.skills = _parse_skills(str(form.get("skills", "")))
+            profile.target_roles = _split_items(str(form.get("target_roles", "")))
+            profile.locations = _split_items(str(form.get("locations", "")))
+            profile.ambiguities = _split_items(str(form.get("ambiguities", "")))
+            # Richer facts the resume generator needs. Everything below comes
+            # verbatim from the form; blank rows are dropped, never invented.
+            profile.links, rejected_links = _parse_links(form)
+            profile.internships = _parse_experiences(form, "internship_")
+            profile.work = _parse_experiences(form, "work_")
+            profile.projects = _parse_projects(form)
+            profile.education = _parse_education(form)
+            profile.certifications = _split_items(str(form.get("certifications", "")))
             # A profile cannot be approved without a location preference; the user
             # must name at least one location or type "anywhere". Nothing is
             # written, so the previous (unapproved or approved) row is untouched.
@@ -1981,6 +2299,31 @@ def create_app(
                     _profile_page(
                         profile,
                         error='Add at least one location (or "anywhere") before approving.',
+                    ),
+                    status_code=422,
+                )
+            if rejected_links:
+                return HTMLResponse(
+                    _profile_page(
+                        profile,
+                        error=(
+                            "Links must start with http:// or https://: "
+                            + ", ".join(rejected_links)
+                        ),
+                    ),
+                    status_code=422,
+                )
+            # Every internship, work and project entry needs real text the
+            # generator can quote. Warn (and refuse to approve) when any is thin.
+            missing = _entries_missing_text(profile.internships, profile.work, profile.projects)
+            if missing:
+                return HTMLResponse(
+                    _profile_page(
+                        profile,
+                        warning=(
+                            "Every internship, work and project entry needs a "
+                            "description or outcome before approval. Missing: " + "; ".join(missing)
+                        ),
                     ),
                     status_code=422,
                 )

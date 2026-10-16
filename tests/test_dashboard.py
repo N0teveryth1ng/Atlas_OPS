@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlencode
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,11 +20,12 @@ from atlas.db import (
     init_db,
     log_stage,
     matched_jobs,
+    save_profile,
     set_application_status,
     start_run,
     upsert_job,
 )
-from atlas.schemas import Job
+from atlas.schemas import CandidateProfile, Job
 
 
 def _connect(tmp_path):
@@ -659,3 +661,277 @@ def test_find_refuses_when_daily_limit_reached(tmp_path):
     assert response.status_code == 200
     assert "Groq daily limit reached, resets in about" in response.text
     assert dash._pipeline_status["running"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Profile editor: richer facts the resume generator needs
+# --------------------------------------------------------------------------- #
+
+
+def _rich_profile_form(**overrides):
+    """A valid multi-section profile submission; callers override one row."""
+    fields = [
+        ("level", "fresher"),
+        ("months", "3"),
+        ("skills", "python:strong:GameGenesis internship"),
+        ("target_roles", "backend, api"),
+        ("locations", "anywhere"),
+        ("ambiguities", ""),
+        ("github", "https://github.com/me"),
+        ("linkedin", ""),
+        ("portfolio", "https://me.example"),
+        ("internship_role", "Backend Intern"),
+        ("internship_company", "GameGenesis"),
+        ("internship_months", "3"),
+        ("internship_dates", "Jun 2024 - Aug 2024"),
+        ("internship_tech", "python, fastapi"),
+        ("internship_description", "Built REST APIs\nCut p95 latency 40%"),
+        ("work_role", ""),
+        ("work_company", ""),
+        ("work_months", ""),
+        ("work_dates", ""),
+        ("work_tech", ""),
+        ("work_description", ""),
+        ("project_title", "Atlas"),
+        ("project_summary", "Job-search pipeline"),
+        ("project_outcomes", "Runs nightly"),
+        ("project_tech", "python, sqlite"),
+        ("education_degree", "B.Sc."),
+        ("education_field", "IT"),
+        ("education_institution", "Techno India"),
+        ("education_year", "2026"),
+        ("education_expected", "yes"),
+        ("certifications", "AWS CCP\nGoogle IT"),
+    ]
+    mapping = {key: value for key, value in fields}
+    mapping.update(overrides)
+    return mapping
+
+
+def _post_form(client, data, *, follow_redirects=False):
+    """Post repeated field names (a dict can't repeat keys; build the body)."""
+    payload: list[tuple[str, str]] = []
+    for key, value in data.items():
+        if isinstance(value, list):
+            payload.extend((key, item) for item in value)
+        else:
+            payload.append((key, value))
+    return client.post(
+        "/profile",
+        content=urlencode(payload, doseq=True),
+        headers={"content-type": "application/x-www-form-urlencoded"},
+        follow_redirects=follow_redirects,
+    )
+
+
+def test_profile_editor_saves_rich_sections(tmp_path):
+    _connect(tmp_path).close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+
+    response = _post_form(client, _rich_profile_form())
+    assert response.status_code == 303
+
+    conn = connect(tmp_path / "dash.db")
+    profile = get_latest_profile(conn)
+    conn.close()
+
+    assert profile is not None
+    assert profile.approved is True
+    assert profile.internships[0].role == "Backend Intern"
+    assert profile.internships[0].company == "GameGenesis"
+    assert profile.internships[0].duration_months == 3
+    assert profile.internships[0].dates == "Jun 2024 - Aug 2024"
+    assert profile.internships[0].tech == ["python", "fastapi"]
+    assert profile.internships[0].description == ["Built REST APIs", "Cut p95 latency 40%"]
+    assert profile.work == []
+    assert profile.projects[0].title == "Atlas"
+    assert profile.projects[0].tech == ["python", "sqlite"]
+    assert profile.education[0].expected is True
+    assert profile.education[0].graduation_year == 2026
+    assert profile.links.github == "https://github.com/me"
+    assert profile.links.portfolio == "https://me.example"
+    assert profile.links.linkedin is None
+    assert profile.certifications == ["AWS CCP", "Google IT"]
+    assert profile.skills[0].evidenced_by == "GameGenesis internship"
+
+
+def test_profile_editor_adds_multiple_entries(tmp_path):
+    _connect(tmp_path).close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    data = _rich_profile_form()
+    data["internship_role"] = ["Backend Intern", "Data Intern"]
+    data["internship_company"] = ["GameGenesis", "Acme"]
+    data["internship_months"] = ["3", "2"]
+    data["internship_dates"] = ["", ""]
+    data["internship_tech"] = ["python", "sql"]
+    data["internship_description"] = ["Built APIs", "Wrote queries"]
+
+    response = _post_form(client, data)
+    assert response.status_code == 303
+
+    conn = connect(tmp_path / "dash.db")
+    profile = get_latest_profile(conn)
+    conn.close()
+    assert profile is not None
+    assert [entry.company for entry in profile.internships] == ["GameGenesis", "Acme"]
+
+
+def test_profile_editor_warns_when_entry_lacks_description(tmp_path):
+    _connect(tmp_path).close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    data = _rich_profile_form(internship_description="")
+
+    response = _post_form(client, data)
+    assert response.status_code == 422
+    assert "needs a description or outcome" in response.text
+    assert "Backend Intern @ GameGenesis" in response.text
+
+    conn = connect(tmp_path / "dash.db")
+    assert get_latest_profile(conn) is None
+    conn.close()
+
+
+def test_profile_editor_warns_when_project_lacks_summary_and_outcome(tmp_path):
+    _connect(tmp_path).close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    data = _rich_profile_form(project_summary="", project_outcomes="")
+
+    response = _post_form(client, data)
+    assert response.status_code == 422
+    assert "needs a description or outcome" in response.text
+    assert "project: Atlas" in response.text
+
+
+def test_profile_editor_rejects_non_http_links(tmp_path):
+    _connect(tmp_path).close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    data = _rich_profile_form(github="javascript:alert(1)")
+
+    response = _post_form(client, data)
+    assert response.status_code == 422
+    assert "http:// or https://" in response.text
+    assert "github" in response.text
+
+    conn = connect(tmp_path / "dash.db")
+    assert get_latest_profile(conn) is None
+    conn.close()
+
+
+def test_profile_editor_escapes_values(tmp_path):
+    _connect(tmp_path).close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    payload = "<script>alert('xss')</script>"
+    assert (
+        _post_form(client, {"locations": "anywhere", "internship_description": payload}).status_code
+        == 303
+    )
+
+    conn = connect(tmp_path / "dash.db")
+    profile = get_latest_profile(conn)
+    conn.close()
+    assert profile is not None
+    assert profile.internships[0].description == [payload]
+
+    page = client.get("/profile")
+    assert page.status_code == 200
+    assert payload not in page.text
+    assert "&lt;script&gt;" in page.text
+
+
+def test_profile_page_renders_all_editor_sections(tmp_path):
+    conn = _connect(tmp_path)
+    save_profile(conn, CandidateProfile(locations=["anywhere"], approved=True))
+    conn.close()
+
+    text = TestClient(create_app(tmp_path / "dash.db")).get("/profile").text
+    for label in (
+        "Links",
+        "Internships",
+        "Work experience",
+        "Projects",
+        "Education",
+        "Certifications",
+        "Add internship",
+        "Add work experience",
+        "Add project",
+        "Add education",
+    ):
+        assert label in text
+
+
+def test_profile_edit_reapproves_and_refilters(tmp_path):
+    db = tmp_path / "dash.db"
+    conn = _connect(tmp_path)
+    save_profile(conn, CandidateProfile(locations=["Pune"], approved=True))
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn,
+        run_id,
+        Job(
+            source="test",
+            url="http://x/berlin",
+            dedupe_key="berlin",
+            title="Backend Engineer",
+            location="Berlin",
+            remote_type="onsite",
+            description_raw="Backend Engineer in our Berlin office.",
+        ),
+    )
+    log_stage(
+        conn,
+        "filter_results",
+        job_id=job_id,
+        passed=False,
+        rule_id="location_mismatch",
+        evidence="location 'Berlin' not in ['Pune']",
+    )
+    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", ("rejected", job_id))
+    conn.commit()
+    conn.close()
+
+    client = TestClient(create_app(db))
+    response = _post_form(client, _rich_profile_form(locations="Berlin"))
+    assert response.status_code == 303
+
+    conn = connect(db)
+    profile = get_latest_profile(conn)
+    status = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()["status"]
+    event = conn.execute(
+        "SELECT event, reason FROM job_events WHERE job_id = ?", (job_id,)
+    ).fetchone()
+    conn.close()
+
+    assert profile is not None
+    assert profile.approved is True
+    assert profile.locations == ["Berlin"]
+    assert status == "new"
+    assert event["event"] == "reopened_for_refilter"
+    assert event["reason"] == "profile approved"
+
+
+def test_profile_text_never_reaches_braintrust(tmp_path):
+    from test_observability import install_sdk
+
+    from atlas.observability import reset_observability
+
+    marker = "zzprofilemarker9f3a"
+    _connect(tmp_path).close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    data = _rich_profile_form(internship_description=f"Built the {marker} service")
+
+    sdk = install_sdk()
+    try:
+        response = _post_form(client, data)
+    finally:
+        reset_observability()
+
+    assert response.status_code == 303
+
+    conn = connect(tmp_path / "dash.db")
+    profile = get_latest_profile(conn)
+    conn.close()
+    assert profile is not None
+    assert profile.internships[0].description == [f"Built the {marker} service"]
+
+    blob = "".join(span.sent() for span in sdk.spans).lower()
+    assert marker.lower() not in blob
