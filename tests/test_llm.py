@@ -224,6 +224,57 @@ def test_token_pacing_waits_on_remaining_tokens(monkeypatch):
     assert sleeps == [3.0]
 
 
+class _RawResponse:
+    def __init__(self, parsed, headers):
+        self._parsed = parsed
+        self.headers = headers
+
+    def parse(self):
+        return self._parsed
+
+
+class _RawCompletions:
+    def __init__(self, parsed, headers):
+        self._parsed = parsed
+        self.headers = headers
+
+    def create(self, **kwargs):
+        return _RawResponse(self._parsed, self.headers)
+
+
+class _RawCompletionsHost:
+    def __init__(self, parsed, headers):
+        self.with_raw_response = _RawCompletions(parsed, headers)
+
+
+class _RawChat:
+    def __init__(self, parsed, headers):
+        self.completions = _RawCompletionsHost(parsed, headers)
+
+
+class _RawClient:
+    def __init__(self, parsed, headers):
+        self.chat = _RawChat(parsed, headers)
+
+
+def test_rate_limit_headers_read_from_raw_response():
+    """The parsed Groq object strips headers, so read them via with_raw_response."""
+    headers = {
+        "x-ratelimit-remaining-tokens": "6517",
+        "x-ratelimit-limit-tokens": "8000",
+        "x-ratelimit-reset-tokens": "11.122s",
+    }
+    client = LLMClient(client=_RawClient(_Resp('{"value": 4}'), headers))
+    assert client._remaining_tokens is None
+
+    item = client.call_json(schema=Item, system="s", user="u")
+
+    assert item.value == 4
+    assert client._remaining_tokens == 6517
+    assert client._limit_tokens == 8000
+    assert client._tokens_reset == 11.122
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -367,3 +418,67 @@ def test_tokens_used_accumulates_across_calls():
     client.call_json(schema=Item, system="s", user="u")
 
     assert client.tokens_used == 1400
+
+
+class _ServerErrorResponse:
+    status_code = 503
+    headers: ClassVar[dict[str, str]] = {}
+
+
+class _ServerError(Exception):
+    def __init__(self, message: str = "503 Service Unavailable") -> None:
+        super().__init__(message)
+        self.response = _ServerErrorResponse()
+
+
+def test_503_then_success_is_retried_and_logged(monkeypatch, caplog):
+    """A 5xx is a transient failure: our wrapper retries it, not the SDK."""
+    sleeps: list[float] = []
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda seconds: sleeps.append(seconds))
+    fake = FakeClient([_ServerError(), '{"value": 3}'])
+    client = LLMClient(client=fake, default_model="openai/gpt-oss-120b", max_api_retries=3)
+
+    with caplog.at_level(logging.INFO, logger="atlas.llm"):
+        item = client.call_json(schema=Item, system="s", user="u")
+
+    assert item.value == 3
+    assert fake.chat.completions.calls == 2
+    assert sleeps == [1.0]
+    line = next(r.getMessage() for r in caplog.records if "LLM retry" in r.getMessage())
+    assert "status=503" in line
+    assert "retry_after=-" in line
+    assert "model=openai/gpt-oss-120b" in line
+    assert "call_type=Item" in line
+
+
+def test_connection_error_then_success_is_retried(monkeypatch, caplog):
+    sleeps: list[float] = []
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda seconds: sleeps.append(seconds))
+    fake = FakeClient([ConnectionError("Connection reset by peer"), '{"value": 5}'])
+    client = LLMClient(client=fake, max_api_retries=3)
+
+    with caplog.at_level(logging.INFO, logger="atlas.llm"):
+        item = client.call_json(schema=Item, system="s", user="u")
+
+    assert item.value == 5
+    assert fake.chat.completions.calls == 2
+    assert sleeps == [1.0]
+    line = next(r.getMessage() for r in caplog.records if "LLM retry" in r.getMessage())
+    assert "status=unknown" in line
+    assert "call_type=Item" in line
+
+
+def test_three_transient_failures_stop_with_clear_error(monkeypatch):
+    """Bounded exponential backoff: attempts 1->2 sleep 1s then 2s, then stop."""
+    sleeps: list[float] = []
+    monkeypatch.setattr("atlas.llm.time.sleep", lambda seconds: sleeps.append(seconds))
+    fake = FakeClient([_ServerError(), _ServerError(), _ServerError()])
+    client = LLMClient(client=fake, max_api_retries=3)
+
+    with pytest.raises(LLMError) as excinfo:
+        client.call_json(schema=Item, system="s", user="u")
+
+    assert fake.chat.completions.calls == 3
+    assert sleeps == [1.0, 2.0]
+    assert "after 3 attempts" in str(excinfo.value)
+    assert not isinstance(excinfo.value, GroqDailyLimitReached)

@@ -267,6 +267,26 @@ class LLMClient:
         # Assume the window refilled; the next response's header will correct us.
         self._remaining_tokens = self._limit_tokens
 
+    def _request(self, completions: Any, kwargs: dict[str, Any]) -> Any:
+        """Send one chat completion, preferring the raw-response API.
+
+        ``chat.completions.create`` returns a parsed object the Groq SDK strips of
+        HTTP headers, so ``x-ratelimit-remaining-tokens`` is lost. The
+        ``with_raw_response`` variant returns a wrapper exposing ``headers`` and a
+        ``parse()`` for the same parsed object, so :meth:`_read_rate_limit_headers`
+        can actually see the token budget. Transport fakes may implement only
+        ``create``; fall back to it (and still read ``headers`` off the parsed
+        object if the fake chose to expose any).
+        """
+        raw = getattr(completions, "with_raw_response", None)
+        if raw is not None:
+            response = raw.create(**kwargs)
+            self._read_rate_limit_headers(response)
+            return response.parse()
+        response = completions.create(**kwargs)
+        self._read_rate_limit_headers(response)
+        return response
+
     def _create_once(
         self,
         messages: list[dict[str, str]],
@@ -280,8 +300,7 @@ class LLMClient:
         kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        response = self._client.chat.completions.create(**kwargs)
-        self._read_rate_limit_headers(response)
+        response = self._request(self._client.chat.completions, kwargs)
         if usage is not None:
             self._record_usage(response, usage)
         return response.choices[0].message.content or ""
