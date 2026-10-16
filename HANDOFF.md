@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-16)
 
-- Code state as of PR #36, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #36** (base `8abeaa1`).
-- Tests: **1126 passed** (`python -m pytest -q`).
+- Code state as of PR #37, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #37** (base `8abeaa1`).
+- Tests: **1145 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #36
+## Merged PRs #24 to #37
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -44,7 +44,8 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #33 | `eead966` | 2026-10-15T11:41:53Z | taske/add-a-job | feat(dashboard): owner-only Add a job page running the same pipeline |
 | #34 | `5b0d6ea` | 2026-10-15T17:21:21Z | task/add-background-progress | feat(dashboard): run Add a job in the background with a progress page |
 | #35 | `224b376` | 2026-10-16T03:28:18Z | prA/transient-retries-and-live-report | fix(llm): read rate-limit headers from the raw response; cover transient retries |
-| #36 | `—` | `—` | prB/results-page-improvements | feat(dashboard): per-job result page with owner verdicts |
+| #36 | `cac9b21` | 2026-10-16T03:55:07Z | prB/results-page-improvements | feat(dashboard): per-job result page with owner verdicts |
+| #37 | `—` | `—` | prC1/tailored-resume-generator | feat(resume): grounded tailored-resume generator (no UI) |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -91,6 +92,37 @@ kind, #23 non-job-listing filter.
   changes filters, ranking, decision or prompts.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
+
+## Tailored resume generator (PR #37)
+
+- `atlas/resume.py` + `prompts/tailored_resume.md` (version 1) turn the approved
+  profile and one parsed job into a `TailoredResume`. **No UI yet** (PR C2 adds the
+  job-page button, review page, approval and DOCX/PDF export); the generator is code
+  only and nothing runs it automatically.
+- The model may only rewrite the candidate's own material; code, not the prompt,
+  enforces the hard rules:
+  - a skill is kept only if the profile already has it, alias-aware via the skill
+    ontology (the job's `ReactJS` matches the profile's `React`);
+  - every summary sentence and bullet must carry a verbatim profile quote
+    (`evidence.quote_valid`, `source=profile`); a line that fails is dropped;
+  - a line that introduces a number, metric, date, technology or mid-sentence proper
+    noun the profile does not contain is dropped (`fabricated_tokens`);
+  - each job keyword appears at most once in Skills and at most once across bullets;
+  - requirements the profile lacks go to `missing_requirements` and are never added.
+- Header, experience role/company/duration, project titles/tech, education and
+  certifications are copied verbatim from the profile, so dates and employers cannot
+  change.
+- `ats_lint` checks the flattened blocks (`resume_blocks`): it fails on any table,
+  image, text box, icon or header/footer content, on hidden characters, on empty text
+  and on a missing standard heading (Summary/Skills/Experience/Projects/Education).
+- Storage: `tailored_resumes` table (`job_id`, `version`, `content_json`,
+  `prompt_version`, `model`, `created_at`, `approved_at`); `save_tailored_resume`
+  versions per job, `latest_tailored_resume`, `approve_tailored_resume` (idempotent),
+  `approved_tailored_resume`. Only approved versions are meant to be exported (C2).
+- `generate_tailored_resume_under_caps` wraps the client in `_BudgetedClient` (per-run
+  call/token caps), records tokens via `add_llm_tokens`, and lets
+  `GroqDailyLimitReached` propagate. Profile/resume text never reaches Braintrust
+  (prompt fingerprints only; covered by a test).
 
 ## Groq budget controls (PRs #28-#31, #34)
 
@@ -212,11 +244,12 @@ Agreement"; the page's "Terms of Use" link points to
 
 Nothing below is implemented. Each needs the owner's go-ahead.
 
-- **(a) Tailored resume builder.** Rewrites and reorders content drawn only from the
-  approved profile; every generated line must trace back to a profile fact. Plain
-  single-column, ATS-friendly PDF/DOCX output. JD wording is used only for skills the
-  owner genuinely has. Produces a diff against the base resume; the owner approves
-  before any use. No auto-submission.
+- **(a) Tailored resume builder.** Generator BUILT (PR #37; `atlas/resume.py`, no UI).
+  It rewrites and reorders content drawn only from the approved profile; every
+  generated line traces back to a profile fact, and unmet requirements are listed but
+  never added. Still planned: the dashboard button, review page (diff vs base resume +
+  per-line quote/source), owner approval and ATS-friendly single-column DOCX/PDF
+  export (PR C2). No auto-submission.
 - **(b) "Add a job" dashboard page.** BUILT (PR #33; background + progress page in
   PR #34). Owner pastes a JD's text and link; it is evaluated through the same
   pipeline with `source = "owner_added"`. The URL is **never fetched**.

@@ -176,6 +176,17 @@ CREATE TABLE IF NOT EXISTS owner_verdicts (
     created_at      TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS tailored_resumes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id         INTEGER REFERENCES jobs(id),
+    version        INTEGER NOT NULL,
+    content_json   TEXT NOT NULL,
+    prompt_version TEXT,
+    model          TEXT,
+    created_at     TEXT NOT NULL,
+    approved_at    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS llm_usage (
     day    TEXT PRIMARY KEY,
     tokens INTEGER NOT NULL DEFAULT 0
@@ -402,6 +413,91 @@ def latest_kit_data(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | N
         return None
     parsed = json.loads(row["data_json"])
     return parsed if isinstance(parsed, dict) else None
+
+
+# --------------------------------------------------------------------------- #
+# Tailored resumes
+# --------------------------------------------------------------------------- #
+
+
+def save_tailored_resume(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    content_json: str,
+    model: str,
+    prompt_version: str,
+) -> int:
+    """Store one generated tailored resume for a job; return its new id.
+
+    Versions are per job: the stored version is one more than the highest already
+    stored for that job, so every build is kept and auditable. ``approved_at``
+    starts NULL and is only set by :func:`approve_tailored_resume`.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(MAX(version), 0) AS v FROM tailored_resumes WHERE job_id = ?",
+        (job_id,),
+    ).fetchone()
+    version = int(row["v"] if row is not None else 0) + 1
+    cur = conn.execute(
+        "INSERT INTO tailored_resumes "
+        "(job_id, version, content_json, prompt_version, model, created_at, approved_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, NULL)",
+        (job_id, version, content_json, prompt_version, model, _now()),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def latest_tailored_resume(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
+    """The most recent tailored resume for a job as a raw dict, or ``None``."""
+    row = conn.execute(
+        "SELECT id, job_id, version, content_json, prompt_version, model, "
+        "created_at, approved_at FROM tailored_resumes "
+        "WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_tailored_resume(conn: sqlite3.Connection, resume_id: int) -> dict[str, Any] | None:
+    """One tailored resume by id as a raw dict, or ``None``."""
+    row = conn.execute(
+        "SELECT id, job_id, version, content_json, prompt_version, model, "
+        "created_at, approved_at FROM tailored_resumes WHERE id = ?",
+        (resume_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def approve_tailored_resume(conn: sqlite3.Connection, resume_id: int) -> None:
+    """Mark one tailored resume as approved (sets ``approved_at``).
+
+    Raises ``KeyError`` when the row does not exist. Only approved versions may
+    be downloaded.
+    """
+    cur = conn.execute(
+        "UPDATE tailored_resumes SET approved_at = ? WHERE id = ? AND approved_at IS NULL",
+        (_now(), resume_id),
+    )
+    if cur.rowcount == 0:
+        exists = conn.execute(
+            "SELECT 1 FROM tailored_resumes WHERE id = ?", (resume_id,)
+        ).fetchone()
+        if exists is None:
+            raise KeyError(f"tailored resume {resume_id} not found")
+    conn.commit()
+
+
+def approved_tailored_resume(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
+    """The most recently approved tailored resume for a job, or ``None``."""
+    row = conn.execute(
+        "SELECT id, job_id, version, content_json, prompt_version, model, "
+        "created_at, approved_at FROM tailored_resumes "
+        "WHERE job_id = ? AND approved_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 # --------------------------------------------------------------------------- #
