@@ -167,6 +167,15 @@ CREATE TABLE IF NOT EXISTS job_events (
     data_json  TEXT
 );
 
+CREATE TABLE IF NOT EXISTS owner_verdicts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id          INTEGER REFERENCES jobs(id),
+    verdict         TEXT NOT NULL,
+    reason          TEXT,
+    system_decision TEXT,
+    created_at      TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS llm_usage (
     day    TEXT PRIMARY KEY,
     tokens INTEGER NOT NULL DEFAULT 0
@@ -776,6 +785,58 @@ def record_eval_history(
     )
     conn.commit()
     return int(cur.lastrowid or 0)
+
+
+# --------------------------------------------------------------------------- #
+# Owner verdicts (human's own Apply/Skip call, kept apart from eval labels)
+# --------------------------------------------------------------------------- #
+
+
+#: The two calls the owner can record for a job.
+OWNER_VERDICT_CHOICES: tuple[str, ...] = ("apply", "skip")
+
+
+def save_owner_verdict(
+    conn: sqlite3.Connection,
+    job_id: int,
+    verdict: str,
+    reason: str | None = None,
+    system_decision: str | None = None,
+) -> int:
+    """Append the owner's own Apply/Skip call for one job.
+
+    This is human bookkeeping only: it never writes to ``eval/labels.jsonl`` and
+    never changes the pipeline's decision. ``system_decision`` snapshots what the
+    engine said at the time so a later engine change cannot rewrite history.
+    """
+    if verdict not in OWNER_VERDICT_CHOICES:
+        raise ValueError(f"unknown owner verdict: {verdict!r}")
+    cur = conn.execute(
+        "INSERT INTO owner_verdicts (job_id, verdict, reason, system_decision, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (job_id, verdict, reason, system_decision, _now()),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def latest_owner_verdict(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
+    """The owner's most recent verdict for one job, or ``None``."""
+    row = conn.execute(
+        "SELECT id, job_id, verdict, reason, system_decision, created_at "
+        "FROM owner_verdicts WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def owner_verdict_history(conn: sqlite3.Connection, job_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT id, job_id, verdict, reason, system_decision, created_at "
+        "FROM owner_verdicts WHERE job_id = ? ORDER BY id",
+        (job_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 # --------------------------------------------------------------------------- #

@@ -16,9 +16,9 @@ model; every surfaced job carries a match reason and every rejection logs a reas
 
 ## Interface
 CLI + scheduled run + local web dashboard (`/setup`, `/profile`, Find jobs, results,
-`/rejected`, owner-only `/add` with a `/add/progress` polling page). Dashboard is
-password-guarded and refuses to bind non-loopback without `DASHBOARD_PASSWORD`.
-Email delivery cancelled (local digest only).
+`/rejected`, owner-only `/add` with a `/add/progress` polling page, and a per-job
+result page `/jobs/{job_id}`). Dashboard is password-guarded and refuses to bind
+non-loopback without `DASHBOARD_PASSWORD`. Email delivery cancelled (local digest only).
 
 ## Sources
 Remotive, RemoteOK, Himalayas (multi-page search). Adzuna (no keys configured),
@@ -39,7 +39,9 @@ in our own wrapper. Rate-limit headers are read from the raw HTTP response
 ## Non-goals
 auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so);
 tailored resume builder is planned, not built (see HANDOFF.md "Planned and not
-built"). The "Add a job" page is built (PRs #33/#34).
+built"). The "Add a job" page is built (PRs #33/#34). The per-job result page and the
+owner's own Apply/Skip verdicts (PR #36) are human bookkeeping only: verdicts append
+to the `owner_verdicts` table and never touch `eval/labels.jsonl` or the decision.
 
 ## Metrics
 Targets: precision@10 >= 80%, ~0 seniority pass-throughs.
@@ -47,8 +49,8 @@ UNVERIFIED: current measured values, because there is no verified human-labelled
 yet (G5 / DEC6 BLOCKED). Current eval figures are synthetic smoke tests only.
 
 ## Current state (2026-10-16)
-Code state as of PR #35, 1115 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #35
+Code state as of PR #36, 1126 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #36
 (base `8abeaa1`). See HANDOFF.md for detail.
 
 ## Owner-only (blocking completion)

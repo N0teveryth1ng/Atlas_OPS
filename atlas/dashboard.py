@@ -32,16 +32,19 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from .config import get_settings
 from .db import (
     APPLICATION_STATUSES,
+    OWNER_VERDICT_CHOICES,
     connect,
     fail_stale_runs,
     finish_run,
     get_latest_profile,
     init_db,
     latest_kit_data,
+    latest_owner_verdict,
     latest_run,
     matched_jobs,
     rejected_jobs,
     save_kit,
+    save_owner_verdict,
     save_profile,
     set_application_status,
     shippable_job,
@@ -70,6 +73,8 @@ _COLORS = {"APLD": "#1a7f37", "NTAPLD": "#cf222e", "PEND": "#9a6700"}
 _MIN_SKILL_WARNING = 5
 #: Outcomes the results table may show; SKIP is decided but never shown here.
 _SHOWN_OUTCOMES = frozenset({"apply", "review"})
+#: Any outcome the decision engine can store (the per-job page shows all three).
+_DECISION_OUTCOMES = frozenset({"apply", "review", "skip"})
 #: Non-real rows (test fixtures inserted by the pipeline tests) kept off the page.
 _TEST_SOURCES = frozenset({"manual"})
 
@@ -760,7 +765,7 @@ def _row_html(row: sqlite3.Row) -> str:
         "Prepare application</a> "
     )
     return (
-        f"<tr><td>{job_id}</td><td>{job_cell}</td>"
+        f'<tr><td><a href="/jobs/{job_id}">{job_id}</a></td><td>{job_cell}</td>'
         f"<td>{html.escape(str(row['company'] or '-'))}</td>"
         f"<td>{html.escape(str(row['location'] or '-'))}</td>"
         f"<td>{html.escape(str(row['source'] or '-'))}</td>"
@@ -803,7 +808,7 @@ def _undecided_row_html(row: sqlite3.Row) -> str:
         else title
     )
     return (
-        f"<tr><td>{job_id}</td><td>{job_cell}</td>"
+        f'<tr><td><a href="/jobs/{job_id}">{job_id}</a></td><td>{job_cell}</td>'
         f"<td>{html.escape(str(row['company'] or '-'))}</td>"
         f"<td>{html.escape(str(row['location'] or '-'))}</td>"
         f"<td>{html.escape(str(row['source'] or '-'))}</td>"
@@ -1080,6 +1085,256 @@ def _add_outcome_html(result: Any) -> str:
         _evidence_items(getattr(decision, "reasons_against", [])),
         "</ul>\n",
     ]
+    return "".join(parts)
+
+
+def _score_line(decision: dict[str, Any]) -> str:
+    """The headline score with the REVIEW threshold, e.g. ``55 / 100 (REVIEW starts at 65)``."""
+    review = get_settings().decision.review_threshold
+    score = decision.get("match_score")
+    if isinstance(score, (int, float)):
+        return f"{score:.0f} / 100 (REVIEW starts at {review:.0f})"
+    return f"- / 100 (REVIEW starts at {review:.0f})"
+
+
+def _confidence_text(decision: dict[str, Any]) -> str:
+    value = decision.get("confidence")
+    return f"{value:.0%}" if isinstance(value, (int, float)) else "-"
+
+
+def _dimension_table(decision: dict[str, Any]) -> str:
+    """Score breakdown by dimension: value, weight and disagreement spread."""
+    dimensions = decision.get("dimensions") or {}
+    if not dimensions:
+        return "<p>No dimension breakdown was stored for this decision.</p>\n"
+    weights = decision.get("weights") or {}
+    spreads = decision.get("spreads") or {}
+    rows = []
+    for name in sorted(dimensions):
+        score = dimensions.get(name)
+        rows.append(
+            f"<tr><td>{html.escape(str(name))}</td>"
+            f"<td>{score:.1f}</td>"
+            f"<td>{weights.get(name, 0.0):.2f}</td>"
+            f"<td>{spreads.get(name, 0.0):.1f}</td></tr>\n"
+        )
+    return (
+        "<table><thead><tr><th>Dimension</th><th>Score</th><th>Weight</th>"
+        f"<th>Spread</th></tr></thead><tbody>{''.join(rows)}</tbody></table>\n"
+    )
+
+
+def _vetoes_html(decision: dict[str, Any]) -> str:
+    """Each veto as a one-line rule + reason, plus its quote and source."""
+    vetoes = decision.get("vetoes") or []
+    if not vetoes:
+        return "<p>No vetoes.</p>\n"
+    out = []
+    for veto in vetoes:
+        rule = html.escape(str(veto.get("rule_id") or "-"))
+        kind = "hard" if veto.get("hard", True) else "soft"
+        reason = html.escape(str(veto.get("reason") or ""))
+        evidence = veto.get("evidence") or {}
+        quote = html.escape(str((evidence or {}).get("quote") or ""))
+        source = html.escape(str((evidence or {}).get("source") or ""))
+        line = f"<li><strong>{rule}</strong> ({kind}): {reason}"
+        if quote:
+            line += f"<br>&ldquo;{quote}&rdquo; <em>({source})</em>"
+        out.append(line + "</li>\n")
+    return "<ul>\n" + "".join(out) + "</ul>\n"
+
+
+def _evidence_quote(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("quote") or "").strip()
+    return str(getattr(item, "quote", "") or "").strip()
+
+
+def _evidence_source(item: Any) -> str:
+    source = item.get("source") if isinstance(item, dict) else getattr(item, "source", "")
+    return str(getattr(source, "value", source) or "")
+
+
+def _reason_explanation(item: Any) -> str:
+    """A reason's optional one-line explanation; plain evidence has none."""
+    if not isinstance(item, dict):
+        return ""
+    for key in ("explanation", "reason", "why", "rationale"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _dedupe_reasons(
+    decision: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Dedupe reasons by quote across both sides.
+
+    Returns ``(cited_on_both_sides, only_for, only_against)``; each quote appears
+    at most once. An explanation is taken from whichever side carried one.
+    """
+    for_items = [i for i in (decision.get("reasons_for") or []) if _evidence_quote(i)]
+    against_items = [i for i in (decision.get("reasons_against") or []) if _evidence_quote(i)]
+    for_quotes = {_evidence_quote(i) for i in for_items}
+    against_quotes = {_evidence_quote(i) for i in against_items}
+    against_explanations = {_evidence_quote(i): _reason_explanation(i) for i in against_items}
+
+    def entries(items: list[Any], predicate: Any) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in items:
+            quote = _evidence_quote(item)
+            if quote in seen or not predicate(quote):
+                continue
+            seen.add(quote)
+            explanation = _reason_explanation(item) or against_explanations.get(quote, "")
+            out.append(
+                {"quote": quote, "source": _evidence_source(item), "explanation": explanation}
+            )
+        return out
+
+    both = entries(for_items, lambda q: q in against_quotes)
+    only_for = entries(for_items, lambda q: q not in against_quotes)
+    only_against = entries(against_items, lambda q: q not in for_quotes)
+    return both, only_for, only_against
+
+
+def _reason_list_html(items: list[dict[str, Any]]) -> str:
+    rows = []
+    for item in items:
+        lead = (
+            f"<strong>{html.escape(item['explanation'])}</strong><br>"
+            if item.get("explanation")
+            else ""
+        )
+        rows.append(
+            f"<li>{lead}&ldquo;{html.escape(item['quote'])}&rdquo; "
+            f"<em>({html.escape(item['source'])})</em></li>\n"
+        )
+    return "<ul>\n" + "".join(rows) + "</ul>\n"
+
+
+def _reasons_html(decision: dict[str, Any]) -> str:
+    """Reasons and evidence, each quote once.
+
+    An explained reason is shown as ``explanation`` + quote + source. A reason
+    with no explanation is listed under "Evidence" (quote + source only). A quote
+    cited on both sides appears once, under "Cited on both sides".
+    """
+    both, only_for, only_against = _dedupe_reasons(decision)
+    evidenced = [i for i in only_for if not i["explanation"]]
+    evidenced += [i for i in only_against if not i["explanation"]]
+    parts: list[str] = []
+    for title, items in (
+        ("Reasons for", [i for i in only_for if i["explanation"]]),
+        ("Reasons against", [i for i in only_against if i["explanation"]]),
+        ("Cited on both sides", both),
+        ("Evidence", evidenced),
+    ):
+        if items:
+            parts.append(f"<h3>{title}</h3>\n{_reason_list_html(items)}")
+    if not parts:
+        return "<p>No reasons or evidence were stored for this decision.</p>\n"
+    return "".join(parts)
+
+
+def _owner_verdict_html(verdict: dict[str, Any] | None) -> str:
+    if verdict is None:
+        return "<p>You have not recorded a verdict for this job yet.</p>\n"
+    label = html.escape(str(verdict.get("verdict") or "").upper())
+    reason = html.escape(str(verdict.get("reason") or "-"))
+    system = html.escape(str(verdict.get("system_decision") or "-"))
+    when = html.escape(_recorded_text(verdict.get("created_at")))
+    return (
+        f"<p>Your verdict: <strong>{label}</strong> &mdash; {reason}<br>"
+        f'<span class="notice">system decision at the time: {system} &middot; {when}</span></p>\n'
+    )
+
+
+def _owner_verdict_form(job_id: int) -> str:
+    options = "".join(
+        f'<option value="{code}">{code.upper()}</option>' for code in OWNER_VERDICT_CHOICES
+    )
+    return (
+        f'<form method="post" action="/jobs/{job_id}/verdict">'
+        f'<label>Verdict: <select name="verdict">{options}</select></label> '
+        '<label>Reason: <input type="text" name="reason" maxlength="200" '
+        'placeholder="one line"></label> '
+        '<button type="submit">Your verdict</button></form>\n'
+    )
+
+
+def _job_error_page(message: str) -> str:
+    return (
+        _HEAD
+        + _nav()
+        + "<h1>Job result</h1>"
+        + f'<p class="error">{html.escape(message)}</p>'
+        + '<p><a href="/">Back to results</a></p>'
+        + _TABLE_FOOT
+    )
+
+
+def _job_result_page(
+    row: sqlite3.Row,
+    *,
+    owner_verdict: dict[str, Any] | None = None,
+    notice: str | None = None,
+    error: str | None = None,
+) -> str:
+    """One job's full, auditable result: score, dimensions, vetoes and reasons."""
+    job_id = int(row["id"])
+    url = str(row["url"] or "")
+    decision = _load_json(row["decision_json"])
+    evaluation = _load_json(row["evaluation_json"])
+    parsed = _load_json(row["parsed_json"])
+    title = html.escape(str(row["title"] or url or f"job {job_id}"))
+    job_cell = (
+        f'<a href="{html.escape(url, quote=True)}" rel="noreferrer">{title}</a>'
+        if is_http_url(url)
+        else title
+    )
+    parts = [_HEAD, _nav(), f"<h1>Result &mdash; {title}</h1>\n"]
+    if notice:
+        parts.append(f'<p class="notice">{html.escape(notice)}</p>\n')
+    if error:
+        parts.append(f'<p class="error">{html.escape(error)}</p>\n')
+    parts.append(
+        f"<p>Company: {html.escape(str(row['company'] or '-'))}<br>"
+        f"Location: {html.escape(str(row['location'] or '-'))}<br>"
+        f"Source: {html.escape(str(row['source'] or '-'))}<br>"
+        f"Job: {job_cell}</p>\n"
+    )
+    if not decision:
+        parts.append('<p class="warn">No decision is stored for this job yet.</p>\n')
+    else:
+        outcome = str(decision.get("outcome") or "-").lower()
+        missing = ", ".join(str(s) for s in (decision.get("missing_skills") or [])) or "-"
+        parts.append(f"<h2>Decision: {html.escape(outcome.upper())}</h2>\n")
+        parts.append(f"<p>Score: <strong>{html.escape(_score_line(decision))}</strong></p>\n")
+        parts.append(
+            f"<p>Confidence: <strong>{html.escape(_confidence_text(decision))}</strong></p>\n"
+        )
+        parts.append(
+            f"<p>Seniority assessment: {html.escape(_seniority_text(evaluation, parsed))}</p>\n"
+        )
+        parts.append(f"<p>Missing skills: {html.escape(missing)}</p>\n")
+        parts.append("<h3>Score breakdown</h3>\n")
+        parts.append(_dimension_table(decision))
+        parts.append("<h3>Vetoes</h3>\n")
+        parts.append(_vetoes_html(decision))
+        parts.append(_reasons_html(decision))
+    parts.append("<h2>Prepare application</h2>\n")
+    parts.append(
+        f'<p><a class="badge" style="background:#8250df" href="/jobs/{job_id}/kit">'
+        "Prepare application</a></p>\n"
+    )
+    parts.append("<h2>Your verdict</h2>\n")
+    parts.append(_owner_verdict_html(owner_verdict))
+    parts.append(_owner_verdict_form(job_id))
+    parts.append('<p><a href="/">Back to results</a></p>\n')
+    parts.append(_TABLE_FOOT)
     return "".join(parts)
 
 
@@ -1432,6 +1687,55 @@ def create_app(
             conn.close()
         return RedirectResponse(url="/", status_code=303)
 
+    @app.get("/jobs/{job_id}", response_class=HTMLResponse)
+    def job_result_get(request: Request, job_id: int) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return HTMLResponse(_job_error_page(f"Database unavailable: {exc}"), status_code=503)
+        try:
+            row = shippable_job(conn, job_id)
+            verdict = latest_owner_verdict(conn, job_id) if row is not None else None
+        finally:
+            conn.close()
+        if row is None:
+            return HTMLResponse(
+                _job_error_page("Job not found, or it did not pass every hard filter."),
+                status_code=404,
+            )
+        return HTMLResponse(_job_result_page(row, owner_verdict=verdict))
+
+    @app.post("/jobs/{job_id}/verdict")
+    def job_verdict_post(
+        request: Request,
+        job_id: int,
+        verdict: str = Form(...),
+        reason: str = Form(""),
+    ) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        try:
+            row = shippable_job(conn, job_id)
+            if row is None:
+                return JSONResponse({"error": "job not found"}, status_code=404)
+            system_decision = str(_load_json(row["decision_json"]).get("outcome") or "") or None
+            save_owner_verdict(conn, job_id, verdict, reason.strip() or None, system_decision)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        finally:
+            conn.close()
+        return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
+
     def _kit_job_or_error(job_id: int) -> tuple[sqlite3.Row | None, str | None, int]:
         """Load one APPLY/REVIEW job for the kit page, or an error page body."""
         try:
@@ -1449,8 +1753,8 @@ def create_app(
                 404,
             )
         outcome = str(_load_json(row["decision_json"]).get("outcome") or "").lower()
-        if outcome not in _SHOWN_OUTCOMES:
-            return None, _kit_error_page("No APPLY/REVIEW decision stored for this job."), 404
+        if outcome not in _DECISION_OUTCOMES:
+            return None, _kit_error_page("No decision stored for this job."), 404
         return row, None, 200
 
     def _stored_kit(job_id: int) -> ApplicationKit | None:

@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-16)
 
-- Code state as of PR #35, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #35** (base `8abeaa1`).
-- Tests: **1115 passed** (`python -m pytest -q`).
+- Code state as of PR #36, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #36** (base `8abeaa1`).
+- Tests: **1126 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #35
+## Merged PRs #24 to #36
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -43,7 +43,8 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #32 | `a15c1a1` | 2026-10-15T10:45:52Z | docs/handoff-complete | docs(handoff): refresh HANDOFF/PRD to current state; add Task D evidence, planned-not-built, owner-only |
 | #33 | `eead966` | 2026-10-15T11:41:53Z | taske/add-a-job | feat(dashboard): owner-only Add a job page running the same pipeline |
 | #34 | `5b0d6ea` | 2026-10-15T17:21:21Z | task/add-background-progress | feat(dashboard): run Add a job in the background with a progress page |
-| #35 | `—` | `—` | prA/transient-retries-and-live-report | fix(llm): read rate-limit headers from the raw response; cover transient retries |
+| #35 | `224b376` | 2026-10-16T03:28:18Z | prA/transient-retries-and-live-report | fix(llm): read rate-limit headers from the raw response; cover transient retries |
+| #36 | `—` | `—` | prB/results-page-improvements | feat(dashboard): per-job result page with owner verdicts |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -57,11 +58,18 @@ kind, #23 non-job-listing filter.
   (background thread, one-run lock) -> `/status` + `/api/status` -> results table
   (only APPLY/REVIEW decisions; SKIP hidden; undecided rows under "Not yet evaluated";
   stored APPLY with unknown seniority shown as REVIEW with a warning; source=manual
-  hidden) with APLD / NTAPLD / PEND bookkeeping -> `/rejected` with filter rule +
-  reason -> `/health`. **Add a job** (`/add`, owner-only; PR #33) pastes a JD and
-  runs the same pipeline; since PR #34 it evaluates in a background thread and
-  redirects (303) to `/add/progress`, which polls `/api/add-status` (current step,
-  Groq rate-limit wait, LLM calls / tokens) and renders the decision when done.
+  hidden) with APLD / NTAPLD / PEND bookkeeping -> **per-job result page**
+  `GET /jobs/{job_id}` (PR #36; each results row links here) showing the score line
+  `N / 100 (REVIEW starts at 65)`, confidence, seniority assessment, missing skills,
+  the score breakdown by dimension (score / weight / spread), vetoes (rule + reason +
+  quote + source), and deduped reasons (each quote once, split into "Cited on both
+  sides" / reasons for / reasons against / "Evidence"), plus **Prepare application**
+  (opens `/jobs/{id}/kit` for any decision, including SKIP) and a **Your verdict**
+  form -> `/rejected` with filter rule + reason -> `/health`. **Add a job** (`/add`,
+  owner-only; PR #33) pastes a JD and runs the same pipeline; since PR #34 it
+  evaluates in a background thread and redirects (303) to `/add/progress`, which polls
+  `/api/add-status` (current step, Groq rate-limit wait, LLM calls / tokens) and
+  renders the decision when done.
   `DASHBOARD_PASSWORD` login (constant-time compare, same-origin CSRF, HTML
   escaping); refuses to bind non-loopback without the password.
 - Pipeline: profile -> query planner -> collectors -> normalize/dedupe (SQLite) -> JD
@@ -71,6 +79,18 @@ kind, #23 non-job-listing filter.
 - Cost controls: deterministic pre-filter rejects failures before any LLM call; per-run
   LLM call + token caps; hard filters re-applied on profile approval and every run
   start; abandoned runs are failed and live progress persists (run recovery).
+
+## Owner verdicts (PR #36)
+
+- The per-job page lets the owner record their own Apply / Skip call with a one-line
+  reason (`POST /jobs/{job_id}/verdict`). Each submission is **appended** to the
+  `owner_verdicts` table (`job_id`, `verdict`, `reason`, `system_decision`, `created_at`)
+  and the page shows the latest; `system_decision` snapshots what the engine said at
+  that moment so a later engine change cannot rewrite history.
+- This is human bookkeeping only: it never writes to `eval/labels.jsonl` and never
+  changes filters, ranking, decision or prompts.
+- **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
+  REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
 ## Groq budget controls (PRs #28-#31, #34)
 
