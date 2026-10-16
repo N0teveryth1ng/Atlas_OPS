@@ -33,7 +33,8 @@ Deterministic pre-filter rejects before any LLM call; per-run caps
 PAUSES the run (jobs stay resumable). Find jobs refuses to start when today's tokens
 are >= 90% of the daily cap or a daily-limit pause is still in effect. The Groq SDK
 is built with `max_retries=0`: all retrying, pacing and daily-limit detection live
-in our own wrapper.
+in our own wrapper. Rate-limit headers are read from the raw HTTP response
+(`with_raw_response`), since the SDK's parsed object strips them (PR #35).
 
 ## Non-goals
 auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so);
@@ -45,9 +46,9 @@ Targets: precision@10 >= 80%, ~0 seniority pass-throughs.
 UNVERIFIED: current measured values, because there is no verified human-labelled set
 yet (G5 / DEC6 BLOCKED). Current eval figures are synthetic smoke tests only.
 
-## Current state (2026-10-15)
-Code state as of PR #34, 1111 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #34
+## Current state (2026-10-16)
+Code state as of PR #35, 1115 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #35
 (base `8abeaa1`). See HANDOFF.md for detail.
 
 ## Owner-only (blocking completion)

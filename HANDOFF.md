@@ -1,10 +1,10 @@
 # HANDOFF.md
 
-## State (verified 2026-10-15)
+## State (verified 2026-10-16)
 
-- Code state as of PR #34, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #34** (base `8abeaa1`).
-- Tests: **1111 passed** (`python -m pytest -q`).
+- Code state as of PR #35, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #35** (base `8abeaa1`).
+- Tests: **1115 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #34
+## Merged PRs #24 to #35
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -42,7 +42,8 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #31 | `11a408b` | 2026-10-15T06:54:09Z | taskd/find-daily-limit-guard | feat(dashboard): refuse Find jobs when Groq daily limit is near or paused |
 | #32 | `a15c1a1` | 2026-10-15T10:45:52Z | docs/handoff-complete | docs(handoff): refresh HANDOFF/PRD to current state; add Task D evidence, planned-not-built, owner-only |
 | #33 | `eead966` | 2026-10-15T11:41:53Z | taske/add-a-job | feat(dashboard): owner-only Add a job page running the same pipeline |
-| #34 | `—` | 2026-10-15T | task/add-background-progress | feat(dashboard): run Add a job in the background with a progress page |
+| #34 | `5b0d6ea` | 2026-10-15T17:21:21Z | task/add-background-progress | feat(dashboard): run Add a job in the background with a progress page |
+| #35 | `—` | `—` | prA/transient-retries-and-live-report | fix(llm): read rate-limit headers from the raw response; cover transient retries |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -83,6 +84,11 @@ kind, #23 non-job-listing filter.
   built with `max_retries=0`, so its internal 2-retry backoff can no longer bypass
   our pacing, wait callbacks or daily-limit detection. Each retry logs
   `status`, `Retry-After`, `model`, `call_type` and the remaining token header.
+- Rate-limit headers are read from the **raw** HTTP response (PR #35): the Groq SDK's
+  parsed object strips them, so `_create_once` goes through
+  `chat.completions.with_raw_response.create(...)` and `.parse()`. This is what lets
+  `x-ratelimit-remaining-tokens` actually drive proactive pacing (`_pace`) and appear
+  in retry logs; before #35 that read was a silent no-op in production.
 - Per-run token cap: `_BudgetedClient(..., max_tokens=120000)` raises
   `LLMTokenBudgetExceeded`; `run_pipeline` catches it and PAUSES (does not fail) so
   jobs stay resumable.
