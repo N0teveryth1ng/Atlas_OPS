@@ -99,13 +99,21 @@ class Education(BaseModel):
     field: str | None = None
     institution: str | None = None
     graduation_year: int | None = None
+    # True when the graduation year is expected rather than already achieved.
+    expected: bool = False
 
 
 class Experience(BaseModel):
     role: str | None = None
     company: str | None = None
     duration_months: int | None = None
+    # Free-text dates ("Jun 2024 - Aug 2024") when the owner prefers them to
+    # a plain month count. Stored verbatim; never inferred.
+    dates: str | None = None
     tech: list[str] = Field(default_factory=list)
+    # One description bullet per line. Required for internships/work before the
+    # profile may be approved; the editor never invents these.
+    description: list[str] = Field(default_factory=list)
 
 
 class Project(BaseModel):
@@ -134,6 +142,9 @@ class Skill(BaseModel):
     proficiency: Proficiency = Proficiency.familiar
     evidence: str | None = None
     last_used: str | None = None
+    # Optional free-text name of a project or internship that evidences the
+    # skill ("GameGenesis internship", "Portfolio site"). Owner-entered only.
+    evidenced_by: str | None = None
 
 
 # --------------------------------------------------------------------------- #
