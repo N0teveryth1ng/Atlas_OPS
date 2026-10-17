@@ -85,6 +85,14 @@ MAX_RESUME_CALLS = 3
 #: a verbatim profile sentence. Bounded further by :data:`MAX_RESUME_CALLS`.
 MAX_SECTION_REPAIR_ATTEMPTS = 2
 
+#: Bumped whenever the generator's rules or output change. Part of the cache key so
+#: that a rule change never serves a stale resume built by the previous rules (C2).
+GENERATOR_VERSION = "2"
+
+#: Rough token estimate for one on-demand resume build, shown in the "Regenerate"
+#: confirmation when no previous generation has recorded its real cost (C2).
+ESTIMATED_RESUME_TOKENS = 12000
+
 #: The main Skills group holds at most this many names; any overflow moves to the
 #: "Additional tools" list (shown on the review page, not exported by default).
 MAX_MAIN_SKILLS = 14
@@ -143,6 +151,9 @@ FAMILIAR_HEADING = "Familiar with (confirm before use)"
 
 #: ``ResumeLine.source`` marker for a code-supplied fallback copied from the profile.
 PROFILE_VERBATIM = "profile-verbatim"
+
+#: ``ResumeLine.source`` marker for a line the owner edited inline on the review page.
+OWNER_EDITED = "owner-edited"
 
 #: Words that claim ownership, leadership, reliability or scale. Single-word stems are
 #: matched as a *prefix* of a line token (so "delivering" is caught by "deliver" and
@@ -1549,6 +1560,122 @@ def ats_lint(target: TailoredResume | list[ResumeBlock]) -> ATSReport:
 
 
 # --------------------------------------------------------------------------- #
+# Review-page helpers (source badges, claim flags, owner edits)
+# --------------------------------------------------------------------------- #
+
+
+#: Line keys the review page/editor uses: ``summary:0``, ``experience:0:1``, ...
+def line_key(section: str, *indices: int) -> str:
+    """A stable key for one editable line (``summary:0``, ``experience:0:2``)."""
+    return ":".join([section, *(str(index) for index in indices)])
+
+
+def line_source(line: ResumeLine) -> str:
+    """The owner-facing source badge for one line: model, profile-verbatim, owner-edited."""
+    if line.source == PROFILE_VERBATIM:
+        return "profile-verbatim"
+    if line.source == OWNER_EDITED:
+        return "owner-edited"
+    return "model"
+
+
+def review_flags(line: ResumeLine, facts: dict[str, Fact], ontology: SkillOntology) -> list[str]:
+    """Claim-strength / grounding flags for one line, shown beside it (never blocking)."""
+    raw_ids = list(line.facts or [])
+    if not raw_ids:
+        return ["no fact id cited"]
+    unknown = [fid for fid in raw_ids if fid not in facts]
+    if unknown:
+        return [f"unknown fact id(s): {', '.join(unknown)}"]
+    cited_text = " ".join(facts[fid].text for fid in raw_ids)
+    tech = [t for fid in raw_ids for t in facts[fid].tech]
+    allowed = set(_tokenize(cited_text))
+    tech_tokens = set(_tokenize(" ".join(tech)))
+    flags: list[str] = []
+    claim = _claim_error(line.text, allowed | tech_tokens)
+    if claim:
+        flags.append(claim)
+    ungrounded = _ungrounded_content(line.text, allowed | tech_tokens)
+    if len(ungrounded) > 1:
+        flags.append(f"content words not in cited facts: {', '.join(ungrounded)}")
+    flagged = _ungrounded(line.text, allowed, tech_tokens, ontology)
+    if flagged:
+        flags.append(f"term(s) not in cited facts: {', '.join(flagged)}")
+    return flags
+
+
+def profile_vocabulary(
+    profile: CandidateProfile, ontology: SkillOntology
+) -> tuple[set[str], set[str]]:
+    """Every token (and tech token) the whole approved profile contains."""
+    facts = build_facts(profile)
+    tokens: set[str] = set()
+    tech_tokens: set[str] = set()
+    for fact in facts.values():
+        tokens |= set(_tokenize(fact.text))
+        tech_tokens |= set(_tokenize(" ".join(fact.tech)))
+    for item in _all_tech_items(profile):
+        tokens |= set(_tokenize(item))
+        for name in _expand_tech_item(item):
+            tokens |= set(_tokenize(name))
+    for skill in profile.skills:
+        tokens |= set(_tokenize(strip_proficiency(skill.name)))
+    return tokens, tech_tokens
+
+
+def edit_warnings(text: str, profile: CandidateProfile, ontology: SkillOntology) -> list[str]:
+    """Warn (never block) when an owner edit adds a technology or number absent from the profile.
+
+    ``_ungrounded`` already narrows to the tokens that need grounding — numbers,
+    ontology technologies and mid-sentence proper nouns — after stripping generic
+    nouns, sentence-initial words and ``I``. Anything it flags was not present in the
+    approved profile, so the owner is told about it and free to keep it.
+    """
+    allowed, tech_tokens = profile_vocabulary(profile, ontology)
+    introduced = _ungrounded(text, allowed, tech_tokens, ontology)
+    if not introduced:
+        return []
+    return ["introduces a technology or number not found in the profile: " + ", ".join(introduced)]
+
+
+def apply_line_edits(
+    resume: TailoredResume,
+    edits: dict[str, str],
+    *,
+    profile: CandidateProfile,
+    ontology: SkillOntology,
+) -> tuple[TailoredResume, list[str]]:
+    """Apply owner edits as new owner-edited lines; return the copy and edit warnings.
+
+    ``edits`` maps a :func:`line_key` to the new text. Lines whose text is unchanged
+    are left as-is; changed lines are marked ``owner-edited`` and any technology or
+    number the edit adds but the profile lacks is warned about (never blocked).
+    """
+    edited = resume.model_copy(deep=True)
+    warnings: list[str] = []
+    targets: list[tuple[str, ResumeLine]] = []
+    for index, line in enumerate(edited.summary):
+        targets.append((line_key("summary", index), line))
+    for entry_index, entry in enumerate(edited.experience):
+        for bullet_index, line in enumerate(entry.bullets):
+            targets.append((line_key("experience", entry_index, bullet_index), line))
+    for project_index, project in enumerate(edited.projects):
+        for bullet_index, line in enumerate(project.bullets):
+            targets.append((line_key("project", project_index, bullet_index), line))
+    for key, line in targets:
+        if key not in edits:
+            continue
+        new_text = (edits[key] or "").strip()
+        if not new_text or new_text == line.text:
+            continue
+        line.text = new_text
+        line.source = OWNER_EDITED
+        warnings.extend(edit_warnings(new_text, profile, ontology))
+    edited.ats = ats_lint(edited)
+    return edited, warnings
+
+
+# --------------------------------------------------------------------------- #
 # Prompt
 # --------------------------------------------------------------------------- #
 
@@ -2076,9 +2203,13 @@ def _project_verbatim_line(index: int, facts: dict[str, Fact]) -> ResumeLine | N
 
 def _fill_internship_verbatim(
     resume: TailoredResume, profile: CandidateProfile, facts: dict[str, Fact]
-) -> list[str]:
-    """Top the internship section up to the minimum with verbatim profile sentences."""
-    notes: list[str] = []
+) -> int:
+    """Top the internship section up to the minimum with verbatim profile sentences.
+
+    Returns how many verbatim lines were added (the caller reports one warning per
+    section plus a single count of fallbacks, never one warning per line).
+    """
+    added = 0
     indices = _internship_indices(profile)
     used = {
         fact_id
@@ -2095,7 +2226,7 @@ def _fill_internship_verbatim(
             _split_sentences(" ".join(entry.description or [])), start=1
         ):
             if _internship_bullet_count(resume, profile) >= MIN_INTERNSHIP_BULLETS:
-                return notes
+                return added
             fact_id = f"I{index + 1}.s{position}"
             if fact_id in used or fact_id not in facts:
                 continue
@@ -2104,11 +2235,8 @@ def _fill_internship_verbatim(
                 continue
             resume.experience[index].bullets.append(line)
             used.add(fact_id)
-            notes.append(
-                f"internship '{entry.role or '?'} @ {entry.company or '?'}': fewer than "
-                f"{MIN_INTERNSHIP_BULLETS} grounded bullets; used a profile-verbatim sentence"
-            )
-    return notes
+            added += 1
+    return added
 
 
 def generate_tailored_resume(
@@ -2215,37 +2343,64 @@ def generate_tailored_resume(
         resume = assemble()
 
     # Code fallback: a still-empty project gets its own summary/outcome sentence, and a
-    # still-thin internship gets its own description sentences, both verbatim.
-    fallback_notes: list[str] = []
+    # still-thin internship gets its own description sentences, both verbatim. Warnings
+    # are collected per section (never per line) plus one fallback count.
+    section_notes: list[str] = []
+    verbatim_count = 0
     for index, project in enumerate(resume.projects):
         if project.bullets:
             continue
         line = _project_verbatim_line(index, facts)
         if line is not None:
             project.bullets = [line]
-            fallback_notes.append(
-                f"project '{project.title or index + 1}': no grounded bullets; used a "
+            verbatim_count += 1
+            section_notes.append(
+                f"project '{project.title or index + 1}' had no grounded bullets; used a "
                 "profile-verbatim sentence"
             )
     if _internship_is_thin(resume, profile):
-        fallback_notes.extend(_fill_internship_verbatim(resume, profile, facts))
+        added = _fill_internship_verbatim(resume, profile, facts)
+        if added:
+            verbatim_count += added
+            label = _internship_label(profile)
+            section_notes.append(
+                f"internship '{label}' had fewer than {MIN_INTERNSHIP_BULLETS} grounded "
+                "bullets; used a profile-verbatim sentence"
+            )
 
-    resume.warnings = _resume_warnings(resume, profile, fallback_notes)
+    resume.warnings = _resume_warnings(resume, profile, section_notes, verbatim_count)
     resume.ats = ats_lint(resume)
     return resume
 
 
+def _internship_label(profile: CandidateProfile) -> str:
+    """``role @ company`` for the first internship, or ``?`` when it is unset."""
+    if not profile.internships:
+        return "?"
+    entry = profile.internships[0]
+    return f"{entry.role or '?'} @ {entry.company or '?'}"
+
+
 def _resume_warnings(
-    resume: TailoredResume, profile: CandidateProfile, fallback_notes: list[str]
+    resume: TailoredResume,
+    profile: CandidateProfile,
+    section_notes: list[str],
+    verbatim_count: int,
 ) -> list[str]:
-    """Owner-facing warnings: any thin/empty section and every verbatim fallback used."""
+    """Owner-facing warnings: one per empty/thin section plus a single fallback count.
+
+    Never one warning per line: a thin/empty section is named once and the verbatim
+    fallbacks it used are summarised in one count.
+    """
     warnings: list[str] = []
     if _internship_is_thin(resume, profile):
         warnings.append("internship section thin: add detail on the Profile page")
     for index, project in enumerate(resume.projects):
         if not project.bullets:
             warnings.append(f"project '{project.title or index + 1}' has no grounded bullets")
-    warnings.extend(fallback_notes)
+    warnings.extend(section_notes)
+    if verbatim_count:
+        warnings.append(f"{verbatim_count} resume line(s) fell back to a verbatim profile sentence")
     return warnings
 
 
@@ -2300,6 +2455,7 @@ class ResumeGeneration:
     tokens: int
     calls: int
     cached: bool
+    resume_id: int | None = None
 
 
 def profile_hash(profile: CandidateProfile) -> str:
@@ -2317,26 +2473,31 @@ def generate_tailored_resume_cached(
     parsed_jd: ParsedJD,
     settings: Settings | None = None,
     ontology: SkillOntology | None = None,
+    regenerate: bool = False,
 ) -> ResumeGeneration:
-    """Build on demand, caching by ``(profile hash, job id, prompt version)``.
+    """Build on demand, caching by profile hash, job id, prompt and generator version.
 
-    A repeat build for the same profile, job and prompt version returns the stored
-    resume with **zero** LLM calls; otherwise it generates under the caps, stores the
-    result and reports the tokens/calls spent. Never called from a bulk run.
+    A repeat build for the same profile, job, prompt version and
+    :data:`GENERATOR_VERSION` returns the stored resume with **zero** LLM calls;
+    otherwise it generates under the caps, stores the result and reports the
+    tokens/calls spent. ``regenerate=True`` bypasses the cache (the owner asked to
+    rebuild) but still stores the new version. Never called from a bulk run.
     """
     settings = settings or get_settings()
     ontology = ontology or get_ontology()
     _system, version = load_prompt("tailored_resume")
     digest = profile_hash(profile)
 
-    cached = find_cached_tailored_resume(conn, job_id, digest, version)
-    if cached is not None:
-        return ResumeGeneration(
-            resume=TailoredResume.model_validate_json(cached["content_json"]),
-            tokens=0,
-            calls=0,
-            cached=True,
-        )
+    if not regenerate:
+        cached = find_cached_tailored_resume(conn, job_id, digest, version, GENERATOR_VERSION)
+        if cached is not None:
+            return ResumeGeneration(
+                resume=TailoredResume.model_validate_json(cached["content_json"]),
+                tokens=0,
+                calls=0,
+                cached=True,
+                resume_id=int(cached["id"]),
+            )
 
     start_tokens = int(getattr(client, "tokens_used", 0) or 0)
     start_calls = int(getattr(client, "calls", 0) or 0)
@@ -2351,12 +2512,17 @@ def generate_tailored_resume_cached(
     )
     tokens = int(getattr(client, "tokens_used", 0) or 0) - start_tokens
     calls = int(getattr(client, "calls", 0) or 0) - start_calls
-    save_tailored_resume(
+    resume_id = save_tailored_resume(
         conn,
         job_id,
         content_json=resume.model_dump_json(),
         model=resume.model,
         prompt_version=version,
         profile_hash=digest,
+        generator_version=GENERATOR_VERSION,
+        tokens=tokens,
+        calls=calls,
     )
-    return ResumeGeneration(resume=resume, tokens=tokens, calls=calls, cached=False)
+    return ResumeGeneration(
+        resume=resume, tokens=tokens, calls=calls, cached=False, resume_id=resume_id
+    )
