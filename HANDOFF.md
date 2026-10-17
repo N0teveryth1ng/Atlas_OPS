@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-17)
 
-- Code state as of PR #40, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #40** (base `8abeaa1`).
-- Tests: **1176 passed** (`python -m pytest -q`).
+- Code state as of PR #41, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #41** (base `8abeaa1`).
+- Tests: **1177 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #39
+## Merged PRs #24 to #41
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -49,6 +49,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #38 | `bba204c` | 2026-10-16T09:30:13Z | prC/profile-editor | feat(profile): rich profile editor (internships/work/projects/education/links/certs) |
 | #39 | `c6a6276` | 2026-10-17T04:11:02Z | prC1b/resume-fact-grounding | fix(resume): ground tailored-resume lines by profile fact ids; build skills in code |
 | #40 | `dc648aa` | 2026-10-17T04:57:22Z | prC1c/grounding-claim-strength | fix(resume): reject unsupported strength claims; ground only tech/number; ontology coverage; evidence-linked skills |
+| #41 | `e67a847` | 2026-10-17T05:27:38Z | prC1c/coverage-fact-choice | fix(resume): cite the tech fact that names the covered concept, not the entry title |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -98,7 +99,7 @@ kind, #23 non-job-listing filter.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
-## Tailored resume generator (PRs #37, #39, #40)
+## Tailored resume generator (PRs #37, #39, #40, #41)
 
 - `atlas/resume.py` + `prompts/tailored_resume.md` (version 3) turn the approved
   profile and one parsed job into a `TailoredResume`. **No UI yet** (PR C2 adds the
@@ -117,19 +118,25 @@ kind, #23 non-job-listing filter.
     would exceed the global cap. Only technologies (skill ontology + proper nouns) and
     numbers need grounding; generic nouns (data, design, system, API/APIs, AI, service,
     platform, pipeline) are ignored, with `AI -> LLM` and `API -> REST` (#40);
-  - a line is dropped when it claims ownership/leadership/reliability/scale
-    (`led`, `owning`, `architected`, `zero-downtime`, `robust`, `reliable`, ...) with a
-    word the cited facts do not contain — a "Sole engineer" title does not license
-    "led" or "owning" (#40);
+  - a line is dropped when it claims ownership/leadership/reliability/scale or a
+    strength adjective (`led`, `owning`, `architected`, `zero-downtime`, `robust`,
+    `reliable`, `production-grade`, `from scratch`, `core`, `enterprise`, `scalable`,
+    `end-to-end`, `delivered`, ...) with a word the cited facts do not contain — a
+    "Sole engineer" title does not license "led" or "owning" (#40, #41);
   - skills are **built in code, never by the model**, and are evidence-linked: a skill
-    is in the main group only when a project/internship/work tech list contains it (or
-    the owner set `confirmed`), otherwise it moves to
-    "Familiar with (confirm before use)"; JD-matching skills come first (#40);
+    is in the main group only when a project/internship/work tech list, a project
+    summary/outcomes, or an internship/work description names it (or the owner set
+    `confirmed`), otherwise it moves to "Familiar with (confirm before use)";
+    JD-matching skills come first, and `TailoredResume.skill_facts` records the fact id
+    that evidences each main skill (#40, #41);
   - requirements are classified by ontology/alias/family first (`REST API Design`
     covers `APIs`, `Idempotency`/`Circuit Breakers` cover design patterns,
-    `PostgreSQL`/`Redis` cover storage, familiar `AWS`/`GCP` give `partial` cloud); the
-    8-character verbatim-quote rule applies only to free-text claims, not skill/tech
-    names, and the cited fact is the entry's `.tech` fact whose text names the concept;
+    `PostgreSQL`/`Redis` cover storage, familiar `AWS`/`GCP` give `partial` cloud); a
+    requirement that has a concept family is judged *only* by that family and the
+    model's judgement can never upgrade it, so `data structures` stays missing unless a
+    fact actually names a data structure or algorithm; the 8-character verbatim-quote
+    rule applies only to free-text claims, not skill/tech names, and the cited fact is
+    the entry's `.tech` fact whose text names the concept (#40, #41);
   - such requirements the profile lacks go to `missing_requirements` and are never added.
 - Every validated internship bullet is kept; a validated internship with fewer than 2
   surviving bullets emits the warning

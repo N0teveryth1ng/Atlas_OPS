@@ -18,10 +18,13 @@ Grounding is by *fact IDs*, not free-text quotes:
   global cap; generic nouns (data, design, system, API, AI, service, platform, pipeline)
   never need grounding;
 * skills are evidence-linked: a skill is only in the main group when a project or
-  internship tech list contains it (or the owner confirmed it), otherwise it moves to
+  internship/work tech list, or a project summary/outcomes, or an internship/work
+  description, contains it (or the owner confirmed it), otherwise it moves to
   "Familiar with (confirm before use)";
 * job requirements are classified covered / partial / missing with the fact id and
-  quote that support them; only truly unsupported ones are missing.
+  quote that support them; a requirement with a concept family is judged only by that
+  family, so "data structures" is missing unless a fact names a data structure or
+  algorithm.
 
 A failing line is dropped (with its reason). Structural fields (header, role/company/
 duration, project titles/tech, education, certifications) are copied verbatim from the
@@ -72,7 +75,8 @@ FAMILIAR_HEADING = "Familiar with (confirm before use)"
 
 #: Words that claim ownership, leadership, reliability or scale. Each must appear
 #: verbatim in the cited fact text, so a "Sole engineer" fact cannot license "led"
-#: or "architected".
+#: or "architected", and a plain project cannot license "production-grade",
+#: "from scratch", "core", "enterprise", "scalable", "end-to-end" or "delivered".
 _CLAIM_TERMS: tuple[str, ...] = (
     "led",
     "lead",
@@ -84,6 +88,13 @@ _CLAIM_TERMS: tuple[str, ...] = (
     "owns",
     "architected",
     "architect",
+    "production-grade",
+    "from scratch",
+    "core",
+    "enterprise",
+    "scalable",
+    "end-to-end",
+    "delivered",
     "zero-downtime",
     "robust",
     "reliable",
@@ -131,19 +142,55 @@ _GENERIC_TERMS: frozenset[str] = frozenset(
 #: Synonyms applied on both sides of a grounding comparison.
 _SYNONYMS: dict[str, str] = {"ai": "llm", "api": "rest", "apis": "rest"}
 
+#: Data structures and algorithms a "data structures" requirement may lean on.
+_DATA_STRUCTURE_TERMS: tuple[str, ...] = (
+    "array",
+    "arrays",
+    "hashmap",
+    "hashtable",
+    "dictionary",
+    "tree",
+    "trees",
+    "graph",
+    "graphs",
+    "queue",
+    "queues",
+    "stack",
+    "stacks",
+    "heap",
+    "linkedlist",
+    "trie",
+    "sorting",
+    "binarysearch",
+    "recursion",
+    "dynamicprogramming",
+    "algorithm",
+    "algorithms",
+)
+
 #: How a job requirement is covered by a profile concept family. Keys are
-#: key-normalised requirement wordings; values are words whose presence in the
-#: profile (skill or tech) satisfies the requirement.
+#: key-normalised requirement wordings; values are words that must be *named* in a
+#: project/internship/work fact (its tech list or its summary/outcomes/description
+#: prose) to satisfy the requirement. A family is deliberately narrow: "PostgreSQL"
+#: satisfies "storage", not "system design patterns"; a caching/queue fact satisfies
+#: "data structures" only if it actually names a data structure or algorithm.
 _REQUIREMENT_FAMILIES: dict[str, tuple[str, ...]] = {
     "api": ("fastapi", "flask", "django", "graphql", "rest"),
     "apis": ("fastapi", "flask", "django", "graphql", "rest"),
-    "softwaredesignpatterns": ("idempotency", "circuitbreakers", "caching", "rest"),
-    "systemdesignpatterns": ("idempotency", "circuitbreakers", "caching", "redis", "postgresql"),
-    "designpatterns": ("idempotency", "circuitbreakers", "caching", "rest"),
-    "datastructures": ("idempotency", "circuitbreakers", "caching", "redis", "postgresql"),
-    "storagesolutions": ("postgresql", "redis", "mongodb", "mysql", "sql"),
-    "storage": ("postgresql", "redis", "mongodb", "mysql", "sql"),
-    "databases": ("postgresql", "redis", "mongodb", "mysql", "sql"),
+    "restapi": ("fastapi", "flask", "django", "graphql", "rest"),
+    "restapis": ("fastapi", "flask", "django", "graphql", "rest"),
+    "softwaredesignpatterns": ("idempotency", "circuitbreakers", "caching"),
+    "softwarearchitecturepatterns": ("idempotency", "circuitbreakers", "caching"),
+    "designpatterns": ("idempotency", "circuitbreakers", "caching"),
+    "systemdesignpatterns": ("idempotency", "circuitbreakers", "caching"),
+    "datastructures": _DATA_STRUCTURE_TERMS,
+    "datastructure": _DATA_STRUCTURE_TERMS,
+    "algorithms": _DATA_STRUCTURE_TERMS,
+    "algorithm": _DATA_STRUCTURE_TERMS,
+    "storagesolutions": ("postgresql", "redis", "mongodb", "mysql", "sql", "sqlite", "dynamodb"),
+    "storage": ("postgresql", "redis", "mongodb", "mysql", "sql", "sqlite", "dynamodb"),
+    "databases": ("postgresql", "redis", "mongodb", "mysql", "sql", "sqlite", "dynamodb"),
+    "database": ("postgresql", "redis", "mongodb", "mysql", "sql", "sqlite", "dynamodb"),
     "cloudinfrastructure": ("aws", "gcp", "azure"),
     "cloud": ("aws", "gcp", "azure"),
 }
@@ -419,6 +466,7 @@ class TailoredResume(BaseModel):
     summary: list[ResumeLine] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     familiar_skills: list[str] = Field(default_factory=list)
+    skill_facts: dict[str, str] = Field(default_factory=dict)
     experience: list[ExperienceEntry] = Field(default_factory=list)
     projects: list[ProjectEntry] = Field(default_factory=list)
     education: list[dict[str, Any]] = Field(default_factory=list)
@@ -607,28 +655,65 @@ def profile_gaps(profile: CandidateProfile) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def _evidence_tokens(profile: CandidateProfile, ontology: SkillOntology) -> set[str]:
-    """Token/canonical vocabulary present in project and internship/work tech lists."""
-    tokens: set[str] = set()
-    tech_lists = [project.tech for project in profile.projects]
-    tech_lists += [experience.tech for experience in profile.internships]
-    tech_lists += [experience.tech for experience in profile.work]
-    for tech_list in tech_lists:
-        for tech in tech_list:
-            tokens.update(_tokenize(tech))
-            tokens.add(_canonical(tech, ontology))
-    return tokens
+def _evidence_index(profile: CandidateProfile, ontology: SkillOntology) -> dict[str, str]:
+    """Map an evidence token to the fact id that provides it.
+
+    Evidence comes from every project/internship/work *tech list* (its ``.tech`` fact)
+    **and** from a project's ``.summary``/``.outcomes`` prose and an internship/work
+    ``.description`` prose. So a concept skill (Idempotency, Caching, Circuit Breakers,
+    REST API Design, LLM pipeline design) can be evidenced by prose, not only a tech
+    list. ``API``/``REST`` and ``AI``/``LLM`` are synonyms on both sides.
+    """
+    facts = build_facts(profile)
+    index: dict[str, str] = {}
+
+    def add(token: str, fact_id: str) -> None:
+        key = _SYNONYMS.get(token, token)
+        if key and key not in index:
+            index[key] = fact_id
+
+    for fact in facts.values():
+        if fact.id.endswith(".tech"):
+            for tech in fact.tech:
+                add(_canonical(tech, ontology), fact.id)
+                for token in _tokenize(tech):
+                    add(token, fact.id)
+        elif fact.id.endswith((".summary", ".outcomes", ".description")):
+            for token in _tokenize(fact.text):
+                add(token, fact.id)
+    return index
 
 
-def _skill_is_evidenced(skill: Any, evidence: set[str], ontology: SkillOntology) -> bool:
-    """True when the skill appears in a project/internship tech list."""
+def _skill_evidence_fact(skill: Any, index: dict[str, str], ontology: SkillOntology) -> str:
+    """The fact id that evidences ``skill``, or ``""`` when nothing does.
+
+    Prefer the skill's canonical form, then any of its name tokens (ignoring generic
+    nouns), then — for an all-generic concept name such as "LLM pipeline design" — every
+    token of length >= 3.
+    """
     canonical = _canonical(skill.name or skill.canonical_name, ontology)
-    if canonical in evidence:
-        return True
-    meaningful = {
-        token for token in _tokenize(skill.name) if token not in _GENERIC_TERMS and len(token) > 1
-    }
-    return bool(meaningful & evidence)
+    if canonical in index:
+        return index[canonical]
+    tokens = [token for token in _tokenize(skill.name) if len(token) > 1]
+    meaningful = [token for token in tokens if token not in _GENERIC_TERMS]
+    for token in meaningful or [token for token in tokens if len(token) >= 3]:
+        if token in index:
+            return index[token]
+        synonym = _SYNONYMS.get(token, token)
+        if synonym in index:
+            return index[synonym]
+    return ""
+
+
+def skill_evidence_facts(profile: CandidateProfile, ontology: SkillOntology) -> dict[str, str]:
+    """The evidence fact id for each of the owner's skills (``""`` when un-evidenced)."""
+    index = _evidence_index(profile, ontology)
+    out: dict[str, str] = {}
+    for skill in profile.skills:
+        name = strip_proficiency(skill.name)
+        if name and name not in out:
+            out[name] = _skill_evidence_fact(skill, index, ontology)
+    return out
 
 
 def build_skills(
@@ -637,13 +722,14 @@ def build_skills(
     """Return ``(skills, familiar)``:
 
     ``skills`` = JD-matching first, then other skills that are evidenced in a
-    project/internship tech list or confirmed by the owner. ``familiar`` = the
+    project/internship/work tech list or in a project summary/outcomes or an
+    internship/work description, or confirmed by the owner. ``familiar`` = the
     "Familiar with (confirm before use)" group: familiar-proficiency skills and any
     skill with no evidence and no confirmation. Names are the profile's own, with any
     proficiency suffix stripped.
     """
     jd_canonical = _jd_canonical(parsed_jd, ontology)
-    evidence = _evidence_tokens(profile, ontology)
+    index = _evidence_index(profile, ontology)
     matching: list[str] = []
     others: list[str] = []
     familiar: list[str] = []
@@ -654,7 +740,7 @@ def build_skills(
             continue
         seen.add(canonical)
         name = strip_proficiency(skill.name)
-        evidenced = skill.confirmed or _skill_is_evidenced(skill, evidence, ontology)
+        evidenced = skill.confirmed or bool(_skill_evidence_fact(skill, index, ontology))
         if skill.proficiency == Proficiency.familiar or not evidenced:
             familiar.append(name)
         elif canonical in jd_canonical:
@@ -960,14 +1046,25 @@ def _profile_concepts(
     return concepts
 
 
-def _targets_for_requirement(name: str, ontology: SkillOntology) -> list[str]:
+def _family_targets(name: str, ontology: SkillOntology) -> list[str]:
+    """The strict concept-family words a requirement may be satisfied by (never the
+    requirement's own canonical). An empty tuple means the requirement has no family,
+    so it may fall back to a quoted model judgement."""
     canonical = _canonical(name, ontology)
     key = "".join(ch for ch in (name or "").lower().strip() if ch not in {" ", ".", "-", "_", "/"})
-    targets = [canonical]
+    targets: list[str] = []
     for family_key in (key, canonical):
         for target in _REQUIREMENT_FAMILIES.get(family_key, ()):
             if target not in targets:
                 targets.append(target)
+    return targets
+
+
+def _targets_for_requirement(name: str, ontology: SkillOntology) -> list[str]:
+    targets = [_canonical(name, ontology)]
+    for target in _family_targets(name, ontology):
+        if target not in targets:
+            targets.append(target)
     return targets
 
 
@@ -984,7 +1081,9 @@ def _classify_requirements(
     covers "APIs", "Circuit Breakers"/"Idempotency" cover design patterns, and
     "PostgreSQL"/"Redis" cover storage). A familiar concept yields ``partial``. Only a
     free-text judgement from the model needs an 8-character verbatim quote; a skill or
-    tech name does not.
+    tech name does not. A requirement with a concept family is judged *only* by that
+    family and the model's judgement can never upgrade it: "data structures" stays
+    missing unless a fact actually names a data structure or algorithm.
     """
     by_canonical: dict[str, RequirementDraft] = {}
     for item in drafts:
@@ -993,13 +1092,14 @@ def _classify_requirements(
     results: list[RequirementCoverage] = []
     for name in _dedup_requirements(parsed_jd, ontology):
         canonical = _canonical(name, ontology)
+        has_family = bool(_family_targets(name, ontology))
         coverage: RequirementCoverage | None = None
         fallback: RequirementCoverage | None = None
         for target in _targets_for_requirement(name, ontology):
-            if target not in concepts:
-                continue
-            familiar = concepts[target]
+            familiar = concepts.get(target, False)
             found = _fact_for_concept(target, facts, ontology)
+            if found is None and target not in concepts:
+                continue
             fact_id = found.id if found is not None else ""
             status = "partial" if (familiar or not fact_id) else "covered"
             candidate = RequirementCoverage(
@@ -1013,7 +1113,7 @@ def _classify_requirements(
                 break
             if fallback is None:
                 fallback = candidate
-        if coverage is None:
+        if coverage is None and not has_family:
             draft = by_canonical.get(canonical)
             if draft is not None and draft.status in ("covered", "partial"):
                 cited = [facts[fid] for fid in draft.facts if fid in facts]
@@ -1078,6 +1178,7 @@ def _assemble(
 ) -> TailoredResume:
     grounder = _Grounder(profile=profile, parsed_jd=parsed_jd, ontology=ontology)
     skills, familiar = build_skills(profile, parsed_jd, ontology)
+    skill_facts = skill_evidence_facts(profile, ontology)
     grounder.seed_skill_keywords([*skills, *familiar])
 
     dropped: list[DroppedLine] = []
@@ -1138,6 +1239,7 @@ def _assemble(
         summary=summary,
         skills=skills,
         familiar_skills=familiar,
+        skill_facts=skill_facts,
         experience=experience,
         projects=projects,
         education=[edu.model_dump() for edu in profile.education],
