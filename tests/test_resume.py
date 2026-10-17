@@ -387,6 +387,15 @@ def test_requirement_is_covered_from_a_profile_skill_without_a_model_judgement()
     assert coverage["Kubernetes"] == "missing"
 
 
+def test_coverage_cites_the_tech_fact_that_names_the_concept_not_the_entry_title():
+    resume = _generate(_payload(requirements=[]))
+    python = next(item for item in resume.requirements if item.requirement == "Python")
+
+    assert python.facts == ["P1.tech"]
+    assert "Python" in python.quote
+    assert "Apex Ledger" not in python.quote
+
+
 def test_reactjs_job_requirement_matches_the_profile_react_skill():
     profile = _profile()
     profile.work[0].tech = ["Python", "React"]
@@ -418,6 +427,11 @@ def test_coverage_derives_apis_and_design_patterns_from_skills():
 
     assert coverage["APIs"] == "covered"
     assert coverage["software design patterns"] == "covered"
+    items = {item.requirement: item for item in resume.requirements}
+    assert items["APIs"].facts == ["P1.tech"]
+    assert "FastAPI" in items["APIs"].quote
+    assert items["software design patterns"].facts == ["P1.outcomes"]
+    assert "idempotency" in items["software design patterns"].quote.lower()
 
 
 def test_familiar_cloud_skills_give_partial_cloud_coverage():
