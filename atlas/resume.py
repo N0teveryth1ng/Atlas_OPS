@@ -920,10 +920,20 @@ def _retry_message(errors: list[str]) -> str:
 
 
 def _fact_for_concept(concept: str, facts: dict[str, Fact], ontology: SkillOntology) -> Fact | None:
-    """A fact whose tech list or text evidences ``concept``."""
+    """The fact that best evidences ``concept``.
+
+    Prefer the fact whose *text* names the concept (the entry's ``.tech`` fact), so the
+    cited id and quote actually state it; only then fall back to any fact of an entry
+    whose tech list carries the concept, then to a free-text mention.
+    """
+    tech_match: Fact | None = None
     for fact in facts.values():
         if any(_canonical(tech, ontology) == concept for tech in fact.tech):
-            return fact
+            if concept in set(_tokenize(fact.text)):
+                return fact
+            tech_match = tech_match or fact
+    if tech_match is not None:
+        return tech_match
     for fact in facts.values():
         if concept in set(_tokenize(fact.text)):
             return fact
@@ -932,27 +942,21 @@ def _fact_for_concept(concept: str, facts: dict[str, Fact], ontology: SkillOntol
 
 def _profile_concepts(
     profile: CandidateProfile, ontology: SkillOntology, facts: dict[str, Fact]
-) -> dict[str, tuple[str, bool]]:
-    """Map a profile concept to ``(fact_id, is_familiar)``.
+) -> dict[str, bool]:
+    """Map a profile concept to whether it is only ``familiar`` proficiency.
 
-    Concepts come from the owner's skills (with their proficiency) and from every
-    project/internship/work tech list. A later entry never downgrades an earlier one.
+    Concepts come from every project/internship/work tech list (not familiar) and from
+    the owner's skills (with their proficiency). A concept evidenced by a tech list is
+    never downgraded to familiar-only.
     """
-    concepts: dict[str, tuple[str, bool]] = {}
+    concepts: dict[str, bool] = {}
     for fact in facts.values():
         for tech in fact.tech:
-            canonical = _canonical(tech, ontology)
-            concepts.setdefault(canonical, (fact.id, False))
+            concepts.setdefault(_canonical(tech, ontology), False)
     for skill in profile.skills:
         canonical = _canonical(skill.name or skill.canonical_name, ontology)
         familiar = skill.proficiency == Proficiency.familiar
-        found = _fact_for_concept(canonical, facts, ontology)
-        fact_id = found.id if found is not None else ""
-        existing = concepts.get(canonical)
-        if existing is None:
-            concepts[canonical] = (fact_id, familiar)
-        else:
-            concepts[canonical] = (existing[0] or fact_id, existing[1] and familiar)
+        concepts[canonical] = concepts.get(canonical, True) and familiar
     return concepts
 
 
@@ -994,13 +998,15 @@ def _classify_requirements(
         for target in _targets_for_requirement(name, ontology):
             if target not in concepts:
                 continue
-            fact_id, familiar = concepts[target]
-            status = "partial" if familiar else "covered"
+            familiar = concepts[target]
+            found = _fact_for_concept(target, facts, ontology)
+            fact_id = found.id if found is not None else ""
+            status = "partial" if (familiar or not fact_id) else "covered"
             candidate = RequirementCoverage(
                 requirement=name,
                 status=status,
                 facts=[fact_id] if fact_id else [],
-                quote=next((f.text for f in facts.values() if f.id == fact_id), ""),
+                quote=found.text if found is not None else "",
             )
             if fact_id:
                 coverage = candidate

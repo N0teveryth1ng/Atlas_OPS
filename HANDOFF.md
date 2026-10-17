@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-17)
 
-- Code state as of PR #39, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #39** (base `8abeaa1`).
-- Tests: **1168 passed** (`python -m pytest -q`).
+- Code state as of PR #40, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #40** (base `8abeaa1`).
+- Tests: **1176 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -48,6 +48,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #37 | `a3ee389` | 2026-10-16T04:39:03Z | prC1/tailored-resume-generator | feat(resume): grounded tailored-resume generator (no UI) |
 | #38 | `bba204c` | 2026-10-16T09:30:13Z | prC/profile-editor | feat(profile): rich profile editor (internships/work/projects/education/links/certs) |
 | #39 | `c6a6276` | 2026-10-17T04:11:02Z | prC1b/resume-fact-grounding | fix(resume): ground tailored-resume lines by profile fact ids; build skills in code |
+| #40 | `dc648aa` | 2026-10-17T04:57:22Z | prC1c/grounding-claim-strength | fix(resume): reject unsupported strength claims; ground only tech/number; ontology coverage; evidence-linked skills |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -97,9 +98,9 @@ kind, #23 non-job-listing filter.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
-## Tailored resume generator (PRs #37, #39)
+## Tailored resume generator (PRs #37, #39, #40)
 
-- `atlas/resume.py` + `prompts/tailored_resume.md` (version 2) turn the approved
+- `atlas/resume.py` + `prompts/tailored_resume.md` (version 3) turn the approved
   profile and one parsed job into a `TailoredResume`. **No UI yet** (PR C2 adds the
   job-page button, review page, approval and DOCX/PDF export); the generator is code
   only and nothing runs it automatically.
@@ -113,10 +114,26 @@ kind, #23 non-job-listing filter.
   - a line is dropped when it is third-person/meta, when it carries hidden characters,
     when a bullet does not start with an action verb, when it introduces a technology,
     number or mid-sentence proper noun its cited facts lack, or when any JD keyword
-    would exceed the global cap;
-  - skills are **built in code, never by the model**: JD-matching profile skills first,
-    then the other non-familiar skills, with "familiar" skills in a separate group;
-  - requirements the profile lacks go to `missing_requirements` and are never added.
+    would exceed the global cap. Only technologies (skill ontology + proper nouns) and
+    numbers need grounding; generic nouns (data, design, system, API/APIs, AI, service,
+    platform, pipeline) are ignored, with `AI -> LLM` and `API -> REST` (#40);
+  - a line is dropped when it claims ownership/leadership/reliability/scale
+    (`led`, `owning`, `architected`, `zero-downtime`, `robust`, `reliable`, ...) with a
+    word the cited facts do not contain — a "Sole engineer" title does not license
+    "led" or "owning" (#40);
+  - skills are **built in code, never by the model**, and are evidence-linked: a skill
+    is in the main group only when a project/internship/work tech list contains it (or
+    the owner set `confirmed`), otherwise it moves to
+    "Familiar with (confirm before use)"; JD-matching skills come first (#40);
+  - requirements are classified by ontology/alias/family first (`REST API Design`
+    covers `APIs`, `Idempotency`/`Circuit Breakers` cover design patterns,
+    `PostgreSQL`/`Redis` cover storage, familiar `AWS`/`GCP` give `partial` cloud); the
+    8-character verbatim-quote rule applies only to free-text claims, not skill/tech
+    names, and the cited fact is the entry's `.tech` fact whose text names the concept;
+  - such requirements the profile lacks go to `missing_requirements` and are never added.
+- Every validated internship bullet is kept; a validated internship with fewer than 2
+  surviving bullets emits the warning
+  `internship section thin: add detail on the Profile page` (no padding).
 - If the profile lacks internship/work/project/link detail the generator **refuses**
   (before any LLM call) and lists exactly what to add on the Profile page; it never pads.
 - Header, experience role/company/duration, project titles/tech, education and
@@ -144,7 +161,8 @@ kind, #23 non-job-listing filter.
   - education: degree, field, institution, graduation year with an `expected` flag;
   - links: github / linkedin / portfolio (kept only when absolute `http`/`https`);
   - certifications; skills may carry an optional third token
-    `name:proficiency:evidenced-by`.
+    `name:proficiency:evidenced-by` and an optional fourth `:confirm` token to list a
+    skill in the main Skills group without tech-list evidence (PR #40).
 - Add and remove entries. Validation: any internship, work or project entry missing a
   description/outcome blocks approval with a warning naming the entry (nothing is
   invented or auto-filled); non-`http`/`https` links are rejected. Everything is
@@ -273,8 +291,8 @@ Agreement"; the page's "Terms of Use" link points to
 
 Nothing below is implemented. Each needs the owner's go-ahead.
 
-- **(a) Tailored resume builder.** Generator BUILT (PR #37; fact-ID grounding in #39;
-  `atlas/resume.py`, no UI);
+- **(a) Tailored resume builder.** Generator BUILT (PR #37; fact-ID grounding #39;
+  claim-strength + coverage + evidence-linked skills #40; `atlas/resume.py`, no UI);
   profile editor BUILT (PR #38; `/profile` captures internships, work, projects,
   education, links, certifications). It rewrites and reorders content drawn only from
   the approved profile; every generated line traces back to a profile fact, and unmet
