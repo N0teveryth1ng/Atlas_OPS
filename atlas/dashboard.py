@@ -34,6 +34,8 @@ from .config import get_settings
 from .db import (
     APPLICATION_STATUSES,
     OWNER_VERDICT_CHOICES,
+    approve_tailored_resume,
+    approved_tailored_resume,
     connect,
     fail_stale_runs,
     finish_run,
@@ -41,12 +43,15 @@ from .db import (
     init_db,
     latest_kit_data,
     latest_owner_verdict,
+    latest_parsed_jd,
     latest_run,
+    latest_tailored_resume,
     matched_jobs,
     rejected_jobs,
     save_kit,
     save_owner_verdict,
     save_profile,
+    save_tailored_resume,
     set_application_status,
     shippable_job,
     shippable_jobs,
@@ -55,10 +60,22 @@ from .db import (
     upsert_job,
 )
 from .digest import is_http_url
+from .export import export_docx, export_filename, export_pdf
 from .kit import ApplicationKit, generate_kit, render_kit_text
 from .llm import GroqDailyLimitReached, LLMClient, LLMError
 from .profile_agent import build_profile as _build_profile_impl
 from .profile_agent import normalize_skill_name
+from .resume import (
+    ESTIMATED_RESUME_TOKENS,
+    GENERATOR_VERSION,
+    TailoredResume,
+    apply_line_edits,
+    build_facts,
+    generate_tailored_resume_cached,
+    line_key,
+    line_source,
+    review_flags,
+)
 from .schemas import (
     CandidateProfile,
     Education,
@@ -67,11 +84,13 @@ from .schemas import (
     ExperienceLevel,
     Job,
     Links,
+    ParsedJD,
     Proficiency,
     Project,
     Seniority,
     Skill,
 )
+from .skills import SkillOntology, get_ontology
 from .text import clean_tech_items
 
 _LABELS = {"APLD": "Applied", "NTAPLD": "Not applied", "PEND": "Pending"}
@@ -139,6 +158,27 @@ def _blank_add_state() -> dict[str, Any]:
 
 _add_state: dict[str, Any] = _blank_add_state()
 _add_lock = threading.Lock()
+
+
+def _blank_resume_state() -> dict[str, Any]:
+    return {
+        "running": False,
+        "done": False,
+        "job_id": None,
+        "resume_id": None,
+        "cached": None,
+        "regenerate": False,
+        "paused": None,
+        "error": None,
+        "progress": {},
+        "started_at": None,
+        "finished_at": None,
+        "client": None,
+    }
+
+
+_resume_state: dict[str, Any] = _blank_resume_state()
+_resume_lock = threading.Lock()
 
 _HEAD = """<!doctype html>
 <html lang="en">
@@ -609,6 +649,125 @@ def _run_add_job(
             _add_state["running"] = False
             _add_state["done"] = True
             _add_state["finished_at"] = time.time()
+        _end_single_run()
+
+
+def _run_resume_build(
+    database: Path | None,
+    job_id: int,
+    *,
+    regenerate: bool,
+    client: LLMClient,
+) -> None:
+    """Build one tailored resume in a background thread under the one-run lock.
+
+    Opens its own connection (sqlite connections are thread-affine), copies the job
+    text and stored parsed JD straight from the database, and publishes step /
+    rate-limit-wait progress in ``finally``. Never called from a bulk run.
+    """
+    from .config import settings_for_profile
+    from .pipeline import LLMCallBudgetExceeded, LLMTokenBudgetExceeded
+
+    def _on_wait(seconds: float, reason: str) -> None:
+        with _resume_lock:
+            _resume_state["progress"] = {
+                **_resume_state["progress"],
+                "rate_limit_wait": round(float(seconds), 1),
+                "rate_limit_reason": reason,
+                "llm_calls": int(getattr(client, "calls", 0) or 0),
+                "tokens_used": int(getattr(client, "tokens_used", 0) or 0),
+            }
+
+    try:
+        conn = _open(database)
+    except sqlite3.Error as exc:
+        logger.exception("resume worker could not open the database")
+        with _resume_lock:
+            _resume_state["error"] = str(exc)
+        _end_single_run("failed")
+        return
+
+    settings: Any = None
+    try:
+        profile = get_latest_profile(conn)
+        if profile is None or not profile.approved:
+            raise ValueError("Build and approve a profile first.")
+        parsed = latest_parsed_jd(conn, job_id)
+        if parsed is None:
+            raise ValueError(
+                "This job has no parsed description yet. Run Find jobs, or re-add the job."
+            )
+        row = shippable_job(conn, job_id)
+        if row is None:
+            raise ValueError("Job not found, or it did not pass every hard filter.")
+        job = Job(
+            source=str(row["source"] or ""),
+            title=row["title"],
+            company=row["company"],
+            location=row["location"],
+            url=str(row["url"] or ""),
+            description_raw=str(row["description_raw"] or ""),
+        )
+        settings = settings_for_profile(profile, get_settings())
+        client.on_wait = _on_wait
+        with _resume_lock:
+            _resume_state["progress"] = {
+                **_resume_state["progress"],
+                "current_step": "Drafting tailored resume\u2026",
+                "llm_calls": int(getattr(client, "calls", 0) or 0),
+                "tokens_used": int(getattr(client, "tokens_used", 0) or 0),
+            }
+        generation = generate_tailored_resume_cached(
+            conn,
+            client,
+            profile=profile,
+            job=job,
+            job_id=job_id,
+            parsed_jd=ParsedJD.model_validate(parsed),
+            settings=settings,
+            ontology=get_ontology(),
+            regenerate=regenerate,
+        )
+        with _resume_lock:
+            _resume_state["resume_id"] = generation.resume_id
+            _resume_state["cached"] = generation.cached
+            _resume_state["progress"] = {
+                **_resume_state["progress"],
+                "current_step": "Cached" if generation.cached else "Finished",
+                "llm_calls": int(getattr(client, "calls", 0) or 0),
+                "tokens_used": int(getattr(client, "tokens_used", 0) or 0),
+            }
+    except GroqDailyLimitReached as exc:
+        with _resume_lock:
+            _resume_state["paused"] = str(exc)
+    except LLMTokenBudgetExceeded:
+        cap = settings.run.max_llm_tokens_per_run if settings is not None else 0
+        with _resume_lock:
+            _resume_state["paused"] = f"Paused: per-run token cap reached ({cap} tokens)"
+    except LLMCallBudgetExceeded:
+        with _resume_lock:
+            _resume_state["paused"] = "Paused: per-run LLM call cap reached."
+    except Exception as exc:
+        logger.exception("resume build for job %s failed", job_id)
+        with _resume_lock:
+            _resume_state["error"] = str(exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            logger.debug("resume conn close failed", exc_info=True)
+        with _resume_lock:
+            _resume_state["progress"] = {
+                **_resume_state["progress"],
+                "llm_calls": int(getattr(client, "calls", 0) or 0),
+                "tokens_used": int(getattr(client, "tokens_used", 0) or 0),
+                "rate_limit_wait": None,
+                "rate_limit_reason": None,
+            }
+            _resume_state["running"] = False
+            _resume_state["done"] = True
+            _resume_state["finished_at"] = time.time()
+            _resume_state["client"] = None
         _end_single_run()
 
 
@@ -1334,7 +1493,8 @@ def _job_result_page(
     parts.append("<h2>Prepare application</h2>\n")
     parts.append(
         f'<p><a class="badge" style="background:#8250df" href="/jobs/{job_id}/kit">'
-        "Prepare application</a></p>\n"
+        "Prepare application</a> "
+        f'<a class="badge" href="/jobs/{job_id}/resume">Build tailored resume</a></p>\n'
     )
     parts.append("<h2>Your verdict</h2>\n")
     parts.append(_owner_verdict_html(owner_verdict))
@@ -1448,6 +1608,265 @@ def _add_progress_page() -> str:
         "      if (data.done) {\n"
         "        step.textContent = 'Finished';\n"
         "        const res = await fetch('/add/progress', {credentials: 'same-origin'});\n"
+        "        document.open();\n"
+        "        document.write(await res.text());\n"
+        "        document.close();\n"
+        "        return;\n"
+        "      }\n"
+        "    }\n"
+        "    await new Promise(r => setTimeout(r, 1000));\n"
+        "  }\n"
+        "}());\n"
+        "</script>\n"
+    )
+    return _add_result_page(body=body)
+
+
+def _resume_error_page(message: str) -> str:
+    parts = [_HEAD, _nav(), "<h1>Tailored resume</h1>\n"]
+    parts.append(f'<p class="error">{html.escape(message)}</p>\n')
+    parts.append('<p><a href="/">Back to results</a></p>\n')
+    parts.append(_TABLE_FOOT)
+    return "".join(parts)
+
+
+def _resume_build_form(job_id: int, *, regenerate: bool, estimate: int | None = None) -> str:
+    """The Build / Regenerate button. Regenerate confirms the tokens it will spend."""
+    if regenerate:
+        est = int(estimate or ESTIMATED_RESUME_TOKENS)
+        confirm = f"Regenerate bypasses the cache and will spend about {est} tokens. Continue?"
+        return (
+            f'<form method="post" action="/jobs/{job_id}/resume" '
+            f'data-confirm="{html.escape(confirm, quote=True)}" '
+            'onsubmit="return confirm(this.dataset.confirm)">'
+            '<input type="hidden" name="regenerate" value="1">'
+            f'<button type="submit">Regenerate ({est:,} tokens est.)</button>'
+            "</form>"
+        )
+    return (
+        f'<form method="post" action="/jobs/{job_id}/resume">'
+        '<button type="submit">Build tailored resume</button></form>'
+    )
+
+
+def _resume_line_rows(
+    resume: TailoredResume, facts: dict[str, Any], ontology: SkillOntology
+) -> list[str]:
+    """One editable table row per summary/experience/project line (base ⇢ tailored)."""
+    rows: list[str] = []
+
+    def _row(key: str, line: Any) -> str:
+        badge = line_source(line)
+        flags = review_flags(line, facts, ontology)
+        baseline = " ".join(facts[fid].text for fid in line.facts if fid in facts) or "-"
+        cited = ", ".join(line.facts) or "-"
+        flags_html = "".join(
+            f' <span class="flag">{html.escape(str(flag))}</span>' for flag in flags
+        )
+        return (
+            "<tr>"
+            f"<td>{html.escape(baseline)}</td>"
+            f'<td><span class="badge src-{html.escape(badge)}">{html.escape(badge)}</span> '
+            f"{html.escape(line.text)}{flags_html}"
+            f"<br><small>cited: {html.escape(cited)}</small><br>"
+            f'<textarea name="{html.escape(key)}" rows="2">{html.escape(line.text)}</textarea>'
+            "</td></tr>\n"
+        )
+
+    def _section(label: str) -> str:
+        return (
+            f'<tr class="section"><td colspan="2"><strong>{html.escape(label)}</strong></td></tr>\n'
+        )
+
+    if resume.summary:
+        rows.append(_section("Summary"))
+        for index, line in enumerate(resume.summary):
+            rows.append(_row(line_key("summary", index), line))
+    for entry_index, entry in enumerate(resume.experience):
+        label = entry.role or "Experience"
+        if entry.company:
+            label = f"{label} @ {entry.company}"
+        rows.append(_section(label))
+        for bullet_index, line in enumerate(entry.bullets):
+            rows.append(_row(line_key("experience", entry_index, bullet_index), line))
+    for project_index, project in enumerate(resume.projects):
+        rows.append(_section(project.title or f"Project {project_index + 1}"))
+        for bullet_index, line in enumerate(project.bullets):
+            rows.append(_row(line_key("project", project_index, bullet_index), line))
+    return rows
+
+
+def _resume_review_page(
+    row: sqlite3.Row,
+    resume_row: dict[str, Any] | None,
+    profile: CandidateProfile,
+    ontology: SkillOntology,
+    *,
+    notice: str | None = None,
+    error: str | None = None,
+) -> str:
+    """Side-by-side base vs tailored resume with per-line edit, approve and export."""
+    job_id = int(row["id"])
+    url = str(row["url"] or "")
+    title = html.escape(str(row["title"] or url or f"job {job_id}"))
+    parts = [_HEAD, _nav(), f"<h1>Tailored resume &mdash; {title}</h1>\n"]
+    if notice:
+        parts.append(f'<p class="notice">{html.escape(notice)}</p>\n')
+    if error:
+        parts.append(f'<p class="error">{html.escape(error)}</p>\n')
+    if resume_row is None:
+        parts.append(
+            '<p class="warn">No tailored resume has been built for this job yet. '
+            "Build it on demand: it never runs during a bulk Find-jobs run.</p>\n"
+        )
+        parts.append(f"<p>{_resume_build_form(job_id, regenerate=False)}</p>\n")
+        parts.append(f'<p><a href="/jobs/{job_id}">Back to the job</a></p>\n')
+        parts.append(_TABLE_FOOT)
+        return "".join(parts)
+
+    resume = TailoredResume.model_validate_json(resume_row["content_json"])
+    facts = build_facts(profile)
+    approved = resume_row.get("approved_at") is not None
+    meta = (
+        f"Version {html.escape(str(resume_row['version']))} &middot; "
+        f"prompt v{html.escape(str(resume_row.get('prompt_version') or '-'))} &middot; "
+        f"generator v{html.escape(str(resume_row.get('generator_version') or '-'))} &middot; "
+        f"model {html.escape(str(resume_row.get('model') or '-'))} &middot; "
+        f"built {html.escape(str(resume_row.get('created_at') or '-'))}"
+    )
+    if resume_row.get("edited_at"):
+        meta += f" &middot; edited {html.escape(str(resume_row['edited_at']))}"
+    tokens = resume_row.get("tokens")
+    calls = resume_row.get("calls")
+    if tokens is not None:
+        meta += f" &middot; {html.escape(str(tokens))} tokens / {html.escape(str(calls))} calls"
+    meta += (
+        " &middot; <strong>APPROVED</strong>"
+        if approved
+        else " &middot; not approved (export is blocked until approved)"
+    )
+    parts.append(f"<p>{meta}</p>\n")
+
+    if resume.warnings:
+        parts.append("<h2>Warnings</h2>\n<ul>")
+        parts.extend(f"<li>{html.escape(str(w))}</li>" for w in resume.warnings)
+        parts.append("</ul>\n")
+
+    parts.append("<h2>ATS lint</h2>\n")
+    parts.append(f'<p>{"PASS" if resume.ats.passed else "FAIL"}</p>\n')
+    if resume.ats.reasons:
+        parts.append("<ul>")
+        parts.extend(f"<li>{html.escape(str(r))}</li>" for r in resume.ats.reasons)
+        parts.append("</ul>\n")
+
+    parts.append("<h2>Base &rarr; tailored (edit any line)</h2>\n")
+    parts.append(
+        "<p><small>A <strong>model</strong> line was written by the LLM from the cited "
+        "facts; a <strong>profile-verbatim</strong> line is a fallback copied "
+        "word-for-word from the profile; an <strong>owner-edited</strong> line is yours.</small></p>\n"
+    )
+    parts.append(f'<form method="post" action="/jobs/{job_id}/resume/edit">\n')
+    parts.append(
+        "<table><thead><tr><th>Base (cited profile text)</th>"
+        "<th>Tailored (editable)</th></tr></thead><tbody>\n"
+    )
+    parts.extend(_resume_line_rows(resume, facts, ontology))
+    parts.append("</tbody></table>\n")
+    parts.append('<button type="submit">Save as a new version</button>\n</form>\n')
+
+    parts.append("<h2>Skills</h2>\n")
+    parts.append(f"<p>Main: {html.escape(', '.join(resume.skills) or '-')}</p>\n")
+    parts.append(f"<p>Familiar: {html.escape(', '.join(resume.familiar_skills) or '-')}</p>\n")
+    parts.append(
+        "<h2>Additional tools (not exported unless picked)</h2>\n"
+        f"<p>{html.escape(', '.join(resume.additional_tools) or '-')}</p>\n"
+    )
+    parts.append("<h2>Missing requirements</h2>\n")
+    if resume.missing_requirements:
+        parts.append("<ul>")
+        parts.extend(f"<li>{html.escape(str(item))}</li>" for item in resume.missing_requirements)
+        parts.append("</ul>\n")
+    else:
+        parts.append("<p>-</p>\n")
+
+    parts.append("<h2>Approve</h2>\n")
+    if approved:
+        parts.append('<p class="notice">This version is approved and ready to export.</p>\n')
+    else:
+        parts.append(
+            f'<form method="post" action="/jobs/{job_id}/resume/approve">'
+            '<button type="submit">Approve this version</button></form>\n'
+        )
+
+    parts.append("<h2>Export</h2>\n")
+    if approved:
+        parts.append(
+            f'<p><a class="badge" href="/jobs/{job_id}/resume/export.docx">Download DOCX</a> '
+            f'&middot; <a class="badge" href="/jobs/{job_id}/resume/export.pdf">Download PDF</a>'
+            "</p>\n"
+        )
+    else:
+        parts.append('<p class="warn">Approve a version before exporting.</p>\n')
+
+    parts.append("<h2>Regenerate</h2>\n")
+    estimate = int(resume_row.get("tokens") or ESTIMATED_RESUME_TOKENS)
+    parts.append(f"<p>{_resume_build_form(job_id, regenerate=True, estimate=estimate)}</p>\n")
+    parts.append(f'<p><a href="/jobs/{job_id}">Back to the job</a> &middot; ')
+    parts.append('<a href="/">Back to results</a></p>\n')
+    parts.append(_TABLE_FOOT)
+    return "".join(parts)
+
+
+def _resume_progress_page(job_id: int) -> str:
+    """Polling page shown while a tailored resume is being built in the background."""
+    with _resume_lock:
+        state = dict(_resume_state)
+    progress = state.get("progress") or {}
+    step = html.escape(str(progress.get("current_step") or "Starting\u2026"))
+    calls = html.escape(str(progress.get("llm_calls") or 0))
+    tokens = html.escape(str(progress.get("tokens_used") or 0))
+    wait_seconds = progress.get("rate_limit_wait")
+    if wait_seconds:
+        reason = html.escape(str(progress.get("rate_limit_reason") or "rate limit"))
+        wait = (
+            f'<p id="resume-wait" class="warn">Waiting for Groq {reason}, '
+            f"retry in {html.escape(str(wait_seconds))}s\u2026</p>\n"
+        )
+    else:
+        wait = '<p id="resume-wait" class="warn" hidden></p>\n'
+    body = (
+        "<h1>Building your tailored resume</h1>\n"
+        f'<p id="resume-step" data-state="running">{step}</p>\n'
+        f"{wait}"
+        f'<p>LLM calls: <strong id="resume-calls">{calls}</strong> &middot; '
+        f'Tokens used: <strong id="resume-tokens">{tokens}</strong></p>\n'
+        "<script>\n"
+        "(async function () {\n"
+        "  const step = document.getElementById('resume-step');\n"
+        "  const wait = document.getElementById('resume-wait');\n"
+        "  const calls = document.getElementById('resume-calls');\n"
+        "  const tokens = document.getElementById('resume-tokens');\n"
+        "  while (true) {\n"
+        "    let data = null;\n"
+        "    try {\n"
+        f"      const res = await fetch('/api/jobs/{job_id}/resume-status', "
+        "{credentials: 'same-origin'});\n"
+        "      if (res.ok) data = await res.json();\n"
+        "    } catch (e) { /* transient poll error: retry below */ }\n"
+        "    if (data) {\n"
+        "      if (data.current_step) step.textContent = data.current_step;\n"
+        "      calls.textContent = String(data.llm_calls ?? 0);\n"
+        "      tokens.textContent = String(data.tokens_used ?? 0);\n"
+        "      if (data.rate_limit_wait) {\n"
+        "        wait.hidden = false;\n"
+        "        const reason = data.rate_limit_reason || 'rate limit';\n"
+        "        wait.textContent = 'Waiting for Groq ' + reason + ', retry in ' +\n"
+        "          data.rate_limit_wait + 's\\u2026';\n"
+        "      } else { wait.hidden = true; }\n"
+        "      if (data.done) {\n"
+        "        step.textContent = 'Finished';\n"
+        f"        const res = await fetch('/jobs/{job_id}/resume', "
+        "{credentials: 'same-origin'});\n"
         "        document.open();\n"
         "        document.write(await res.text());\n"
         "        document.close();\n"
@@ -2156,6 +2575,302 @@ def create_app(
         finally:
             conn.close()
         return HTMLResponse(_kit_page(row, kit=kit))
+
+    def _resume_job_or_error(job_id: int) -> tuple[sqlite3.Row | None, str | None, int]:
+        """Load one shippable job for the resume pages, or an error page body."""
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return None, _resume_error_page(f"Database unavailable: {exc}"), 503
+        try:
+            row = shippable_job(conn, job_id)
+        finally:
+            conn.close()
+        if row is None:
+            return (
+                None,
+                _resume_error_page("Job not found, or it did not pass every hard filter."),
+                404,
+            )
+        return row, None, 200
+
+    def _approved_profile_or_error() -> tuple[CandidateProfile | None, str | None]:
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return None, f"Database unavailable: {exc}"
+        try:
+            profile = get_latest_profile(conn)
+        finally:
+            conn.close()
+        if profile is None:
+            return None, "Build and approve a profile first."
+        if not profile.approved:
+            return None, "Approve your profile before building a resume."
+        return profile, None
+
+    def _latest_resume_or_none(job_id: int) -> dict[str, Any] | None:
+        try:
+            conn = _open(database)
+        except sqlite3.Error:
+            return None
+        try:
+            return latest_tailored_resume(conn, job_id)
+        finally:
+            conn.close()
+
+    @app.get("/jobs/{job_id}/resume", response_class=HTMLResponse)
+    def resume_get(request: Request, job_id: int) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        row, error_html, status = _resume_job_or_error(job_id)
+        if row is None:
+            return HTMLResponse(error_html or "", status_code=status)
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return HTMLResponse(_resume_error_page(f"Database unavailable: {exc}"), status_code=503)
+        try:
+            profile = get_latest_profile(conn)
+            resume_row = latest_tailored_resume(conn, job_id)
+        finally:
+            conn.close()
+        if profile is None or not profile.approved:
+            return HTMLResponse(
+                _resume_error_page("Build and approve a profile first."), status_code=400
+            )
+        return HTMLResponse(_resume_review_page(row, resume_row, profile, get_ontology()))
+
+    @app.post("/jobs/{job_id}/resume")
+    def resume_build_post(
+        request: Request,
+        job_id: int,
+        regenerate: Annotated[str, Form()] = "",
+    ) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+        row, error_html, status = _resume_job_or_error(job_id)
+        if row is None:
+            return HTMLResponse(error_html or "", status_code=status)
+        profile, profile_error = _approved_profile_or_error()
+        if profile is None:
+            return HTMLResponse(_resume_error_page(profile_error or ""), status_code=400)
+        rebuild = bool(regenerate)
+        blocked = groq_daily_limit_message(database)
+        if blocked is not None:
+            return HTMLResponse(
+                _resume_review_page(
+                    row,
+                    _latest_resume_or_none(job_id),
+                    profile,
+                    get_ontology(),
+                    error=blocked,
+                )
+            )
+        if not _try_begin_single_run():
+            return HTMLResponse(
+                _resume_review_page(
+                    row,
+                    _latest_resume_or_none(job_id),
+                    profile,
+                    get_ontology(),
+                    error="A run is already in progress. Try again when it finishes.",
+                )
+            )
+        client = _make_kit_client()
+        with _resume_lock:
+            _resume_state.update(_blank_resume_state())
+            _resume_state["running"] = True
+            _resume_state["job_id"] = job_id
+            _resume_state["regenerate"] = rebuild
+            _resume_state["started_at"] = time.time()
+            _resume_state["client"] = client
+            _resume_state["progress"] = {
+                "current_step": "Starting\u2026",
+                "llm_calls": 0,
+                "tokens_used": 0,
+            }
+        threading.Thread(
+            target=_run_resume_build,
+            args=(database, job_id),
+            kwargs={"regenerate": rebuild, "client": client},
+            daemon=True,
+        ).start()
+        return RedirectResponse(url=f"/jobs/{job_id}/resume/progress", status_code=303)
+
+    @app.get("/jobs/{job_id}/resume/progress", response_class=HTMLResponse)
+    def resume_progress_get(request: Request, job_id: int) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        with _resume_lock:
+            done = bool(_resume_state["done"]) and _resume_state["job_id"] == job_id
+        if done:
+            return RedirectResponse(url=f"/jobs/{job_id}/resume", status_code=303)
+        return HTMLResponse(_resume_progress_page(job_id))
+
+    @app.get("/api/jobs/{job_id}/resume-status")
+    def resume_status_get(request: Request, job_id: int) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+        with _resume_lock:
+            state = dict(_resume_state)
+            progress = dict(state.get("progress") or {})
+            client = state.get("client")
+        if client is not None:
+            calls: Any = int(getattr(client, "calls", 0) or 0)
+            tokens: Any = int(getattr(client, "tokens_used", 0) or 0)
+        else:
+            calls = progress.get("llm_calls")
+            tokens = progress.get("tokens_used")
+        return JSONResponse(
+            {
+                "running": state.get("running", False),
+                "done": state.get("done", False),
+                "job_id": state.get("job_id"),
+                "resume_id": state.get("resume_id"),
+                "cached": state.get("cached"),
+                "paused": state.get("paused"),
+                "error": state.get("error"),
+                "current_step": progress.get("current_step"),
+                "rate_limit_wait": progress.get("rate_limit_wait"),
+                "rate_limit_reason": progress.get("rate_limit_reason"),
+                "llm_calls": calls,
+                "tokens_used": tokens,
+            }
+        )
+
+    @app.post("/jobs/{job_id}/resume/edit")
+    async def resume_edit_post(request: Request, job_id: int) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+        row, error_html, status = _resume_job_or_error(job_id)
+        if row is None:
+            return HTMLResponse(error_html or "", status_code=status)
+        form = await request.form()
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return HTMLResponse(_resume_error_page(f"Database unavailable: {exc}"), status_code=503)
+        try:
+            profile = get_latest_profile(conn)
+            resume_row = latest_tailored_resume(conn, job_id)
+            if profile is None or not profile.approved:
+                return HTMLResponse(
+                    _resume_error_page("Build and approve a profile first."), status_code=400
+                )
+            if resume_row is None:
+                return HTMLResponse(
+                    _resume_error_page("There is no tailored resume to edit yet."), status_code=404
+                )
+            ontology = get_ontology()
+            resume = TailoredResume.model_validate_json(resume_row["content_json"])
+            edits = {key: str(value) for key, value in form.multi_items() if ":" in str(key)}
+            edited, warnings = apply_line_edits(resume, edits, profile=profile, ontology=ontology)
+            if edited.model_dump_json() != resume.model_dump_json():
+                for warning in warnings:
+                    if warning not in edited.warnings:
+                        edited.warnings.append(warning)
+                save_tailored_resume(
+                    conn,
+                    job_id,
+                    content_json=edited.model_dump_json(),
+                    model=resume.model,
+                    prompt_version=str(
+                        resume.prompt_version or resume_row.get("prompt_version") or ""
+                    ),
+                    profile_hash="",
+                    generator_version=GENERATOR_VERSION,
+                    edited_at=datetime.now(UTC).isoformat(),
+                )
+        finally:
+            conn.close()
+        return RedirectResponse(url=f"/jobs/{job_id}/resume", status_code=303)
+
+    @app.post("/jobs/{job_id}/resume/approve")
+    def resume_approve_post(request: Request, job_id: int) -> Response:
+        if not _same_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        denied = require_auth(request)
+        if denied:
+            return denied
+        row, error_html, status = _resume_job_or_error(job_id)
+        if row is None:
+            return HTMLResponse(error_html or "", status_code=status)
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return HTMLResponse(_resume_error_page(f"Database unavailable: {exc}"), status_code=503)
+        try:
+            resume_row = latest_tailored_resume(conn, job_id)
+            if resume_row is None:
+                return HTMLResponse(
+                    _resume_error_page("There is no tailored resume to approve yet."),
+                    status_code=404,
+                )
+            approve_tailored_resume(conn, int(resume_row["id"]))
+        finally:
+            conn.close()
+        return RedirectResponse(url=f"/jobs/{job_id}/resume", status_code=303)
+
+    def _export_response(job_id: int, kind: str) -> Response:
+        """Serve the approved version as a DOCX/PDF download (never the unapproved one)."""
+        try:
+            conn = _open(database)
+        except sqlite3.Error as exc:
+            return HTMLResponse(_resume_error_page(f"Database unavailable: {exc}"), status_code=503)
+        try:
+            row = shippable_job(conn, job_id)
+            approved_row = approved_tailored_resume(conn, job_id)
+        finally:
+            conn.close()
+        if row is None:
+            return HTMLResponse(
+                _resume_error_page("Job not found, or it did not pass every hard filter."),
+                status_code=404,
+            )
+        if approved_row is None:
+            return HTMLResponse(
+                _resume_error_page("Approve a version before exporting."), status_code=409
+            )
+        resume = TailoredResume.model_validate_json(approved_row["content_json"])
+        job = _job_from_kit_row(row)
+        name = export_filename(resume, job)
+        if kind == "pdf":
+            return Response(
+                content=export_pdf(resume),
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
+            )
+        return Response(
+            content=export_docx(resume),
+            media_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            headers={"Content-Disposition": f'attachment; filename="{name}.docx"'},
+        )
+
+    @app.get("/jobs/{job_id}/resume/export.docx")
+    def resume_export_docx(request: Request, job_id: int) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        return _export_response(job_id, "docx")
+
+    @app.get("/jobs/{job_id}/resume/export.pdf")
+    def resume_export_pdf(request: Request, job_id: int) -> Response:
+        denied = require_auth(request)
+        if denied:
+            return denied
+        return _export_response(job_id, "pdf")
 
     @app.get("/api/matched")
     def api_matched(request: Request) -> Response:

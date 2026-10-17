@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
@@ -935,3 +936,291 @@ def test_profile_text_never_reaches_braintrust(tmp_path):
 
     blob = "".join(span.sent() for span in sdk.spans).lower()
     assert marker.lower() not in blob
+
+
+# --------------------------------------------------------------------------- #
+# C2: tailored-resume review screen and export
+# --------------------------------------------------------------------------- #
+
+
+from fake_llm import FakeClient
+
+from atlas.llm import LLMClient
+from atlas.resume import (
+    ATSReport,
+    ExperienceEntry,
+    ResumeHeader,
+    ResumeLine,
+    TailoredResume,
+)
+from atlas.schemas import (
+    Education,
+    Experience,
+    InputMode,
+    Links,
+    ParsedJD,
+    Proficiency,
+    Project,
+    Skill,
+    SkillCategory,
+)
+
+
+def _approved_profile() -> CandidateProfile:
+    return CandidateProfile(
+        source_mode=InputMode.resume,
+        full_name="Ada Lovelace",
+        email="ada@example.com",
+        links=Links(github="https://github.com/ada"),
+        total_experience_months=30,
+        experience_level="mid",
+        education=[
+            Education(
+                degree="BSc",
+                field="Computer Science",
+                institution="University of X",
+                graduation_year=2020,
+            )
+        ],
+        skills=[
+            Skill(
+                name="Python",
+                canonical_name="python",
+                category=SkillCategory.language,
+                proficiency=Proficiency.strong,
+            )
+        ],
+        projects=[
+            Project(
+                title="Atlas Ops", tech=["Python"], summary="Builds a job pipeline", outcomes="live"
+            )
+        ],
+        work=[
+            Experience(
+                role="Data engineer",
+                company="Acme",
+                duration_months=30,
+                tech=["Python"],
+                description=["Builds a job pipeline"],
+            )
+        ],
+        target_roles=["Backend"],
+        approved=True,
+    )
+
+
+def _resume_draft() -> dict:
+    return {
+        "summary": [{"text": "Builds a job pipeline.", "facts": ["W1.s1"]}],
+        "skills": ["Python (strong)"],
+        "experience": [
+            {"bullets": [{"text": "Build a job pipeline in Python.", "facts": ["W1.s1"]}]}
+        ],
+        "projects": [
+            {
+                "bullets": [
+                    {
+                        "text": "Shipped a live job pipeline.",
+                        "facts": ["P1.outcomes.s1", "P1.summary.s1"],
+                    }
+                ]
+            }
+        ],
+        "requirements": [
+            {
+                "requirement": "Python",
+                "status": "covered",
+                "facts": ["W1.s1"],
+                "quote": "Builds a job pipeline",
+            }
+        ],
+    }
+
+
+def _stored_resume() -> TailoredResume:
+    return TailoredResume(
+        header=ResumeHeader(name="Ada Lovelace", email="ada@example.com"),
+        summary=[ResumeLine(text="Builds a job pipeline.", facts=["W1.s1"])],
+        skills=["Python"],
+        experience=[
+            ExperienceEntry(
+                role="Data engineer",
+                company="Acme",
+                duration_months=30,
+                bullets=[ResumeLine(text="Build a job pipeline in Python.", facts=["W1.s1"])],
+            )
+        ],
+        ats=ATSReport(passed=True),
+    )
+
+
+def _resume_fixture(tmp_path, *, save: bool = False):
+    """A shippable, decided job with a parsed JD and an approved profile."""
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    job_id, _ = upsert_job(
+        conn,
+        run_id,
+        Job(
+            source="test",
+            url="http://x/1",
+            dedupe_key="k1",
+            title="Backend Engineer",
+            company="Globex",
+        ),
+    )
+    log_stage(conn, "filter_results", job_id=job_id, passed=True)
+    _decide(conn, job_id, outcome="apply")
+    log_stage(conn, "parsed_jds", job_id=job_id, data=_parsed_jd_model().model_dump())
+    save_profile(conn, _approved_profile())
+    if save:
+        from atlas.db import save_tailored_resume
+
+        save_tailored_resume(
+            conn,
+            job_id,
+            content_json=_stored_resume().model_dump_json(),
+            model="m",
+            prompt_version="4",
+        )
+    conn.close()
+    return job_id
+
+
+def _parsed_jd_model() -> ParsedJD:
+    return ParsedJD(title="Backend Engineer", must_have_skills=["Python"], confidence=0.9)
+
+
+def _no_network_factory():
+    raise AssertionError("this route must not build an LLM client")
+
+
+def test_resume_page_requires_login(tmp_path, monkeypatch):
+    job_id = _resume_fixture(tmp_path)
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "secret")
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.get(f"/jobs/{job_id}/resume", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+def test_resume_page_404_for_non_shippable_job(tmp_path):
+    conn = _connect(tmp_path)
+    run_id = start_run(conn, "test")
+    failed_id, _ = upsert_job(conn, run_id, Job(source="test", url="http://x/f", dedupe_key="f"))
+    log_stage(conn, "filter_results", job_id=failed_id, passed=False)
+    conn.close()
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    assert client.get(f"/jobs/{failed_id}/resume").status_code == 404
+    assert client.get("/jobs/9999/resume").status_code == 404
+
+
+def test_resume_post_rejects_cross_origin(tmp_path):
+    job_id = _resume_fixture(tmp_path)
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.post(f"/jobs/{job_id}/resume", headers={"origin": "http://evil.example"})
+    assert response.status_code == 403
+
+
+def test_resume_review_page_offers_to_build_when_no_resume(tmp_path):
+    job_id = _resume_fixture(tmp_path)
+    client = TestClient(create_app(tmp_path / "dash.db"))
+    response = client.get(f"/jobs/{job_id}/resume")
+    assert response.status_code == 200
+    assert "No tailored resume has been built" in response.text
+    assert "Build tailored resume" in response.text
+
+
+def test_export_blocked_before_approval_and_allowed_after(tmp_path):
+    job_id = _resume_fixture(tmp_path, save=True)
+    client = TestClient(create_app(tmp_path / "dash.db", client_factory=_no_network_factory))
+
+    for kind in ("docx", "pdf"):
+        blocked = client.get(f"/jobs/{job_id}/resume/export.{kind}")
+        assert blocked.status_code == 409
+        assert "Approve a version before exporting" in blocked.text
+
+    assert client.post(f"/jobs/{job_id}/resume/approve", follow_redirects=False).status_code == 303
+    for kind, media in (("docx", "wordprocessingml"), ("pdf", "pdf")):
+        ok = client.get(f"/jobs/{job_id}/resume/export.{kind}")
+        assert ok.status_code == 200
+        assert media in ok.headers["content-type"]
+        assert len(ok.content) > 500
+
+
+def test_resume_edit_creates_a_new_owner_edited_version(tmp_path):
+    from atlas.db import latest_tailored_resume
+
+    job_id = _resume_fixture(tmp_path, save=True)
+    client = TestClient(create_app(tmp_path / "dash.db", client_factory=_no_network_factory))
+
+    response = client.post(
+        f"/jobs/{job_id}/resume/edit",
+        data={"summary:0": "Owns the pipeline."},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    conn = connect(tmp_path / "dash.db")
+    latest = latest_tailored_resume(conn, job_id)
+    conn.close()
+    assert latest["version"] == 2
+    assert latest["edited_at"] is not None
+    assert latest["content_json"].count("Owns the pipeline.") == 1
+    from atlas.resume import TailoredResume as _TR
+
+    resume = _TR.model_validate_json(latest["content_json"])
+    assert resume.summary[0].text == "Owns the pipeline."
+    assert resume.summary[0].source == "owner-edited"
+
+
+def test_build_redirects_to_progress_and_produces_a_reviewable_resume(tmp_path):
+    import time
+
+    from atlas.db import latest_tailored_resume
+
+    job_id = _resume_fixture(tmp_path)
+    draft = _resume_draft()
+
+    def client_factory() -> LLMClient:
+        return LLMClient(client=FakeClient(lambda kwargs: json.dumps(draft)))
+
+    client = TestClient(create_app(tmp_path / "dash.db", client_factory=client_factory))
+
+    response = client.post(f"/jobs/{job_id}/resume", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/jobs/{job_id}/resume/progress"
+
+    deadline = time.time() + 10
+    status = {}
+    while time.time() < deadline:
+        status = client.get(f"/api/jobs/{job_id}/resume-status").json()
+        if status.get("done"):
+            break
+        time.sleep(0.05)
+    assert status.get("done") is True, status
+    assert status.get("cached") is False
+
+    page = client.get(f"/jobs/{job_id}/resume")
+    assert page.status_code == 200
+    assert "Builds a job pipeline." in page.text
+
+    conn = connect(tmp_path / "dash.db")
+    latest = latest_tailored_resume(conn, job_id)
+    conn.close()
+    assert latest["version"] == 1
+
+
+def test_resume_routes_make_no_network_calls(tmp_path):
+    job_id = _resume_fixture(tmp_path, save=True)
+    client = TestClient(create_app(tmp_path / "dash.db", client_factory=_no_network_factory))
+
+    assert client.get(f"/jobs/{job_id}/resume").status_code == 200
+    assert (
+        client.post(
+            f"/jobs/{job_id}/resume/edit", data={"summary:0": "x"}, follow_redirects=False
+        ).status_code
+        == 303
+    )
+    assert client.post(f"/jobs/{job_id}/resume/approve", follow_redirects=False).status_code == 303
+    assert client.get(f"/jobs/{job_id}/resume/export.docx").status_code == 200

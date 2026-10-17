@@ -21,6 +21,7 @@ from atlas.db import (
     approve_tailored_resume,
     approved_tailored_resume,
     connect,
+    find_cached_tailored_resume,
     get_tailored_resume,
     init_db,
     latest_tailored_resume,
@@ -32,20 +33,26 @@ from atlas.db import (
 from atlas.llm import LLMClient
 from atlas.pipeline import LLMCallBudgetExceeded
 from atlas.resume import (
+    GENERATOR_VERSION,
     MAX_MAIN_SKILLS,
     MAX_RESUME_CALLS,
+    OWNER_EDITED,
     PROFILE_VERBATIM,
     ResumeBlock,
     _tokenize,
+    apply_line_edits,
     ats_lint,
     build_facts,
     build_skills,
     classify_skills,
+    edit_warnings,
     format_dates,
     generate_tailored_resume,
     generate_tailored_resume_cached,
     generate_tailored_resume_under_caps,
+    line_key,
     profile_gaps,
+    profile_hash,
     render_profile_facts,
     resume_blocks,
     skill_evidence_facts,
@@ -1531,3 +1538,189 @@ def test_cached_generation_returns_the_same_resume_with_zero_calls(tmp_path):
     assert second.calls == 0
     assert len(fake.chat.completions.calls) == transport_calls
     assert first.resume.model_dump() == second.resume.model_dump()
+
+
+# --------------------------------------------------------------------------- #
+# C2: cache key, regenerate, warnings dedup, owner edits
+# --------------------------------------------------------------------------- #
+
+
+def _thin_internship_profile() -> CandidateProfile:
+    profile = _profile()
+    profile.work = []
+    profile.internships = [
+        Experience(
+            role="Intern",
+            company="Globex",
+            duration_months=6,
+            tech=["Python"],
+            description=[
+                "Builds a job pipeline for the team.",
+                "Writes MySQL queries for reports.",
+                "Reviews pull requests weekly.",
+            ],
+        )
+    ]
+    return profile
+
+
+def _thin_internship_draft() -> dict:
+    internship_bullet = {"text": "Build a job pipeline in Python.", "facts": ["I1.s1"]}
+    return _payload(
+        summary=[{"text": "Builds a job pipeline.", "facts": ["I1.s1"]}],
+        experience=[{"bullets": [internship_bullet]}],
+        projects=[{"bullets": [VALID_PROJECT_BULLET]}],
+    )
+
+
+def test_cache_key_includes_the_generator_version(tmp_path):
+    conn, job_id = _conn_with_job(tmp_path)
+    digest = profile_hash(_profile())
+    resume = _generate(_payload())
+    save_tailored_resume(
+        conn,
+        job_id,
+        content_json=resume.model_dump_json(),
+        model=resume.model,
+        prompt_version=resume.prompt_version,
+        profile_hash=digest,
+        generator_version=GENERATOR_VERSION,
+    )
+
+    # Same profile + prompt + generator version hits the cache.
+    assert (
+        find_cached_tailored_resume(conn, job_id, digest, resume.prompt_version, GENERATOR_VERSION)
+        is not None
+    )
+    # A different generator version (a rule change) must miss.
+    assert find_cached_tailored_resume(conn, job_id, digest, resume.prompt_version, "999") is None
+
+
+def test_saved_generation_records_generator_version_and_tokens(tmp_path):
+    conn, job_id = _conn_with_job(tmp_path)
+    client = LLMClient(client=FakeClient(lambda kwargs: json.dumps(_payload())))
+
+    generation = generate_tailored_resume_cached(
+        conn,
+        client,
+        profile=_profile(),
+        job=_job(),
+        job_id=job_id,
+        parsed_jd=_parsed_jd(),
+    )
+
+    row = get_tailored_resume(conn, generation.resume_id)
+    assert row["generator_version"] == GENERATOR_VERSION
+    assert row["tokens"] == generation.tokens
+    assert row["calls"] == generation.calls
+    assert row["approved_at"] is None
+
+
+def test_regenerate_bypasses_the_cache(tmp_path):
+    conn, job_id = _conn_with_job(tmp_path)
+    fake = FakeClient(lambda kwargs: json.dumps(_payload()))
+    client = LLMClient(client=fake)
+
+    first = generate_tailored_resume_cached(
+        conn, client, profile=_profile(), job=_job(), job_id=job_id, parsed_jd=_parsed_jd()
+    )
+    cached = generate_tailored_resume_cached(
+        conn, client, profile=_profile(), job=_job(), job_id=job_id, parsed_jd=_parsed_jd()
+    )
+    assert first.cached is False and cached.cached is True
+    calls_before = len(fake.chat.completions.calls)
+
+    regen = generate_tailored_resume_cached(
+        conn,
+        client,
+        profile=_profile(),
+        job=_job(),
+        job_id=job_id,
+        parsed_jd=_parsed_jd(),
+        regenerate=True,
+    )
+
+    assert regen.cached is False
+    assert len(fake.chat.completions.calls) > calls_before
+    # A regenerated version is stored alongside the cached one.
+    assert regen.resume_id != first.resume_id
+
+
+def test_warnings_are_deduped_to_one_per_section_plus_a_count():
+    draft = _thin_internship_draft()
+    client = LLMClient(client=FakeClient(lambda kwargs: json.dumps(draft)))
+
+    resume = generate_tailored_resume(
+        client, profile=_thin_internship_profile(), job=_job(), parsed_jd=_parsed_jd()
+    )
+
+    verbatim_lines = sum(
+        1
+        for entry in resume.experience
+        for bullet in entry.bullets
+        if bullet.source == PROFILE_VERBATIM
+    )
+    assert verbatim_lines >= 2
+    # One warning for the section, not one per fallback line.
+    assert sum("profile-verbatim" in w for w in resume.warnings) == 1
+    # Exactly one aggregate count line.
+    assert sum("fell back to a verbatim profile sentence" in w for w in resume.warnings) == 1
+
+
+def test_apply_line_edits_marks_owner_edited_and_saves_a_new_version(tmp_path):
+    conn, job_id = _conn_with_job(tmp_path)
+    client = LLMClient(client=FakeClient(lambda kwargs: json.dumps(_payload())))
+    generation = generate_tailored_resume_cached(
+        conn, client, profile=_profile(), job=_job(), job_id=job_id, parsed_jd=_parsed_jd()
+    )
+    profile = _profile()
+    ontology = get_ontology()
+    resume = generation.resume
+    key = line_key("summary", 1)
+
+    edited, _ = apply_line_edits(
+        resume, {key: "Owned the pipeline end to end."}, profile=profile, ontology=ontology
+    )
+    assert edited.summary[1].source == OWNER_EDITED
+    assert edited.summary[1].text == "Owned the pipeline end to end."
+    assert resume.summary[1].text != edited.summary[1].text
+
+    new_id = save_tailored_resume(
+        conn,
+        job_id,
+        content_json=edited.model_dump_json(),
+        model=resume.model,
+        prompt_version=resume.prompt_version,
+        profile_hash="",
+        generator_version=GENERATOR_VERSION,
+        edited_at="2026-10-17T00:00:00+00:00",
+    )
+    stored = get_tailored_resume(conn, new_id)
+    original_version = get_tailored_resume(conn, generation.resume_id)["version"]
+    assert stored["edited_at"] is not None
+    assert stored["version"] == original_version + 1
+
+
+def test_apply_line_edits_warns_when_a_number_or_technology_is_not_in_the_profile():
+    resume = _generate(_payload())
+    profile = _profile()
+    ontology = get_ontology()
+
+    edited, warnings = apply_line_edits(
+        resume,
+        {line_key("summary", 1): "Scaled throughput to 3000 requests per second using Kafka."},
+        profile=profile,
+        ontology=ontology,
+    )
+    assert edited.summary[1].source == OWNER_EDITED
+    # Kafka is an ontology entry absent from the profile; 3000 is a new number.
+    flagged = [w for w in warnings if "not found in the profile" in w]
+    assert flagged, warnings
+    assert "Kafka" in flagged[0]
+    assert "3000" in flagged[0]
+
+
+def test_edit_warnings_is_empty_for_profile_grounded_text():
+    profile = _profile()
+    ontology = get_ontology()
+    assert edit_warnings("Builds a job pipeline in Python.", profile, ontology) == []

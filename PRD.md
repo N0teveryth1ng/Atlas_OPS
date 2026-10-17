@@ -37,10 +37,10 @@ in our own wrapper. Rate-limit headers are read from the raw HTTP response
 (`with_raw_response`), since the SDK's parsed object strips them (PR #35).
 
 ## Non-goals
-auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so);
-the tailored-resume **UI and export** are planned, not built (PR C2; the generator
-itself landed in PR #37 and is refined through #44 and the current empty-section/skills
-fix, with no UI yet). The "Add a job" page is built (PRs #33/#34). The
+auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so).
+The tailored-resume generator, review UI and DOCX/PDF export are all built (PR #37
+refined through #44, plus #45/#46 and the PR C2 review/export screen). The "Add a job"
+page is built (PRs #33/#34). The
 per-job result page and the owner's own Apply/Skip verdicts (PR #36) are human
 bookkeeping only: verdicts append to the `owner_verdicts` table and never touch
 `eval/labels.jsonl` or the decision.
@@ -51,7 +51,7 @@ UNVERIFIED: current measured values, because there is no verified human-labelled
 yet (G5 / DEC6 BLOCKED). Current eval figures are synthetic smoke tests only.
 
 ## Tailored resume
-`atlas/resume.py` (PR #37, refined through #44 and the current empty-section/skills fix)
+`atlas/resume.py` (PR #37, refined through #44, plus #45/#46 and the PR C2 UI)
 drafts a resume tailored to one job from the approved profile: the model may only
 rewrite the candidate's own material, every line must cite a profile **fact id** (a
 sentence-level fact for prose), skills are built in code and alias-deduped (main group
@@ -61,13 +61,20 @@ requirements are listed as missing and never added, and the layout passes an ATS
 (no tables/images/text boxes/headers/footers). Empty/thin sections get a dedicated repair
 call, then fall back to the section's own verbatim profile sentence (bounded by a 3-call
 budget, with warnings); a repeat build is served from cache with zero LLM calls (keyed by
-profile hash, job id, prompt version). Storage is the `tailored_resumes` table, versioned
-per job and approved by the owner before export (export is C2). It is grounded generation
+profile hash, job id, prompt version, generator version; a Regenerate action bypasses it).
+Storage is the `tailored_resumes` table, versioned
+per job and approved by the owner before export. The per-job page opens a side-by-side
+review screen (base vs tailored, per-line fact ids / source badge / claim flags, Missing
+requirements / Familiar skills / Additional tools / ATS lint), inline editing (each edit
+saves a new `owner-edited` version and warns on a technology/number absent from the
+profile) and approval; only approved versions export to an ATS-friendly single-column
+DOCX (`python-docx`) or PDF (`fpdf2`) with real selectable text and no tables/images/
+text boxes/headers/footers, named `Name_Role_Company`. It is grounded generation
 only: it never submits an application.
 
 ## Current state (2026-10-17)
-Code state as of PR #44, 1208 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #44
+Code state as of PR #46, 1222 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #46
 (base `8abeaa1`). See HANDOFF.md for detail.
 
 ## Owner-only (blocking completion)

@@ -16,6 +16,10 @@ fastapi==0.133.1
 python-multipart==0.0.27
 uvicorn==0.41.0
 
+# --- resume export (approve -> DOCX/PDF) ---
+python-docx==1.2.0
+fpdf2==2.8.9
+
 # --- deferred: browser automation for Phase 8 auto-apply ---
 # Kept because auto_applications/ is retained for later; not used by the pipeline.
 playwright==1.62.0
