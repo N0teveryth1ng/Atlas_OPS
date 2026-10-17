@@ -39,7 +39,8 @@ in our own wrapper. Rate-limit headers are read from the raw HTTP response
 ## Non-goals
 auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so);
 the tailored-resume **UI and export** are planned, not built (PR C2; the generator
-itself landed in PR #37 with no UI). The "Add a job" page is built (PRs #33/#34). The
+itself landed in PR #37 and is refined through #44 and the current empty-section/skills
+fix, with no UI yet). The "Add a job" page is built (PRs #33/#34). The
 per-job result page and the owner's own Apply/Skip verdicts (PR #36) are human
 bookkeeping only: verdicts append to the `owner_verdicts` table and never touch
 `eval/labels.jsonl` or the decision.
@@ -50,18 +51,23 @@ UNVERIFIED: current measured values, because there is no verified human-labelled
 yet (G5 / DEC6 BLOCKED). Current eval figures are synthetic smoke tests only.
 
 ## Tailored resume
-`atlas/resume.py` (PR #37) drafts a resume tailored to one job from the approved
-profile: the model may only rewrite the candidate's own material, every line must
-carry a verbatim profile quote, skills must already exist in the profile (alias-aware),
-invented numbers/metrics/technologies are dropped, job keywords appear at most once,
-unmet requirements are listed as missing and never added, and the layout passes an ATS
-lint (no tables/images/text boxes/headers/footers). Storage is the `tailored_resumes`
-table, versioned per job and approved by the owner before export (export is C2). It is
-grounded generation only: it never submits an application.
+`atlas/resume.py` (PR #37, refined through #44 and the current empty-section/skills fix)
+drafts a resume tailored to one job from the approved profile: the model may only
+rewrite the candidate's own material, every line must cite a profile **fact id** (a
+sentence-level fact for prose), skills are built in code and alias-deduped (main group
+capped at 14; hosting/observability tools held back unless the JD names them), invented
+numbers/metrics/technologies are dropped, job keywords appear at most once, unmet
+requirements are listed as missing and never added, and the layout passes an ATS lint
+(no tables/images/text boxes/headers/footers). Empty/thin sections get a dedicated repair
+call, then fall back to the section's own verbatim profile sentence (bounded by a 3-call
+budget, with warnings); a repeat build is served from cache with zero LLM calls (keyed by
+profile hash, job id, prompt version). Storage is the `tailored_resumes` table, versioned
+per job and approved by the owner before export (export is C2). It is grounded generation
+only: it never submits an application.
 
-## Current state (2026-10-16)
-Code state as of PR #37, 1145 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #37
+## Current state (2026-10-17)
+Code state as of PR #44, 1208 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #44
 (base `8abeaa1`). See HANDOFF.md for detail.
 
 ## Owner-only (blocking completion)

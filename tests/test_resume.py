@@ -32,12 +32,18 @@ from atlas.db import (
 from atlas.llm import LLMClient
 from atlas.pipeline import LLMCallBudgetExceeded
 from atlas.resume import (
+    MAX_MAIN_SKILLS,
+    MAX_RESUME_CALLS,
+    PROFILE_VERBATIM,
     ResumeBlock,
     _tokenize,
     ats_lint,
     build_facts,
     build_skills,
+    classify_skills,
+    format_dates,
     generate_tailored_resume,
+    generate_tailored_resume_cached,
     generate_tailored_resume_under_caps,
     profile_gaps,
     render_profile_facts,
@@ -888,7 +894,8 @@ def test_project_tech_is_cleaned_and_becomes_an_evidence_linked_skill():
     resume = _generate(_payload(), profile=profile)
 
     assert resume.projects[0].tech == ["Python", "Vercel"]
-    assert "Vercel" in resume.skills
+    assert "Vercel" in resume.additional_tools
+    assert "Vercel" not in resume.skills
 
 
 def test_clean_tech_items_strips_leading_and_trailing_period_and_dedupes():
@@ -1207,3 +1214,313 @@ def test_add_llm_tokens_accumulates(tmp_path):
     add_llm_tokens(conn, 2)
 
     assert tokens_used_today(conn) == 42
+
+
+# --------------------------------------------------------------------------- #
+# C1e: empty sections get a verbatim fallback + warning
+# --------------------------------------------------------------------------- #
+
+
+def _two_empty_projects() -> list[Project]:
+    return [
+        Project(title="Alpha", tech=["Python"], summary="Builds Alpha", outcomes="live"),
+        Project(title="Beta", tech=["Python"], summary="Builds Beta", outcomes="live"),
+    ]
+
+
+def test_empty_project_gets_a_verbatim_fallback_and_a_warning():
+    profile = _profile()
+    profile.projects = _two_empty_projects()[:1]
+
+    resume = _generate(_payload(projects=[{"bullets": []}]), profile=profile)
+
+    assert [b.text for b in resume.projects[0].bullets] == ["Builds Alpha"]
+    assert resume.projects[0].bullets[0].source == PROFILE_VERBATIM
+    assert any("profile-verbatim" in w for w in resume.warnings)
+    assert any("Alpha" in w for w in resume.warnings)
+
+
+def test_each_empty_project_gets_its_own_repair_call():
+    profile = _profile()
+    profile.projects = _two_empty_projects()
+    draft = _payload(projects=[{"bullets": []}, {"bullets": []}])
+    seen: list[str] = []
+
+    def handler(kwargs):
+        user = kwargs["messages"][-1]["content"]
+        if "Repair pass (one project)" in user:
+            if "Project 1 (" in user:
+                seen.append("Alpha")
+                return json.dumps(
+                    {
+                        "projects": [
+                            {
+                                "bullets": [
+                                    {
+                                        "text": "Build a live Alpha.",
+                                        "facts": ["P1.summary.s1", "P1.outcomes.s1"],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                )
+            seen.append("Beta")
+            return json.dumps(
+                {
+                    "projects": [
+                        {
+                            "bullets": [
+                                {
+                                    "text": "Build a live Beta.",
+                                    "facts": ["P2.summary.s1", "P2.outcomes.s1"],
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        return json.dumps(draft)
+
+    resume = generate_tailored_resume(
+        LLMClient(client=FakeClient(handler)),
+        profile=profile,
+        job=_job(),
+        parsed_jd=_parsed_jd(),
+    )
+
+    assert seen == ["Alpha", "Beta"]
+    assert [b.text for b in resume.projects[0].bullets] == ["Build a live Alpha."]
+    assert [b.text for b in resume.projects[1].bullets] == ["Build a live Beta."]
+
+
+def test_resume_call_budget_is_capped_then_falls_back_to_verbatim():
+    profile = _profile()
+    profile.projects = _two_empty_projects()
+    draft = _payload(projects=[{"bullets": []}, {"bullets": []}])
+    calls = {"n": 0}
+
+    def handler(kwargs):
+        calls["n"] += 1
+        return json.dumps(draft)
+
+    resume = generate_tailored_resume(
+        LLMClient(client=FakeClient(handler)),
+        profile=profile,
+        job=_job(),
+        parsed_jd=_parsed_jd(),
+    )
+
+    assert calls["n"] == MAX_RESUME_CALLS
+    assert [b.text for b in resume.projects[0].bullets] == ["Builds Alpha"]
+    assert [b.text for b in resume.projects[1].bullets] == ["Builds Beta"]
+    assert sum("profile-verbatim" in w for w in resume.warnings) == 2
+
+
+def test_thin_internship_is_backfilled_verbatim_and_warns():
+    profile = _profile()
+    profile.work = []
+    profile.internships = [
+        Experience(
+            role="Intern",
+            company="Globex",
+            duration_months=6,
+            tech=["Python"],
+            description=[
+                "Builds a job pipeline for the team.",
+                "Writes MySQL queries for reports.",
+                "Reviews pull requests weekly.",
+            ],
+        )
+    ]
+    internship_bullet = {"text": "Build a job pipeline in Python.", "facts": ["I1.s1"]}
+    draft = _payload(
+        summary=[{"text": "Builds a job pipeline.", "facts": ["I1.s1"]}],
+        experience=[{"bullets": [internship_bullet]}],
+        projects=[{"bullets": [VALID_PROJECT_BULLET]}],
+    )
+    calls = {"n": 0}
+
+    def handler(kwargs):
+        calls["n"] += 1
+        return json.dumps(draft)
+
+    resume = generate_tailored_resume(
+        LLMClient(client=FakeClient(handler)),
+        profile=profile,
+        job=_job(),
+        parsed_jd=_parsed_jd(),
+    )
+
+    assert calls["n"] == MAX_RESUME_CALLS
+    texts = [b.text for b in resume.experience[0].bullets]
+    assert "Writes MySQL queries for reports." in texts
+    assert resume.experience[0].bullets[-1].source == PROFILE_VERBATIM
+    assert any("profile-verbatim" in w for w in resume.warnings)
+
+
+def test_resume_calls_use_temperature_zero():
+    temps: list[float] = []
+
+    def handler(kwargs):
+        temps.append(kwargs["temperature"])
+        return json.dumps(_payload())
+
+    client = LLMClient(client=FakeClient(handler), temperature=0.9)
+    generate_tailored_resume(client, profile=_profile(), job=_job(), parsed_jd=_parsed_jd())
+
+    assert temps
+    assert all(t == 0.0 for t in temps)
+
+
+# --------------------------------------------------------------------------- #
+# C1e: skills cap, alias dedupe, hosting exclusion, ordering
+# --------------------------------------------------------------------------- #
+
+
+def test_skills_are_capped_and_aliases_are_deduped():
+    profile = _profile()
+    aliases = [
+        "JWT",
+        "JWT Auth",
+        "PostgreSQL",
+        "PostgreSQL (Neon)",
+        "Neon",
+        "GitHub Actions",
+        "CI/CD (GitHub Actions)",
+        "Git/GitHub",
+    ]
+    profile.projects[0].tech = ["Python", *aliases, *[f"Tool{i}" for i in range(1, 12)]]
+
+    resume = _generate(_payload(), profile=profile)
+
+    assert len(resume.skills) == MAX_MAIN_SKILLS
+    assert "JWT" in resume.skills
+    assert "JWT Auth" not in resume.skills
+    assert resume.skills.count("PostgreSQL") == 1
+    assert "Neon" not in resume.skills
+    assert "GitHub Actions" in resume.skills
+    assert "Additional tools" not in resume.skills
+    assert resume.additional_tools
+
+
+def test_hosting_tools_are_excluded_unless_the_jd_names_them():
+    profile = _profile()
+    profile.projects[0].tech = ["Python", "Render", "Vercel", "Braintrust"]
+
+    resume = _generate(_payload(), profile=profile)
+    assert "Render" in resume.additional_tools
+    assert "Vercel" in resume.additional_tools
+    assert "Render" not in resume.skills
+    assert "Vercel" not in resume.skills
+
+    named = _generate(
+        _payload(),
+        profile=profile,
+        parsed_jd=ParsedJD(
+            title="Backend engineer",
+            must_have_skills=["Python", "Vercel"],
+            nice_to_have_skills=[],
+            confidence=0.9,
+        ),
+    )
+    assert "Vercel" in named.skills
+
+
+def test_main_skills_order_by_cited_facts_after_jd_matches():
+    profile = _profile()
+    profile.projects[0].tech = ["Python", "FastAPI", "Docker"]
+    profile.work[0].tech = ["Python", "Docker"]
+
+    main, _familiar, _additional = classify_skills(profile, _parsed_jd(), get_ontology())
+
+    assert main[0] == "Python"
+    assert main.index("Docker") < main.index("FastAPI")
+
+
+# --------------------------------------------------------------------------- #
+# C1e: summary overlap rule
+# --------------------------------------------------------------------------- #
+
+
+def test_second_summary_line_is_omitted_when_it_duplicates_a_bullet():
+    duplicate = {"text": "Build a job pipeline in Python.", "facts": ["W1.s1"]}
+
+    resume = _generate(_payload(summary=[duplicate]))
+
+    assert [line.text for line in resume.summary] == [resume.summary[0].text]
+    assert len(resume.summary) == 1
+
+
+def test_distinct_second_summary_line_is_kept():
+    profile = _profile()
+    profile.work[0].description = ["Builds a job pipeline.", "Writes MySQL queries."]
+    line = {"text": "Writes MySQL queries.", "facts": ["W1.s2"]}
+
+    resume = _generate(_payload(summary=[line]), profile=profile)
+
+    assert line["text"] in [item.text for item in resume.summary]
+
+
+# --------------------------------------------------------------------------- #
+# C1e: dates rendered at output only
+# --------------------------------------------------------------------------- #
+
+
+def test_format_dates_renders_proper_case_and_leaves_unknown_text():
+    assert format_dates("2026-03-23 - 2026-06-30") == "March 23, 2026 - June 30, 2026"
+    assert format_dates("Jun 2024 - Aug 2024") == "June 2024 - August 2024"
+    assert format_dates("2026-03") == "March 2026"
+    assert format_dates("2020 - Present") == "2020 - Present"
+    assert format_dates("tbd") == "tbd"
+    assert format_dates(None) == ""
+    assert format_dates("") == ""
+
+
+def test_experience_dates_render_formatted_but_the_fact_stays_verbatim():
+    profile = _profile()
+    profile.work[0].dates = "2026-03-23 - 2026-06-30"
+
+    resume = _generate(_payload(), profile=profile)
+
+    assert resume.experience[0].dates == "March 23, 2026 - June 30, 2026"
+    assert build_facts(profile)["W1.dates"].text == "2026-03-23 - 2026-06-30"
+
+
+# --------------------------------------------------------------------------- #
+# C1e: cache returns the same output with zero calls
+# --------------------------------------------------------------------------- #
+
+
+def test_cached_generation_returns_the_same_resume_with_zero_calls(tmp_path):
+    conn, job_id = _conn_with_job(tmp_path)
+    fake = FakeClient(lambda kwargs: json.dumps(_payload()))
+    client = LLMClient(client=fake)
+
+    first = generate_tailored_resume_cached(
+        conn,
+        client,
+        profile=_profile(),
+        job=_job(),
+        job_id=job_id,
+        parsed_jd=_parsed_jd(),
+    )
+    assert first.cached is False
+    assert first.calls > 0
+    transport_calls = len(fake.chat.completions.calls)
+    assert transport_calls == first.calls
+
+    second = generate_tailored_resume_cached(
+        conn,
+        client,
+        profile=_profile(),
+        job=_job(),
+        job_id=job_id,
+        parsed_jd=_parsed_jd(),
+    )
+
+    assert second.cached is True
+    assert second.tokens == 0
+    assert second.calls == 0
+    assert len(fake.chat.completions.calls) == transport_calls
+    assert first.resume.model_dump() == second.resume.model_dump()

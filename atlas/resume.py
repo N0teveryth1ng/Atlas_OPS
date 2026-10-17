@@ -40,16 +40,18 @@ Braintrust: ``LLMClient.call_json`` traces only prompt fingerprints.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections import Counter
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
-from .db import add_llm_tokens
+from .db import add_llm_tokens, find_cached_tailored_resume, save_tailored_resume
 from .evidence import quote_valid
 from .llm import LLMClient
 from .prompt_store import load_prompt
@@ -74,11 +76,73 @@ KEYWORD_MAX = 3
 #: Fewer than this many grounded internship bullets triggers the one repair pass.
 MIN_INTERNSHIP_BULLETS = 3
 
+#: The most LLM calls (draft + repairs) one resume build may ever make. The draft
+#: loop and the per-section repair loops all draw from this single budget, so a
+#: build can never run away on cost.
+MAX_RESUME_CALLS = 3
+
+#: How many repair calls a single thin/empty section may use before falling back to
+#: a verbatim profile sentence. Bounded further by :data:`MAX_RESUME_CALLS`.
+MAX_SECTION_REPAIR_ATTEMPTS = 2
+
+#: The main Skills group holds at most this many names; any overflow moves to the
+#: "Additional tools" list (shown on the review page, not exported by default).
+MAX_MAIN_SKILLS = 14
+
+#: A model summary sentence is dropped when it overlaps any bullet by at least this
+#: much (Jaccard over content-word keys); the first summary line is built in code.
+SUMMARY_OVERLAP_MAX = 0.6
+
+#: Skills that are hosting/observability platforms rather than engineering skills:
+#: kept out of the main group unless the JD names them. "neon" is also an alias of
+#: PostgreSQL, so it normally collapses away before this list is consulted.
+_HOSTING_OBSERVABILITY: frozenset[str] = frozenset(
+    {"render", "vercel", "braintrust", "neon", "netlify", "heroku", "railway"}
+)
+
+#: Surface skill spellings that mean the same thing; every key maps to one display
+#: name so the main group never lists an entry twice under two spellings.
+_SKILL_ALIASES: dict[str, str] = {
+    "jwt": "JWT",
+    "jwt auth": "JWT",
+    "postgresql": "PostgreSQL",
+    "postgresql (neon)": "PostgreSQL",
+    "neon": "PostgreSQL",
+    "github actions": "GitHub Actions",
+    "ci/cd (github actions)": "GitHub Actions",
+    "ci/cd": "GitHub Actions",
+    "git/github": "GitHub Actions",
+}
+
+#: Month names for :func:`format_dates` (no locale dependency).
+_MONTHS: tuple[str, ...] = (
+    "",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+_MONTH_LOOKUP: dict[str, int] = {
+    name[:3].lower(): index for index, name in enumerate(_MONTHS) if name
+}
+
+
 #: Headings an ATS expects, in order. A clean layout has all of them.
 STANDARD_HEADINGS: tuple[str, ...] = ("Summary", "Skills", "Experience", "Projects", "Education")
 
 #: Heading for the second, lower-confidence skill group.
 FAMILIAR_HEADING = "Familiar with (confirm before use)"
+
+#: ``ResumeLine.source`` marker for a code-supplied fallback copied from the profile.
+PROFILE_VERBATIM = "profile-verbatim"
 
 #: Words that claim ownership, leadership, reliability or scale. Single-word stems are
 #: matched as a *prefix* of a line token (so "delivering" is caught by "deliver" and
@@ -475,6 +539,9 @@ class ResumeLine(BaseModel):
 
     text: str
     facts: list[str] = Field(default_factory=list)
+    #: ``"profile-verbatim"`` marks a code-supplied fallback copied word-for-word from
+    #: the profile; such a line is exempt from the action-verb rule.
+    source: str = ""
 
 
 class DraftEntry(BaseModel):
@@ -528,6 +595,8 @@ class ExperienceEntry(BaseModel):
     role: str | None = None
     company: str | None = None
     duration_months: int | None = None
+    #: The stored free-text dates rendered in proper case for output only.
+    dates: str | None = None
     bullets: list[ResumeLine] = Field(default_factory=list)
 
 
@@ -553,6 +622,9 @@ class DroppedLine(BaseModel):
 
     text: str
     reason: str
+    #: The section label the line came from (``projects[1]``, ``experience[0]``, ...),
+    #: so a later per-section repair can list only that section's failures.
+    section: str = ""
 
 
 class ResumeBlockKind(str, Enum):
@@ -597,6 +669,9 @@ class TailoredResume(BaseModel):
     summary: list[ResumeLine] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     familiar_skills: list[str] = Field(default_factory=list)
+    #: Skills that did not fit the main group (over the cap), or hosting/observability
+    #: tools the JD did not name. Shown on the review page; not exported unless picked.
+    additional_tools: list[str] = Field(default_factory=list)
     skill_facts: dict[str, str] = Field(default_factory=dict)
     experience: list[ExperienceEntry] = Field(default_factory=list)
     projects: list[ProjectEntry] = Field(default_factory=list)
@@ -699,6 +774,70 @@ def _canonical(name: str, ontology: SkillOntology) -> str:
     return ontology.canonicalize(strip_proficiency(name))
 
 
+def _skill_alias(name: str) -> str:
+    """Collapse owner-listed skill aliases to one display name (else the name itself).
+
+    Handles both the full surface ("JWT Auth") and its parenthetical parts, so
+    "PostgreSQL (Neon)" and "CI/CD (GitHub Actions)" collapse with their base too.
+    """
+    value = strip_proficiency(name).strip()
+    for candidate in (value, *_expand_tech_item(value)):
+        mapped = _SKILL_ALIASES.get(candidate.lower())
+        if mapped:
+            return mapped
+    return value
+
+
+def _skill_canonical(name: str) -> str:
+    """Display-canonical key for deduping a skill name (alias map wins over ontology)."""
+    return _skill_alias(name).lower()
+
+
+def _jd_names_skill(name: str, jd_canonical: set[str]) -> bool:
+    """Whether the JD names ``name`` (by canonical key or by its surface tokens)."""
+    key = _skill_canonical(name)
+    if key in jd_canonical:
+        return True
+    tokens = set(_tokenize(_skill_alias(name)))
+    return bool(tokens and tokens <= jd_canonical)
+
+
+def _content_keys(text: str) -> set[str]:
+    """Content-word keys of a line: nouns/adjectives/adverbs, minus the leading verb.
+
+    Used only for the summary/bullet overlap check, so it is deliberately coarse:
+    stop words and the neutral generic nouns are ignored, and equivalent words share
+    a key through :data:`_CONTENT_SYNONYMS`.
+    """
+    tokens = _tokenize(text)
+    keys: set[str] = set()
+    for index, token in enumerate(tokens):
+        if index == 0 or token in _STOPWORDS or token in _NEUTRAL_CONTENT:
+            continue
+        keys.add(_content_key(token))
+    return keys
+
+
+def _overlap_ratio(text: str, others: list[str]) -> float:
+    """The largest Jaccard overlap between ``text`` and any of ``others`` (0 when none).
+
+    Two lines overlap fully when they share every content word and partly otherwise;
+    the caller drops the second summary line once this reaches
+    :data:`SUMMARY_OVERLAP_MAX`.
+    """
+    keys = _content_keys(text)
+    if not keys:
+        return 0.0
+    best = 0.0
+    for other in others:
+        other_keys = _content_keys(other)
+        union = keys | other_keys
+        if not union:
+            continue
+        best = max(best, len(keys & other_keys) / len(union))
+    return best
+
+
 def _jd_keyword_tokens(parsed_jd: ParsedJD, ontology: SkillOntology) -> set[str]:
     tokens: set[str] = set()
     for name in (*parsed_jd.must_have_skills, *parsed_jd.nice_to_have_skills):
@@ -750,6 +889,43 @@ def _education_line(education: Any) -> str:
         when = "expected" if getattr(education, "expected", False) else "graduated"
         head += f" ({when} {education.graduation_year})"
     return head
+
+
+#: A single date part: ISO ``2026-03-23``, year-month ``2026-03``, or ``Mar 2026``.
+_ISO_DATE_RE = re.compile(r"^(?P<year>\d{4})-(?P<month>\d{1,2})(?:-(?P<day>\d{1,2}))?$")
+_MONTH_DATE_RE = re.compile(r"^(?P<mon>[A-Za-z]{3,9})\.?\s+(?P<year>\d{4})$")
+_DATE_SPLIT_RE = re.compile(r"\s+(?:-|–|—|to)\s+", re.IGNORECASE)
+
+
+def _format_date_part(part: str) -> str:
+    """One date part in proper case ("2026-03-23" -> "March 23, 2026")."""
+    text = part.strip()
+    iso = _ISO_DATE_RE.match(text)
+    if iso:
+        month = int(iso.group("month"))
+        if 1 <= month <= 12:
+            if iso.group("day"):
+                return f"{_MONTHS[month]} {int(iso.group('day'))}, {iso.group('year')}"
+            return f"{_MONTHS[month]} {iso.group('year')}"
+    named = _MONTH_DATE_RE.match(text)
+    if named:
+        named_month = _MONTH_LOOKUP.get(named.group("mon")[:3].lower())
+        if named_month:
+            return f"{_MONTHS[named_month]} {named.group('year')}"
+    return text
+
+
+def format_dates(value: str | None) -> str:
+    """Render stored free-text dates in proper case for output only (verbatim if unclear).
+
+    ``"2026-03-23 - 2026-06-30"`` -> ``"March 23, 2026 - June 30, 2026"``. Only the
+    rendered output changes; the stored fact keeps the owner's original string.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    parts = _DATE_SPLIT_RE.split(text)
+    return " - ".join(_format_date_part(part) for part in parts)
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -939,7 +1115,11 @@ def _expand_tech_item(item: str) -> list[str]:
 
 
 def _tech_skill_names(profile: CandidateProfile, ontology: SkillOntology) -> list[str]:
-    """Skill names taken straight from the project/internship tech lists, in order."""
+    """Skill names taken straight from the project/internship tech lists, in order.
+
+    Alias spellings collapse to one display name (so "Git/GitHub" and
+    "CI/CD (GitHub Actions)" yield a single "GitHub Actions" entry).
+    """
     out: list[str] = []
     seen: set[str] = set()
     for item in _all_tech_items(profile):
@@ -947,11 +1127,11 @@ def _tech_skill_names(profile: CandidateProfile, ontology: SkillOntology) -> lis
             value = candidate.strip()
             if not value:
                 continue
-            key = _canonical(value, ontology) or value.lower()
+            key = _skill_canonical(value)
             if key in seen:
                 continue
             seen.add(key)
-            out.append(value)
+            out.append(_skill_alias(value))
     return out
 
 
@@ -969,18 +1149,61 @@ def skill_evidence_facts(profile: CandidateProfile, ontology: SkillOntology) -> 
     return out
 
 
-def build_skills(
-    profile: CandidateProfile, parsed_jd: ParsedJD, ontology: SkillOntology
-) -> tuple[list[str], list[str]]:
-    """Return ``(skills, familiar)``:
+def _all_skill_names(profile: CandidateProfile, ontology: SkillOntology) -> list[str]:
+    """Every candidate skill name (owner skills + tech-list names), deduped on display."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for skill in profile.skills:
+        name = strip_proficiency(skill.name or skill.canonical_name)
+        key = _skill_canonical(name)
+        if name and key not in seen:
+            seen.add(key)
+            out.append(name)
+    for name in _tech_skill_names(profile, ontology):
+        key = _skill_canonical(name)
+        if name and key not in seen:
+            seen.add(key)
+            out.append(name)
+    return out
 
-    ``skills`` = JD-matching first, then other skills. A skill is in the main group when
-    it is confirmed, or evidenced in a project/internship/work **tech list** (so a
-    tech-list technology, even one the profile only marked "familiar", is promoted), or
-    evidenced elsewhere with a non-familiar proficiency. Every project/internship/work
-    technology is also added as an evidence-linked skill. ``familiar`` = the "Familiar
-    with (confirm before use)" group. Names are the profile's own, with any proficiency
-    suffix stripped.
+
+def _skill_fact_counts(profile: CandidateProfile, ontology: SkillOntology) -> dict[str, int]:
+    """How many profile facts evidence each skill, keyed by display-canonical name.
+
+    A fact evidences a skill when the skill's own words appear in the fact's text or its
+    tech list. Used only to order the main group (most-evidenced first).
+    """
+    counts: dict[str, int] = {}
+    fact_tokens: list[set[str]] = []
+    for fact in build_facts(profile).values():
+        fact_tokens.append(set(_tokenize(fact.text)) | set(_tokenize(" ".join(fact.tech))))
+    for name in _all_skill_names(profile, ontology):
+        key = _skill_canonical(name)
+        tokens = set(_tokenize(_skill_alias(name)))
+        if not tokens:
+            continue
+        counts[key] = sum(1 for tokens_in_fact in fact_tokens if tokens & tokens_in_fact)
+    return counts
+
+
+def _is_hosting_observability(name: str) -> bool:
+    """Whether a skill is a hosting/observability tool rather than an engineering skill."""
+    return _skill_canonical(name) in _HOSTING_OBSERVABILITY
+
+
+def classify_skills(
+    profile: CandidateProfile, parsed_jd: ParsedJD, ontology: SkillOntology
+) -> tuple[list[str], list[str], list[str]]:
+    """Return ``(skills, familiar, additional_tools)``:
+
+    ``skills`` (main group) holds at most :data:`MAX_MAIN_SKILLS` names: JD-matching
+    evidenced skills first, then the other evidenced skills by how many profile facts
+    cite them. A skill is main-eligible when it is confirmed, or evidenced in a
+    project/internship/work **tech list**, or evidenced with a non-familiar proficiency;
+    otherwise it is "familiar". Alias spellings collapse to one entry. Hosting and
+    observability tools go to ``additional_tools`` unless the JD names them; any main
+    skill past the cap overflows there too. ``additional_tools`` is shown on the review
+    page only and is not exported unless the owner selects it.
     """
     jd_canonical = _jd_canonical(parsed_jd, ontology)
     index = _evidence_index(profile, ontology)
@@ -993,40 +1216,61 @@ def build_skills(
                 key = _SYNONYMS.get(value, value)
                 if key and key not in tech_index:
                     tech_index[key] = fact.id
+
+    fact_counts = _skill_fact_counts(profile, ontology)
     matching: list[str] = []
     others: list[str] = []
     familiar: list[str] = []
+    additional: list[str] = []
     seen: set[str] = set()
 
-    def place(name: str, canonical: str) -> None:
-        if canonical in jd_canonical:
+    def place(name: str) -> None:
+        key = _skill_canonical(name)
+        if key in seen:
+            return
+        seen.add(key)
+        if _is_hosting_observability(name) and not _jd_names_skill(name, jd_canonical):
+            additional.append(name)
+        elif key in jd_canonical:
             matching.append(name)
         else:
             others.append(name)
 
     for skill in profile.skills:
-        canonical = _canonical(skill.name or skill.canonical_name, ontology)
-        if canonical in seen:
+        name = strip_proficiency(skill.name or skill.canonical_name)
+        if _skill_canonical(name) in seen:
             continue
-        seen.add(canonical)
-        name = strip_proficiency(skill.name)
         evidenced = bool(_skill_evidence_fact(skill, index, ontology))
         tech_evidenced = bool(_skill_evidence_fact(skill, tech_index, ontology))
-        if skill.confirmed or tech_evidenced:
-            place(name, canonical)
-        elif skill.proficiency == Proficiency.familiar or not evidenced:
-            familiar.append(name)
+        if (
+            skill.confirmed
+            or tech_evidenced
+            or (evidenced and skill.proficiency != Proficiency.familiar)
+        ):
+            place(name)
         else:
-            place(name, canonical)
+            seen.add(_skill_canonical(name))
+            familiar.append(name)
 
     for name in _tech_skill_names(profile, ontology):
-        canonical = _canonical(name, ontology)
-        if canonical in seen:
-            continue
-        seen.add(canonical)
-        place(name, canonical)
+        place(name)
 
-    return matching + others, familiar
+    others.sort(key=lambda name: fact_counts.get(_skill_canonical(name), 0), reverse=True)
+    ordered = [*matching, *others]
+    main = ordered[:MAX_MAIN_SKILLS]
+    overflow = ordered[MAX_MAIN_SKILLS:]
+    for name in overflow:
+        if _skill_canonical(name) not in {_skill_canonical(item) for item in additional}:
+            additional.append(name)
+    return main, familiar, additional
+
+
+def build_skills(
+    profile: CandidateProfile, parsed_jd: ParsedJD, ontology: SkillOntology
+) -> tuple[list[str], list[str]]:
+    """``(skills, familiar)`` from :func:`classify_skills` (the main and familiar groups)."""
+    main, familiar, _additional = classify_skills(profile, parsed_jd, ontology)
+    return main, familiar
 
 
 # --------------------------------------------------------------------------- #
@@ -1188,7 +1432,7 @@ class _Grounder:
         tech = [t for fid in raw_ids for t in self.facts[fid].tech]
         allowed = set(_tokenize(cited_text))
         tech_tokens = set(_tokenize(" ".join(tech)))
-        if is_bullet and not _starts_with_action_verb(text):
+        if is_bullet and line.source != PROFILE_VERBATIM and not _starts_with_action_verb(text):
             return False, "bullet does not start with an action verb"
         flagged = _ungrounded(text, allowed, tech_tokens, self.ontology)
         if flagged:
@@ -1214,7 +1458,11 @@ class _Grounder:
 
 
 def resume_blocks(resume: TailoredResume) -> list[ResumeBlock]:
-    """Flatten a resume into the text blocks an ATS would read."""
+    """Flatten a resume into the text blocks an ATS would read.
+
+    ``additional_tools`` is deliberately absent: those skills are shown on the review
+    page and only exported when the owner selects them.
+    """
     blocks: list[ResumeBlock] = [ResumeBlock(kind=ResumeBlockKind.heading, text="Summary")]
     blocks += [
         ResumeBlock(kind=ResumeBlockKind.paragraph, text=line.text) for line in resume.summary
@@ -1488,10 +1736,14 @@ def _keep_lines(
     for line in lines:
         keep, reason = grounder.keep_line(line, is_bullet=is_bullet)
         if keep:
-            kept.append(ResumeLine(text=line.text.strip(), facts=list(line.facts)))
+            kept.append(
+                ResumeLine(text=line.text.strip(), facts=list(line.facts), source=line.source)
+            )
         else:
             logger.warning("tailored-resume %s dropped: %s", label, reason)
-            dropped.append(DroppedLine(text=(line.text or "").strip(), reason=reason))
+            dropped.append(
+                DroppedLine(text=(line.text or "").strip(), reason=reason, section=label)
+            )
     return kept
 
 
@@ -1552,20 +1804,13 @@ def _assemble(
     ontology: SkillOntology,
 ) -> TailoredResume:
     grounder = _Grounder(profile=profile, parsed_jd=parsed_jd, ontology=ontology)
-    skills, familiar = build_skills(profile, parsed_jd, ontology)
+    skills, familiar, additional = classify_skills(profile, parsed_jd, ontology)
     skill_facts = skill_evidence_facts(profile, ontology)
     grounder.seed_skill_keywords([*skills, *familiar])
 
     dropped: list[DroppedLine] = []
     code_line = _code_summary(profile, skills)
     grounder.counts.update(_keyword_counts(code_line.text, grounder.jd_tokens))
-    model_summary = _keep_lines(
-        draft.summary, grounder, "summary", is_bullet=False, dropped=dropped
-    )
-    model_summary = [
-        line for line in model_summary if not _cites_only_projects(line, grounder.facts)
-    ]
-    summary = [code_line, *model_summary[: SUMMARY_MAX - 1]]
 
     profile_experience = [*profile.internships, *profile.work]
     experience: list[ExperienceEntry] = []
@@ -1576,6 +1821,7 @@ def _assemble(
                 role=entry.role,
                 company=entry.company,
                 duration_months=entry.duration_months,
+                dates=format_dates(entry.dates),
                 bullets=_keep_lines(
                     bullets,
                     grounder,
@@ -1603,23 +1849,31 @@ def _assemble(
             )
         )
 
+    # The summary's second sentence is kept only when it does not just repeat a bullet.
+    bullet_texts = [b.text for entry in experience for b in entry.bullets]
+    bullet_texts += [b.text for project in projects for b in project.bullets]
+    model_summary = _keep_lines(
+        draft.summary, grounder, "summary", is_bullet=False, dropped=dropped
+    )
+    model_summary = [
+        line
+        for line in model_summary
+        if not _cites_only_projects(line, grounder.facts)
+        and _overlap_ratio(line.text, bullet_texts) < SUMMARY_OVERLAP_MAX
+    ]
+    summary = [code_line, *model_summary[: SUMMARY_MAX - 1]]
+
     requirements = _classify_requirements(
         profile, parsed_jd, ontology, grounder.facts, draft.requirements
     )
     missing = [item.requirement for item in requirements if item.status == "missing"]
-
-    warnings: list[str] = []
-    internship_bullets = sum(
-        len(experience[index].bullets) for index in range(len(profile.internships))
-    )
-    if profile.internships and internship_bullets < 2:
-        warnings.append("internship section thin: add detail on the Profile page")
 
     resume = TailoredResume(
         header=ResumeHeader(name=profile.full_name, email=profile.email, links=profile.links),
         summary=summary,
         skills=skills,
         familiar_skills=familiar,
+        additional_tools=additional,
         skill_facts=skill_facts,
         experience=experience,
         projects=projects,
@@ -1628,7 +1882,6 @@ def _assemble(
         requirements=requirements,
         missing_requirements=missing,
         dropped=dropped,
-        warnings=warnings,
         prompt_version=version,
         model=model,
     )
@@ -1655,83 +1908,198 @@ def _refusal(
     )
 
 
-def _thin_sections(
-    resume: TailoredResume, profile: CandidateProfile
-) -> tuple[list[int], list[int]]:
-    """Experience indices (internships) and project indices left too thin after validation.
+def _internship_indices(profile: CandidateProfile) -> list[int]:
+    """The ``experience`` indices that hold internships (they come before work entries)."""
+    return list(range(len(profile.internships)))
 
-    The internship section is thin when it has fewer than ``MIN_INTERNSHIP_BULLETS``
-    grounded bullets in total; a project is thin when it has no bullets at all.
-    """
-    internship_indices = list(range(len(profile.internships)))
-    internship_bullets = sum(
+
+def _internship_bullet_count(resume: TailoredResume, profile: CandidateProfile) -> int:
+    return sum(
         len(resume.experience[index].bullets)
-        for index in internship_indices
+        for index in _internship_indices(profile)
         if index < len(resume.experience)
     )
-    thin_experience = (
-        internship_indices
-        if profile.internships and internship_bullets < MIN_INTERNSHIP_BULLETS
-        else []
+
+
+def _internship_is_thin(resume: TailoredResume, profile: CandidateProfile) -> bool:
+    """The internship section is thin when it has fewer than the minimum grounded bullets."""
+    return (
+        bool(profile.internships)
+        and _internship_bullet_count(resume, profile) < MIN_INTERNSHIP_BULLETS
     )
-    thin_projects = [index for index, project in enumerate(resume.projects) if not project.bullets]
-    return thin_experience, thin_projects
 
 
-def _repair_user(
+def _empty_project_indices(resume: TailoredResume) -> list[int]:
+    return [index for index, project in enumerate(resume.projects) if not project.bullets]
+
+
+def _project_fact_ids(index: int, facts: dict[str, Fact]) -> list[str]:
+    prefix = f"P{index + 1}."
+    return [fact_id for fact_id in facts if fact_id.startswith(prefix)]
+
+
+def _internship_fact_ids(profile: CandidateProfile, facts: dict[str, Fact]) -> list[str]:
+    ids: list[str] = []
+    for index in _internship_indices(profile):
+        prefix = f"I{index + 1}."
+        ids.extend(fact_id for fact_id in facts if fact_id.startswith(prefix))
+    return ids
+
+
+def _drop_lines_for(resume: TailoredResume, sections: set[str]) -> list[str]:
+    return [f"- {line.text}: {line.reason}" for line in resume.dropped if line.section in sections]
+
+
+def _project_repair_user(
     base_user: str,
-    thin_experience: list[int],
-    thin_projects: list[int],
+    index: int,
+    profile: CandidateProfile,
     resume: TailoredResume,
+    facts: dict[str, Fact],
 ) -> str:
-    """The single repair prompt: ask only for grounded replacements for thin sections."""
-    labels: list[str] = []
-    if thin_experience:
-        labels.append("the internship experience section")
-    if thin_projects:
-        labels.append("project " + ", ".join(str(index + 1) for index in thin_projects))
-    dropped = [f"- {line.text}: {line.reason}" for line in resume.dropped]
-    fixed = "the internship (one bullet per fact sentence, three or more in total)"
-    parts = [
-        base_user,
-        "",
-        "## Repair pass",
-        "A previous draft left these sections with too few grounded bullets: "
-        + "; ".join(labels)
-        + ".",
-        "Rewrite ONLY those sections. Everywhere else, return an empty list.",
-        "Lines that already failed validation (do not repeat their mistakes):",
-        *(dropped or ["- (none)"]),
-        f"Focus on {fixed}.",
-        (
-            'Return ONLY the "experience" and "projects" keys, each an array in the SAME '
-            "order as the candidate facts (fill only the thin sections; empty bullets elsewhere)."
-        ),
-        (
-            "Consider EVERY internship sentence for a bullet; condense or reword only, add "
-            "nothing. Cite sentence ids like [I1.s2] or [P2.outcomes.s1]."
-        ),
-    ]
-    return "\n".join(parts)
+    """A repair prompt for one empty project: names it, lists its sentence ids and drops."""
+    project = profile.projects[index]
+    title = project.title or f"project {index + 1}"
+    sentence_ids = _project_fact_ids(index, facts)
+    drops = _drop_lines_for(resume, {f"projects[{index}]"})
+    return "\n".join(
+        [
+            base_user,
+            "",
+            "## Repair pass (one project)",
+            f"Project {index + 1} ({title!r}) ended with no grounded bullets.",
+            "Its citable sentence ids are: " + (", ".join(sentence_ids) or "(none)") + ".",
+            "Lines that already failed validation for this project (do not repeat them):",
+            *(drops or ["- (none)"]),
+            (
+                "Write 1-3 grounded bullets for THIS project only, condensing or rewording its "
+                "own sentences and adding nothing. Avoid any line listed above."
+            ),
+            (
+                'Return ONLY the "projects" key: a single-element array whose one entry holds '
+                "the bullets. Leave it empty if you cannot ground a bullet. Cite sentence ids "
+                f"such as [{sentence_ids[0] if sentence_ids else 'P' + str(index + 1) + '.summary.s1'}]."
+            ),
+        ]
+    )
 
 
-def _merge_repair(
-    draft: ResumeDraft,
-    repair: ResumeRepair,
-    thin_experience: list[int],
-    thin_projects: list[int],
-) -> None:
-    """Copy repaired bullets into the draft for the thin sections only."""
-    while len(draft.experience) <= max(thin_experience, default=-1):
-        draft.experience.append(DraftEntry())
-    while len(draft.projects) <= max(thin_projects, default=-1):
+def _internship_repair_user(
+    base_user: str,
+    profile: CandidateProfile,
+    resume: TailoredResume,
+    facts: dict[str, Fact],
+) -> str:
+    """A repair prompt for the thin internship section: names it, lists ids and drops."""
+    names = [f"{entry.role or '?'} @ {entry.company or '?'}" for entry in profile.internships]
+    sentence_ids = _internship_fact_ids(profile, facts)
+    sections = {f"experience[{index}]" for index in _internship_indices(profile)}
+    drops = _drop_lines_for(resume, sections)
+    return "\n".join(
+        [
+            base_user,
+            "",
+            "## Repair pass (internship)",
+            "The internship section ("
+            + "; ".join(names)
+            + ") has fewer than "
+            + str(MIN_INTERNSHIP_BULLETS)
+            + " grounded bullets.",
+            "Its citable sentence ids are: " + (", ".join(sentence_ids) or "(none)") + ".",
+            "Lines that already failed validation for these entries (do not repeat them):",
+            *(drops or ["- (none)"]),
+            (
+                "Write one grounded bullet per internship sentence until there are at least "
+                f"{MIN_INTERNSHIP_BULLETS} in total; condense or reword only, add nothing."
+            ),
+            (
+                'Return ONLY the "experience" key, an array in the SAME order as the candidate '
+                "facts: fill the internship entries, leave every other entry's bullets empty."
+            ),
+        ]
+    )
+
+
+def _merge_project_repair(draft: ResumeDraft, index: int, repair: ResumeRepair) -> None:
+    """Copy a repaired project's bullets into the draft (accept a single-entry reply too)."""
+    while len(draft.projects) <= index:
         draft.projects.append(DraftEntry())
-    for index in thin_experience:
+    entry = repair.projects[index] if index < len(repair.projects) else None
+    if entry is None or not entry.bullets:
+        entry = repair.projects[0] if repair.projects else None
+    if entry is not None and entry.bullets:
+        draft.projects[index] = entry
+
+
+def _merge_internship_repair(
+    draft: ResumeDraft, profile: CandidateProfile, repair: ResumeRepair
+) -> None:
+    """Copy repaired internship bullets into the draft, aligned to the experience order."""
+    indices = _internship_indices(profile)
+    while len(draft.experience) <= max(indices, default=-1):
+        draft.experience.append(DraftEntry())
+    for index in indices:
         if index < len(repair.experience) and repair.experience[index].bullets:
             draft.experience[index] = repair.experience[index]
-    for index in thin_projects:
-        if index < len(repair.projects) and repair.projects[index].bullets:
-            draft.projects[index] = repair.projects[index]
+
+
+def _verbatim_line(fact_id: str, facts: dict[str, Fact]) -> ResumeLine | None:
+    fact = facts.get(fact_id)
+    if fact is None or not fact.text.strip():
+        return None
+    return ResumeLine(text=fact.text, facts=[fact_id], source=PROFILE_VERBATIM)
+
+
+def _project_verbatim_line(index: int, facts: dict[str, Fact]) -> ResumeLine | None:
+    """The project's own summary (preferred) or outcome sentence, taken verbatim."""
+    key = f"P{index + 1}"
+    for prefix in (f"{key}.summary.s", f"{key}.outcomes.s"):
+        ids = sorted(
+            (fact_id for fact_id in facts if fact_id.startswith(prefix)),
+            key=lambda fact_id: int(fact_id.rsplit(".s", 1)[1]),
+        )
+        for fact_id in ids:
+            line = _verbatim_line(fact_id, facts)
+            if line is not None:
+                return line
+    return None
+
+
+def _fill_internship_verbatim(
+    resume: TailoredResume, profile: CandidateProfile, facts: dict[str, Fact]
+) -> list[str]:
+    """Top the internship section up to the minimum with verbatim profile sentences."""
+    notes: list[str] = []
+    indices = _internship_indices(profile)
+    used = {
+        fact_id
+        for index in indices
+        if index < len(resume.experience)
+        for bullet in resume.experience[index].bullets
+        for fact_id in bullet.facts
+    }
+    for index in indices:
+        if index >= len(resume.experience):
+            continue
+        entry = profile.internships[index]
+        for position, sentence in enumerate(
+            _split_sentences(" ".join(entry.description or [])), start=1
+        ):
+            if _internship_bullet_count(resume, profile) >= MIN_INTERNSHIP_BULLETS:
+                return notes
+            fact_id = f"I{index + 1}.s{position}"
+            if fact_id in used or fact_id not in facts:
+                continue
+            line = _verbatim_line(fact_id, facts)
+            if line is None:
+                continue
+            resume.experience[index].bullets.append(line)
+            used.add(fact_id)
+            notes.append(
+                f"internship '{entry.role or '?'} @ {entry.company or '?'}': fewer than "
+                f"{MIN_INTERNSHIP_BULLETS} grounded bullets; used a profile-verbatim sentence"
+            )
+    return notes
 
 
 def generate_tailored_resume(
@@ -1743,7 +2111,14 @@ def generate_tailored_resume(
     settings: Settings | None = None,
     ontology: SkillOntology | None = None,
 ) -> TailoredResume:
-    """Draft and validate a tailored resume for ``job`` from ``profile``."""
+    """Draft and validate a tailored resume for ``job`` from ``profile``.
+
+    Every LLM call (the draft retries and the per-section repairs) draws from the single
+    :data:`MAX_RESUME_CALLS` budget, so cost is bounded. A project left empty by the
+    model gets one repair call of its own (up to :data:`MAX_SECTION_REPAIR_ATTEMPTS`
+    attempts), and the internship section likewise when it is thin; anything still
+    missing falls back in code to a verbatim profile sentence and is warned about.
+    """
     settings = settings or get_settings()
     ontology = ontology or get_ontology()
     system_prompt, version = load_prompt("tailored_resume")
@@ -1755,17 +2130,23 @@ def generate_tailored_resume(
         return _refusal(profile, version, model, gaps)
 
     base_user = build_user_prompt(profile, job, parsed_jd)
+    facts = build_facts(profile)
     logger.info("Tailored resume: drafting for '%s' @ '%s'", job.title, job.company)
+    calls = 0
     draft: ResumeDraft | None = None
     errors: list[str] = []
     for attempt in range(MAX_RESUME_RETRIES + 1):
+        if calls >= MAX_RESUME_CALLS:
+            break
         user = base_user if attempt == 0 else f"{base_user}\n\n{_retry_message(errors)}"
         draft = client.call_json(
             schema=ResumeDraft,
             system=system_prompt,
             user=user,
             model=model,
+            temperature=0.0,
         )
+        calls += 1
         errors = _draft_errors(draft)
         if not errors:
             break
@@ -1775,31 +2156,10 @@ def generate_tailored_resume(
             MAX_RESUME_RETRIES + 1,
             errors,
         )
+    draft = cast(ResumeDraft, draft if draft is not None else ResumeDraft())
 
-    draft = cast(ResumeDraft, draft)
-    resume = _assemble(
-        draft,
-        profile=profile,
-        parsed_jd=parsed_jd,
-        version=version,
-        model=model,
-        ontology=ontology,
-    )
-    thin_experience, thin_projects = _thin_sections(resume, profile)
-    if thin_experience or thin_projects:
-        logger.info(
-            "tailored-resume repair pass: %s thin experience entry/entries, %s empty project(s)",
-            len(thin_experience),
-            len(thin_projects),
-        )
-        repair = client.call_json(
-            schema=ResumeRepair,
-            system=system_prompt,
-            user=_repair_user(base_user, thin_experience, thin_projects, resume),
-            model=model,
-        )
-        _merge_repair(draft, cast(ResumeRepair, repair), thin_experience, thin_projects)
-        resume = _assemble(
+    def assemble() -> TailoredResume:
+        return _assemble(
             draft,
             profile=profile,
             parsed_jd=parsed_jd,
@@ -1807,7 +2167,77 @@ def generate_tailored_resume(
             model=model,
             ontology=ontology,
         )
+
+    resume = assemble()
+
+    # One repair call per empty project, then the internship section if it is thin,
+    # all within the single per-resume call budget.
+    for index in _empty_project_indices(resume):
+        for _attempt in range(MAX_SECTION_REPAIR_ATTEMPTS):
+            if calls >= MAX_RESUME_CALLS:
+                break
+            logger.info("tailored-resume repair: empty project %s", index + 1)
+            repair = client.call_json(
+                schema=ResumeRepair,
+                system=system_prompt,
+                user=_project_repair_user(base_user, index, profile, resume, facts),
+                model=model,
+                temperature=0.0,
+            )
+            calls += 1
+            _merge_project_repair(draft, index, cast(ResumeRepair, repair))
+            resume = assemble()
+            if resume.projects[index].bullets:
+                break
+
+    for _attempt in range(MAX_SECTION_REPAIR_ATTEMPTS):
+        if calls >= MAX_RESUME_CALLS or not _internship_is_thin(resume, profile):
+            break
+        logger.info("tailored-resume repair: thin internship section")
+        repair = client.call_json(
+            schema=ResumeRepair,
+            system=system_prompt,
+            user=_internship_repair_user(base_user, profile, resume, facts),
+            model=model,
+            temperature=0.0,
+        )
+        calls += 1
+        _merge_internship_repair(draft, profile, cast(ResumeRepair, repair))
+        resume = assemble()
+
+    # Code fallback: a still-empty project gets its own summary/outcome sentence, and a
+    # still-thin internship gets its own description sentences, both verbatim.
+    fallback_notes: list[str] = []
+    for index, project in enumerate(resume.projects):
+        if project.bullets:
+            continue
+        line = _project_verbatim_line(index, facts)
+        if line is not None:
+            project.bullets = [line]
+            fallback_notes.append(
+                f"project '{project.title or index + 1}': no grounded bullets; used a "
+                "profile-verbatim sentence"
+            )
+    if _internship_is_thin(resume, profile):
+        fallback_notes.extend(_fill_internship_verbatim(resume, profile, facts))
+
+    resume.warnings = _resume_warnings(resume, profile, fallback_notes)
+    resume.ats = ats_lint(resume)
     return resume
+
+
+def _resume_warnings(
+    resume: TailoredResume, profile: CandidateProfile, fallback_notes: list[str]
+) -> list[str]:
+    """Owner-facing warnings: any thin/empty section and every verbatim fallback used."""
+    warnings: list[str] = []
+    if _internship_is_thin(resume, profile):
+        warnings.append("internship section thin: add detail on the Profile page")
+    for index, project in enumerate(resume.projects):
+        if not project.bullets:
+            warnings.append(f"project '{project.title or index + 1}' has no grounded bullets")
+    warnings.extend(fallback_notes)
+    return warnings
 
 
 def generate_tailored_resume_under_caps(
@@ -1818,6 +2248,7 @@ def generate_tailored_resume_under_caps(
     job: Job,
     parsed_jd: ParsedJD,
     settings: Settings | None = None,
+    ontology: SkillOntology | None = None,
 ) -> TailoredResume:
     """Generate a tailored resume under the per-run caps and daily-limit guard.
 
@@ -1839,9 +2270,84 @@ def generate_tailored_resume_under_caps(
     )
     try:
         return generate_tailored_resume(
-            budgeted, profile=profile, job=job, parsed_jd=parsed_jd, settings=settings
+            budgeted,
+            profile=profile,
+            job=job,
+            parsed_jd=parsed_jd,
+            settings=settings,
+            ontology=ontology,
         )
     finally:
         delta = int(getattr(budgeted, "tokens_used", 0) or 0) - start_tokens
         if delta > 0:
             add_llm_tokens(conn, delta)
+
+
+@dataclass
+class ResumeGeneration:
+    """One on-demand tailored-resume build and what it cost."""
+
+    resume: TailoredResume
+    tokens: int
+    calls: int
+    cached: bool
+
+
+def profile_hash(profile: CandidateProfile) -> str:
+    """A stable hash of the profile, so a repeat build can be recognised."""
+    return hashlib.sha256(profile.model_dump_json().encode("utf-8")).hexdigest()
+
+
+def generate_tailored_resume_cached(
+    conn: Any,
+    client: LLMClient,
+    *,
+    profile: CandidateProfile,
+    job: Job,
+    job_id: int,
+    parsed_jd: ParsedJD,
+    settings: Settings | None = None,
+    ontology: SkillOntology | None = None,
+) -> ResumeGeneration:
+    """Build on demand, caching by ``(profile hash, job id, prompt version)``.
+
+    A repeat build for the same profile, job and prompt version returns the stored
+    resume with **zero** LLM calls; otherwise it generates under the caps, stores the
+    result and reports the tokens/calls spent. Never called from a bulk run.
+    """
+    settings = settings or get_settings()
+    ontology = ontology or get_ontology()
+    _system, version = load_prompt("tailored_resume")
+    digest = profile_hash(profile)
+
+    cached = find_cached_tailored_resume(conn, job_id, digest, version)
+    if cached is not None:
+        return ResumeGeneration(
+            resume=TailoredResume.model_validate_json(cached["content_json"]),
+            tokens=0,
+            calls=0,
+            cached=True,
+        )
+
+    start_tokens = int(getattr(client, "tokens_used", 0) or 0)
+    start_calls = int(getattr(client, "calls", 0) or 0)
+    resume = generate_tailored_resume_under_caps(
+        conn,
+        client,
+        profile=profile,
+        job=job,
+        parsed_jd=parsed_jd,
+        settings=settings,
+        ontology=ontology,
+    )
+    tokens = int(getattr(client, "tokens_used", 0) or 0) - start_tokens
+    calls = int(getattr(client, "calls", 0) or 0) - start_calls
+    save_tailored_resume(
+        conn,
+        job_id,
+        content_json=resume.model_dump_json(),
+        model=resume.model,
+        prompt_version=version,
+        profile_hash=digest,
+    )
+    return ResumeGeneration(resume=resume, tokens=tokens, calls=calls, cached=False)

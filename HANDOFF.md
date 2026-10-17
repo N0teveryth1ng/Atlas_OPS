@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-17)
 
-- Code state as of PR #42, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #42** (base `8abeaa1`).
-- Tests: **1192 passed** (`python -m pytest -q`).
+- Code state as of PR #44, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #44** (base `8abeaa1`).
+- Tests: **1208 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #42
+## Merged PRs #24 to #44
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -51,6 +51,8 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #40 | `dc648aa` | 2026-10-17T04:57:22Z | prC1c/grounding-claim-strength | fix(resume): reject unsupported strength claims; ground only tech/number; ontology coverage; evidence-linked skills |
 | #41 | `e67a847` | 2026-10-17T05:27:38Z | prC1c/coverage-fact-choice | fix(resume): cite the tech fact that names the covered concept, not the entry title |
 | #42 | `462d198` | 2026-10-17T05:52:44Z | prC1e/audit-claim-coverage | fix(resume): stricter claim/coverage grounding; evidence concept skills from prose |
+| #43 | `6cb8caa` | 2026-10-17T06:10:11Z | prC1f/data-structure-nouns | fix(resume): cover 'data structures' only when a fact names a noun form |
+| #44 | `d5fce39` | 2026-10-17T07:36:13Z | prC1d/lexical-grounding-repair | fix(resume): ground bullets by sentence facts, repair thin sections, clean tech |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -100,21 +102,24 @@ kind, #23 non-job-listing filter.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
-## Tailored resume generator (PRs #37, #39, #40, #41, #42)
+## Tailored resume generator (PRs #37, #39, #40, #41, #42, #43, #44, + the empty-section/skills-cache fix)
 
-- `atlas/resume.py` + `prompts/tailored_resume.md` (version 3) turn the approved
+- `atlas/resume.py` + `prompts/tailored_resume.md` (version 4) turn the approved
   profile and one parsed job into a `TailoredResume`. **No UI yet** (PR C2 adds the
   job-page button, review page, approval and DOCX/PDF export); the generator is code
   only and nothing runs it automatically.
 - Grounding is by profile **fact ids**, not free-text quotes. `build_facts` numbers the
-  profile into citable facts (`[P1.summary]`, `[I1.description]`, `[W1.tech]`,
-  `[ED1.line]`, `[CERT]`, `[LINK]`); `render_profile_facts` shows them to the model.
+  profile into citable facts and splits every prose field into **sentence** facts
+  (`[P1.summary.s1]`, `[P1.outcomes.s2]`, `[I1.s2]`, `[W1.s1]`, `[W1.tech]`,
+  `[ED1.line]`, `[CERT]`, `[LINK]`), so a bullet cites the exact sentence it rests on and
+  cannot borrow unrelated detail (#44); `render_profile_facts` shows them to the model.
   Every summary sentence and bullet must cite at least one real id, and code maps each
   id back to its verbatim text.
 - The model may only rewrite the candidate's own material; code, not the prompt,
   enforces the hard rules:
   - a line is dropped when it is third-person/meta, when it carries hidden characters,
-    when a bullet does not start with an action verb, when it introduces a technology,
+    when a bullet does not start with an action verb (a code-supplied
+    `source="profile-verbatim"` fallback is exempt), when it introduces a technology,
     number or mid-sentence proper noun its cited facts lack, or when any JD keyword
     would exceed the global cap. Only technologies (skill ontology + proper nouns) and
     numbers need grounding; generic nouns (data, design, system, API/APIs, AI, service,
@@ -125,11 +130,17 @@ kind, #23 non-job-listing filter.
     `end-to-end`, `delivered`, ...) with a word the cited facts do not contain — a
     "Sole engineer" title does not license "led" or "owning" (#40, #41);
   - skills are **built in code, never by the model**, and are evidence-linked: a skill
-    is in the main group only when a project/internship/work tech list, a project
+    is main-eligible only when a project/internship/work tech list, a project
     summary/outcomes, or an internship/work description names it (or the owner set
-    `confirmed`), otherwise it moves to "Familiar with (confirm before use)";
-    JD-matching skills come first, and `TailoredResume.skill_facts` records the fact id
-    that evidences each main skill (#40, #41);
+    `confirmed`), otherwise it moves to "Familiar with (confirm before use)"; the main
+    group is capped at **14**, JD-matching skills come first, then the rest by how many
+    facts cite them, aliases collapse to one name (`JWT`/`JWT Auth`,
+    `PostgreSQL`/`PostgreSQL (Neon)`/`Neon`, `GitHub Actions`/`CI/CD (GitHub Actions)`/
+    `Git/GitHub`), and hosting/observability tools (`Render`, `Vercel`, `Braintrust`,
+    `Neon`) are held back unless the JD names them; the cap overflow and those tools go
+    to a separate `additional_tools` list shown on the review page and **not exported
+    unless selected**. `TailoredResume.skill_facts` records the fact id that evidences
+    each main skill (#40, #41);
   - requirements are classified by ontology/alias/family first (`REST API Design`
     covers `APIs`, `Idempotency`/`Circuit Breakers` cover design patterns,
     `PostgreSQL`/`Redis` cover storage, familiar `AWS`/`GCP` give `partial` cloud); a
@@ -138,25 +149,41 @@ kind, #23 non-job-listing filter.
     fact names a data structure or algorithm **as a noun** — a bare plural verb
     ("queues high-volume events"), a tech-stack phrase ("full stack") or a hyphenated
     `full-stack` does not count, but "a priority queue", "message queues" and "binary
-    search" do (#42); the 8-character verbatim-quote rule applies only to free-text
+    search" do (#42, #43); the 8-character verbatim-quote rule applies only to free-text
     claims, not skill/tech names, and the cited fact is the entry's `.tech` fact whose
     text names the concept (#40, #41);
+  - the second summary line is kept only when it overlaps **less than 60%** (Jaccard over
+    content words) with every bullet; otherwise it is dropped, so the summary never
+    just repeats a bullet (the first line is always built in code);
   - such requirements the profile lacks go to `missing_requirements` and are never added.
-- Every validated internship bullet is kept; a validated internship with fewer than 2
-  surviving bullets emits the warning
-  `internship section thin: add detail on the Profile page` (no padding).
+- Empty/thin sections are never left blank and never padded. After validation, every
+  project left with **no** bullets gets **one repair call of its own** (naming the
+  project, its sentence ids and its earlier drop reasons, up to 2 attempts); the
+  internship section likewise while it has fewer than 3 grounded bullets. Every LLM call
+  — the draft retries and these per-section repairs — draws from a single
+  **3-call-per-resume** budget. Anything still empty/thin falls back **in code** to that
+  section's own sentence(s) copied **verbatim** from the profile, marked
+  `source="profile-verbatim"` (exempt from the action-verb rule), and a warning is
+  emitted for every empty/thin section and every verbatim fallback used.
 - If the profile lacks internship/work/project/link detail the generator **refuses**
   (before any LLM call) and lists exactly what to add on the Profile page; it never pads.
 - Header, experience role/company/duration, project titles/tech, education and
   certifications are copied verbatim from the profile, so dates and employers cannot
-  change.
+  change. Dates are additionally rendered in **proper case** at output only
+  (`"2026-03-23 - 2026-06-30"` -> `"March 23, 2026 - June 30, 2026"`); the stored fact
+  keeps the owner's original string.
 - `ats_lint` checks the flattened blocks (`resume_blocks`): it fails on any table,
   image, text box, icon or header/footer content, on hidden characters, on empty text
   and on a missing standard heading (Summary/Skills/Experience/Projects/Education).
 - Storage: `tailored_resumes` table (`job_id`, `version`, `content_json`,
-  `prompt_version`, `model`, `created_at`, `approved_at`); `save_tailored_resume`
-  versions per job, `latest_tailored_resume`, `approve_tailored_resume` (idempotent),
+  `prompt_version`, `model`, `profile_hash`, `created_at`, `approved_at`);
+  `save_tailored_resume` versions per job, `latest_tailored_resume`,
+  `find_cached_tailored_resume`, `approve_tailored_resume` (idempotent),
   `approved_tailored_resume`. Only approved versions are meant to be exported (C2).
+- Determinism and cost: every resume LLM call uses `temperature 0`, and
+  `generate_tailored_resume_cached` caches by `(profile hash, job id, prompt version)`
+  so a repeat build returns the identical resume with **zero** LLM calls. Generation is
+  **on demand only** (never in a bulk run) and reports the tokens and calls it spent.
 - `generate_tailored_resume_under_caps` wraps the client in `_BudgetedClient` (per-run
   call/token caps), records tokens via `add_llm_tokens`, and lets
   `GroqDailyLimitReached` propagate. Profile/resume text never reaches Braintrust
@@ -303,7 +330,9 @@ Agreement"; the page's "Terms of Use" link points to
 Nothing below is implemented. Each needs the owner's go-ahead.
 
 - **(a) Tailored resume builder.** Generator BUILT (PR #37; fact-ID grounding #39;
-  claim-strength + coverage + evidence-linked skills #40; `atlas/resume.py`, no UI);
+  claim-strength + coverage + evidence-linked skills #40; sentence-level facts +
+  thin-section repair #44; empty-section guarantee, verbatim fallback, skills cap and
+  on-demand cache in the current fix; `atlas/resume.py`, no UI);
   profile editor BUILT (PR #38; `/profile` captures internships, work, projects,
   education, links, certifications). It rewrites and reorders content drawn only from
   the approved profile; every generated line traces back to a profile fact, and unmet
