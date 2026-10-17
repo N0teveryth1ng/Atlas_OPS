@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS tailored_resumes (
     content_json   TEXT NOT NULL,
     prompt_version TEXT,
     model          TEXT,
+    profile_hash   TEXT,
     created_at     TEXT NOT NULL,
     approved_at    TEXT
 );
@@ -235,6 +236,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     filter_cols = {row["name"] for row in conn.execute("PRAGMA table_info(filter_results)")}
     if "data_json" not in filter_cols:
         conn.execute("ALTER TABLE filter_results ADD COLUMN data_json TEXT")
+    resume_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tailored_resumes)")}
+    if resume_cols and "profile_hash" not in resume_cols:
+        conn.execute("ALTER TABLE tailored_resumes ADD COLUMN profile_hash TEXT")
 
 
 # --------------------------------------------------------------------------- #
@@ -427,12 +431,15 @@ def save_tailored_resume(
     content_json: str,
     model: str,
     prompt_version: str,
+    profile_hash: str = "",
 ) -> int:
     """Store one generated tailored resume for a job; return its new id.
 
     Versions are per job: the stored version is one more than the highest already
     stored for that job, so every build is kept and auditable. ``approved_at``
     starts NULL and is only set by :func:`approve_tailored_resume`.
+    ``profile_hash`` is the hash of the profile the resume was built from, used by
+    :func:`find_cached_tailored_resume` to answer a repeat build with no LLM calls.
     """
     row = conn.execute(
         "SELECT COALESCE(MAX(version), 0) AS v FROM tailored_resumes WHERE job_id = ?",
@@ -441,12 +448,36 @@ def save_tailored_resume(
     version = int(row["v"] if row is not None else 0) + 1
     cur = conn.execute(
         "INSERT INTO tailored_resumes "
-        "(job_id, version, content_json, prompt_version, model, created_at, approved_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, NULL)",
-        (job_id, version, content_json, prompt_version, model, _now()),
+        "(job_id, version, content_json, prompt_version, model, profile_hash, "
+        "created_at, approved_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+        (job_id, version, content_json, prompt_version, model, profile_hash, _now()),
     )
     conn.commit()
     return int(cur.lastrowid or 0)
+
+
+def find_cached_tailored_resume(
+    conn: sqlite3.Connection,
+    job_id: int,
+    profile_hash: str,
+    prompt_version: str,
+) -> dict[str, Any] | None:
+    """The most recent stored resume built from the same profile + prompt version.
+
+    A non-``None`` result means the exact ``(profile hash, job id, prompt version)``
+    key was already built, so the caller can return it with zero LLM calls.
+    """
+    if not profile_hash:
+        return None
+    row = conn.execute(
+        "SELECT id, job_id, version, content_json, prompt_version, model, "
+        "created_at, approved_at FROM tailored_resumes "
+        "WHERE job_id = ? AND profile_hash = ? AND prompt_version = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (job_id, profile_hash, prompt_version),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def latest_tailored_resume(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
