@@ -1477,6 +1477,13 @@ def test_format_dates_renders_proper_case_and_leaves_unknown_text():
     assert format_dates("") == ""
 
 
+def test_format_dates_upcases_free_text_month_names():
+    # Regression: a profile can store lowercase free-text dates; output must be proper case.
+    assert format_dates("march 23, 2026 - june 30, 2026") == "March 23, 2026 - June 30, 2026"
+    assert format_dates("september 1, 2025") == "September 1, 2025"
+    assert format_dates("jan 5 2024") == "January 5, 2024"
+
+
 def test_experience_dates_render_formatted_but_the_fact_stays_verbatim():
     profile = _profile()
     profile.work[0].dates = "2026-03-23 - 2026-06-30"

@@ -891,14 +891,18 @@ def _education_line(education: Any) -> str:
     return head
 
 
-#: A single date part: ISO ``2026-03-23``, year-month ``2026-03``, or ``Mar 2026``.
+#: A single date part: ISO ``2026-03-23``, year-month ``2026-03``, ``Mar 2026``,
+#: or a free-text ``march 23, 2026`` / ``june 2026`` (any case).
 _ISO_DATE_RE = re.compile(r"^(?P<year>\d{4})-(?P<month>\d{1,2})(?:-(?P<day>\d{1,2}))?$")
+_MONTH_DAY_YEAR_RE = re.compile(
+    r"^(?P<mon>[A-Za-z]{3,9})\.?\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})$"
+)
 _MONTH_DATE_RE = re.compile(r"^(?P<mon>[A-Za-z]{3,9})\.?\s+(?P<year>\d{4})$")
 _DATE_SPLIT_RE = re.compile(r"\s+(?:-|–|—|to)\s+", re.IGNORECASE)
 
 
 def _format_date_part(part: str) -> str:
-    """One date part in proper case ("2026-03-23" -> "March 23, 2026")."""
+    """One date part in proper case ("2026-03-23" or "march 23, 2026" -> "March 23, 2026")."""
     text = part.strip()
     iso = _ISO_DATE_RE.match(text)
     if iso:
@@ -907,6 +911,11 @@ def _format_date_part(part: str) -> str:
             if iso.group("day"):
                 return f"{_MONTHS[month]} {int(iso.group('day'))}, {iso.group('year')}"
             return f"{_MONTHS[month]} {iso.group('year')}"
+    day_year = _MONTH_DAY_YEAR_RE.match(text)
+    if day_year:
+        day_month = _MONTH_LOOKUP.get(day_year.group("mon")[:3].lower())
+        if day_month:
+            return f"{_MONTHS[day_month]} {int(day_year.group('day'))}, {day_year.group('year')}"
     named = _MONTH_DATE_RE.match(text)
     if named:
         named_month = _MONTH_LOOKUP.get(named.group("mon")[:3].lower())
