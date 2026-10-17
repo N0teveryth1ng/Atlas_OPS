@@ -563,6 +563,63 @@ def test_data_structures_is_covered_when_a_fact_names_one():
     assert item.facts == ["P1.outcomes"]
 
 
+def test_data_structures_is_not_covered_by_a_bare_plural_verb():
+    profile = _profile()
+    profile.projects[0].outcomes = "Queues high-volume events through Apache Kafka"
+    parsed = ParsedJD(
+        title="Backend engineer", must_have_skills=["data structures"], nice_to_have_skills=[]
+    )
+
+    resume = _generate(_payload(requirements=[]), profile=profile, parsed_jd=parsed)
+    coverage = {item.requirement: item.status for item in resume.requirements}
+
+    assert coverage["data structures"] == "missing"
+    assert "data structures" in resume.missing_requirements
+
+
+def test_data_structures_is_covered_by_a_plural_noun_with_a_premodifier():
+    profile = _profile()
+    profile.projects[0].outcomes = "Processed items through message queues and multiple stacks"
+    parsed = ParsedJD(
+        title="Backend engineer", must_have_skills=["data structures"], nice_to_have_skills=[]
+    )
+
+    resume = _generate(_payload(requirements=[]), profile=profile, parsed_jd=parsed)
+    item = next(i for i in resume.requirements if i.requirement == "data structures")
+
+    assert item.status == "covered"
+    assert item.facts == ["P1.outcomes"]
+
+
+def test_data_structures_is_not_covered_by_a_full_stack_phrase():
+    profile = _profile()
+    profile.work[0].role = "Full Stack Developer"
+    profile.projects[0].outcomes = "Built a full stack application"
+    parsed = ParsedJD(
+        title="Backend engineer", must_have_skills=["data structures"], nice_to_have_skills=[]
+    )
+
+    resume = _generate(_payload(requirements=[]), profile=profile, parsed_jd=parsed)
+    coverage = {item.requirement: item.status for item in resume.requirements}
+
+    assert coverage["data structures"] == "missing"
+    assert "data structures" in resume.missing_requirements
+
+
+def test_data_structures_is_covered_by_an_algorithm_phrase():
+    profile = _profile()
+    profile.projects[0].outcomes = "Applied dynamic programming and binary search for indexing"
+    parsed = ParsedJD(
+        title="Backend engineer", must_have_skills=["algorithms"], nice_to_have_skills=[]
+    )
+
+    resume = _generate(_payload(requirements=[]), profile=profile, parsed_jd=parsed)
+    item = next(i for i in resume.requirements if i.requirement == "algorithms")
+
+    assert item.status == "covered"
+    assert item.facts == ["P1.outcomes"]
+
+
 def test_system_design_patterns_is_not_satisfied_by_a_database_alone():
     profile = _profile()
     profile.skills = [
