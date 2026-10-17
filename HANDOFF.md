@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-17)
 
-- Code state as of PR #41, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #41** (base `8abeaa1`).
-- Tests: **1177 passed** (`python -m pytest -q`).
+- Code state as of PR #42, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #42** (base `8abeaa1`).
+- Tests: **1192 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #41
+## Merged PRs #24 to #42
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -50,6 +50,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #39 | `c6a6276` | 2026-10-17T04:11:02Z | prC1b/resume-fact-grounding | fix(resume): ground tailored-resume lines by profile fact ids; build skills in code |
 | #40 | `dc648aa` | 2026-10-17T04:57:22Z | prC1c/grounding-claim-strength | fix(resume): reject unsupported strength claims; ground only tech/number; ontology coverage; evidence-linked skills |
 | #41 | `e67a847` | 2026-10-17T05:27:38Z | prC1c/coverage-fact-choice | fix(resume): cite the tech fact that names the covered concept, not the entry title |
+| #42 | `462d198` | 2026-10-17T05:52:44Z | prC1e/audit-claim-coverage | fix(resume): stricter claim/coverage grounding; evidence concept skills from prose |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -99,7 +100,7 @@ kind, #23 non-job-listing filter.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
-## Tailored resume generator (PRs #37, #39, #40, #41)
+## Tailored resume generator (PRs #37, #39, #40, #41, #42)
 
 - `atlas/resume.py` + `prompts/tailored_resume.md` (version 3) turn the approved
   profile and one parsed job into a `TailoredResume`. **No UI yet** (PR C2 adds the
@@ -134,9 +135,12 @@ kind, #23 non-job-listing filter.
     `PostgreSQL`/`Redis` cover storage, familiar `AWS`/`GCP` give `partial` cloud); a
     requirement that has a concept family is judged *only* by that family and the
     model's judgement can never upgrade it, so `data structures` stays missing unless a
-    fact actually names a data structure or algorithm; the 8-character verbatim-quote
-    rule applies only to free-text claims, not skill/tech names, and the cited fact is
-    the entry's `.tech` fact whose text names the concept (#40, #41);
+    fact names a data structure or algorithm **as a noun** — a bare plural verb
+    ("queues high-volume events"), a tech-stack phrase ("full stack") or a hyphenated
+    `full-stack` does not count, but "a priority queue", "message queues" and "binary
+    search" do (#42); the 8-character verbatim-quote rule applies only to free-text
+    claims, not skill/tech names, and the cited fact is the entry's `.tech` fact whose
+    text names the concept (#40, #41);
   - such requirements the profile lacks go to `missing_requirements` and are never added.
 - Every validated internship bullet is kept; a validated internship with fewer than 2
   surviving bullets emits the warning

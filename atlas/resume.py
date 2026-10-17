@@ -142,21 +142,19 @@ _GENERIC_TERMS: frozenset[str] = frozenset(
 #: Synonyms applied on both sides of a grounding comparison.
 _SYNONYMS: dict[str, str] = {"ai": "llm", "api": "rest", "apis": "rest"}
 
-#: Data structures and algorithms a "data structures" requirement may lean on.
+#: Data structures and algorithms a "data structures" requirement may lean on. Only
+#: the noun forms are matched (see ``_data_structure_named``): a plural that is also a
+#: third-person verb ("queues them") does not count unless a premodifier makes it a
+#: noun ("message queues").
 _DATA_STRUCTURE_TERMS: tuple[str, ...] = (
     "array",
-    "arrays",
     "hashmap",
     "hashtable",
     "dictionary",
     "tree",
-    "trees",
     "graph",
-    "graphs",
     "queue",
-    "queues",
     "stack",
-    "stacks",
     "heap",
     "linkedlist",
     "trie",
@@ -165,15 +163,95 @@ _DATA_STRUCTURE_TERMS: tuple[str, ...] = (
     "recursion",
     "dynamicprogramming",
     "algorithm",
-    "algorithms",
 )
+
+_DATA_STRUCTURE_TERM_SET: frozenset[str] = frozenset(_DATA_STRUCTURE_TERMS)
+
+#: Words that, immediately before a plural data-structure noun, mark it as a noun
+#: rather than a verb ("message queues", "multiple stacks"). Relative/demonstrative
+#: pronouns are deliberately absent: "that queues ..." is a verb.
+_DS_NOUN_PREMODIFIERS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "its",
+        "our",
+        "my",
+        "their",
+        "his",
+        "her",
+        "multiple",
+        "several",
+        "two",
+        "three",
+        "four",
+        "five",
+        "both",
+        "all",
+        "no",
+        "any",
+        "some",
+        "priority",
+        "message",
+        "call",
+        "binary",
+        "linked",
+        "hash",
+        "double",
+        "circular",
+        "blocking",
+        "concurrent",
+        "distributed",
+        "task",
+        "job",
+        "work",
+        "event",
+        "data",
+    }
+)
+
+#: Singular (always a noun form) and plural (only after a premodifier) surface forms.
+_DS_SINGULAR_PLURAL: dict[str, tuple[str, str | None]] = {
+    "array": ("array", "arrays"),
+    "hashmap": ("hashmap", "hashmaps"),
+    "hashtable": ("hashtable", "hashtables"),
+    "dictionary": ("dictionary", "dictionaries"),
+    "tree": ("tree", "trees"),
+    "graph": ("graph", "graphs"),
+    "queue": ("queue", "queues"),
+    "stack": ("stack", "stacks"),
+    "heap": ("heap", "heaps"),
+    "trie": ("trie", "tries"),
+    "sorting": ("sorting", None),
+    "recursion": ("recursion", None),
+    "algorithm": ("algorithm", "algorithms"),
+}
+
+#: Words that turn a following ambiguous word into a tech-stack phrase rather than a
+#: data structure ("full stack", "front stack"), so its occurrence is ignored.
+_DS_TECH_STACK_MODIFIERS: frozenset[str] = frozenset(
+    {"full", "front", "back", "tech", "technology", "software", "web", "mean", "protocol"}
+)
+
+#: Multi-word data-structure phrases, matched as consecutive raw tokens.
+_DS_PHRASES: dict[str, tuple[str, ...]] = {
+    "binarysearch": ("binary", "search"),
+    "linkedlist": ("linked", "list"),
+    "dynamicprogramming": ("dynamic", "programming"),
+}
+
+#: Surface words, keeping hyphenated compounds together (``full-stack`` is one word,
+#: not a data-structure "stack").
+_RAW_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-\u2010\u2011][A-Za-z0-9]+)*")
 
 #: How a job requirement is covered by a profile concept family. Keys are
 #: key-normalised requirement wordings; values are words that must be *named* in a
 #: project/internship/work fact (its tech list or its summary/outcomes/description
 #: prose) to satisfy the requirement. A family is deliberately narrow: "PostgreSQL"
 #: satisfies "storage", not "system design patterns"; a caching/queue fact satisfies
-#: "data structures" only if it actually names a data structure or algorithm.
+#: "data structures" only if it names a data structure or algorithm *as a noun* (so the
+#: verb in "queues high-volume events" does not count, but "a priority queue" does).
 _REQUIREMENT_FAMILIES: dict[str, tuple[str, ...]] = {
     "api": ("fastapi", "flask", "django", "graphql", "rest"),
     "apis": ("fastapi", "flask", "django", "graphql", "rest"),
@@ -507,6 +585,45 @@ def _singular(token: str) -> str:
 def _tokenize(text: str) -> list[str]:
     """Split on non-alphanumerics (``Git/GitHub`` -> ``git``, ``github``) + singular."""
     return [_singular(m.group(0).lower()) for m in _TOKEN_RE.finditer(text or "")]
+
+
+def _raw_words(text: str) -> list[str]:
+    """Lowercased surface words, *not* singularised, for noun-form matching."""
+    return [m.group(0).lower() for m in _RAW_WORD_RE.finditer(text or "")]
+
+
+def _data_structure_named(text: str, term: str) -> bool:
+    """Whether ``text`` names the data structure ``term`` as a noun.
+
+    Singular forms always count (the owner accepts a bare "queue"). A plural that is
+    also a third-person verb ("queues them") counts only when the preceding word marks
+    it as a noun ("message queues"), so "queues high-volume events" does not count.
+    """
+    words = _raw_words(text)
+    phrase = _DS_PHRASES.get(term)
+    if phrase is not None:
+        span = len(phrase)
+        return any(tuple(words[i : i + span]) == phrase for i in range(len(words) - span + 1))
+    pair = _DS_SINGULAR_PLURAL.get(term)
+    if pair is None:
+        return False
+    singular, plural = pair
+    for index, word in enumerate(words):
+        previous = words[index - 1] if index > 0 else ""
+        if word == singular:
+            if previous in _DS_TECH_STACK_MODIFIERS:
+                continue
+            return True
+        if plural is not None and word == plural and previous in _DS_NOUN_PREMODIFIERS:
+            return True
+    return False
+
+
+def _fact_mentions(text: str, concept: str) -> bool:
+    """Whether a fact's text names ``concept``; data structures need a noun form."""
+    if concept in _DATA_STRUCTURE_TERM_SET:
+        return _data_structure_named(text, concept)
+    return concept in set(_tokenize(text))
 
 
 def _canonical(name: str, ontology: SkillOntology) -> str:
@@ -1015,13 +1132,13 @@ def _fact_for_concept(concept: str, facts: dict[str, Fact], ontology: SkillOntol
     tech_match: Fact | None = None
     for fact in facts.values():
         if any(_canonical(tech, ontology) == concept for tech in fact.tech):
-            if concept in set(_tokenize(fact.text)):
+            if _fact_mentions(fact.text, concept):
                 return fact
             tech_match = tech_match or fact
     if tech_match is not None:
         return tech_match
     for fact in facts.values():
-        if concept in set(_tokenize(fact.text)):
+        if _fact_mentions(fact.text, concept):
             return fact
     return None
 
