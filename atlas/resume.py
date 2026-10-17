@@ -1,30 +1,36 @@
-"""Grounded tailored-resume generator (Phase 8a, PR C1).
+"""Grounded tailored-resume generator (Phase 8a, PRs C1/C1b).
 
-Given the approved profile and one parsed job, draft a resume tailored to that
-job. The model only ever rewrites the candidate's own material:
+Given the approved profile and one parsed job, draft a resume tailored to that job.
+Grounding is by *fact IDs*, not free-text quotes:
 
-* every summary sentence and every bullet must carry a verbatim quote from the
-  profile (validated with the same normalisation the evidence validator uses),
-* a skill is kept only if the profile already has it (alias-aware, so the job's
-  "ReactJS" matches the profile's "React"),
-* a line that introduces a number, metric, date, technology or other proper noun
-  the profile does not contain is dropped,
-* job requirements the profile lacks go to a separate "missing requirements"
-  list and are NEVER added to the resume,
-* job keywords may appear at most once in Skills and at most once across bullets.
+* the profile is rendered to the model as numbered facts with stable ids
+  (``[P1.summary]``, ``[I1.description]``, ``[ED1.line]``, ...);
+* every summary sentence and bullet must cite one or more of those ids;
+* code maps each id back to its verbatim text and verifies that every technology,
+  proper noun and number in the line appears in the cited text (or that entry's tech
+  list), so a line cannot add a claim the cited facts do not contain;
+* skills are assembled in code, never by the model: JD-matching profile skills first,
+  then the other non-familiar skills, with "familiar" skills in a separate group;
+* a line is rejected when it is third-person / meta, when a bullet does not start
+  with an action verb, when it carries hidden characters, when it adds a JD term its
+  cited facts lack, or when any JD keyword would exceed the global cap;
+* job requirements are classified covered / partial / missing with the fact id and
+  quote that support them; only truly unsupported ones are missing.
 
-A failing line is dropped; the rest is kept. The structural sections (header,
-experience role/company/duration, project titles/tech, education, certifications)
-are copied verbatim from the profile, so dates and employers cannot change.
+A failing line is dropped (with its reason). Structural fields (header, role/company/
+duration, project titles/tech, education, certifications) are copied verbatim from the
+profile. If the profile lacks internship/work/project/link detail the generator
+refuses and lists exactly what to add on the Profile page, and never pads.
 
-Nothing here submits an application, fetches a URL, or sends profile/resume text
-to Braintrust: ``LLMClient.call_json`` traces only prompt fingerprints.
+Nothing here submits an application, fetches a URL, or sends profile/resume text to
+Braintrust: ``LLMClient.call_json`` traces only prompt fingerprints.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from enum import Enum
 from typing import Any, cast
 
@@ -32,12 +38,11 @@ from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
 from .db import add_llm_tokens
-from .evaluator import job_source_text
 from .evidence import quote_valid
 from .llm import LLMClient
 from .prompt_store import load_prompt
-from .render import render_job, render_parsed_jd, render_profile
-from .schemas import CandidateProfile, EvidenceSource, Job, Links, ParsedJD
+from .render import render_job, render_parsed_jd
+from .schemas import CandidateProfile, EvidenceSource, Job, ParsedJD, Proficiency
 from .skills import SkillOntology, get_ontology
 
 logger = logging.getLogger(__name__)
@@ -49,11 +54,164 @@ MAX_RESUME_RETRIES = 2
 #: A summary of more than this many sentences is trimmed to this many.
 SUMMARY_MAX = 3
 
+#: A job keyword may appear at most this many times across the whole resume; the
+#: Skills section counts once toward each keyword it lists.
+KEYWORD_MAX = 3
+
 #: Headings an ATS expects, in order. A clean layout has all of them.
 STANDARD_HEADINGS: tuple[str, ...] = ("Summary", "Skills", "Experience", "Projects", "Education")
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9+#./_-]*")
-_STRIP_CHARS = ".,;:!?()[]{}\"'"
+#: Heading for the second, lower-confidence skill group.
+FAMILIAR_HEADING = "Familiar with"
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+
+#: A trailing "(strong)"/"(working)"/"(familiar)" tag some profiles carry.
+_PROFICIENCY_SUFFIX_RE = re.compile(r"\s*\((?:strong|working|familiar)\)\s*$", re.IGNORECASE)
+
+#: Meta / third-person wording a resume bullet must never contain.
+_META_RE = re.compile(
+    r"\b(?:the\s+candidate|candidate|profile|resume|curriculum\s+vitae|"
+    r"as\s+indicated|as\s+shown|as\s+listed|as\s+noted|as\s+mentioned)\b",
+    re.IGNORECASE,
+)
+
+#: Zero-width and control characters that hide text from a human reader.
+_HIDDEN_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\x00-\x08\x0e-\x1f]")
+
+#: Common resume action verbs. A bullet must start with one of these (or a word that
+#: looks like a past/present participle, handled by :func:`_starts_with_action_verb`).
+_ACTION_VERBS = frozenset(
+    {
+        "analysed",
+        "analyze",
+        "analyzed",
+        "analyses",
+        "architected",
+        "architect",
+        "architects",
+        "automate",
+        "automated",
+        "automates",
+        "build",
+        "built",
+        "builds",
+        "coached",
+        "collaborate",
+        "collaborated",
+        "collaborates",
+        "configure",
+        "configured",
+        "configures",
+        "containerize",
+        "containerized",
+        "create",
+        "created",
+        "creates",
+        "debug",
+        "debugged",
+        "debugs",
+        "deliver",
+        "delivered",
+        "delivers",
+        "deploy",
+        "deployed",
+        "deploys",
+        "design",
+        "designed",
+        "designs",
+        "develop",
+        "developed",
+        "develops",
+        "document",
+        "documented",
+        "documents",
+        "drove",
+        "drive",
+        "drives",
+        "engineer",
+        "engineered",
+        "engineers",
+        "handle",
+        "handled",
+        "handles",
+        "implement",
+        "implemented",
+        "implements",
+        "improve",
+        "improved",
+        "improves",
+        "initiate",
+        "initiated",
+        "initiates",
+        "integrate",
+        "integrated",
+        "integrates",
+        "launch",
+        "launched",
+        "leads",
+        "lead",
+        "led",
+        "maintain",
+        "maintained",
+        "maintains",
+        "manage",
+        "managed",
+        "manages",
+        "mentor",
+        "mentored",
+        "mentors",
+        "migrate",
+        "migrated",
+        "migrates",
+        "optimise",
+        "optimised",
+        "optimize",
+        "optimized",
+        "orchestrate",
+        "orchestrated",
+        "paired",
+        "partner",
+        "partnered",
+        "present",
+        "presented",
+        "presents",
+        "provision",
+        "provisioned",
+        "publish",
+        "published",
+        "publishes",
+        "refactor",
+        "refactored",
+        "refactors",
+        "reduce",
+        "reduced",
+        "reduces",
+        "resolve",
+        "resolved",
+        "resolves",
+        "review",
+        "reviewed",
+        "reviews",
+        "scale",
+        "scaled",
+        "scales",
+        "ship",
+        "shipped",
+        "ships",
+        "spearhead",
+        "spearheaded",
+        "streamline",
+        "streamlined",
+        "streamlines",
+        "test",
+        "tested",
+        "tests",
+        "write",
+        "writes",
+        "wrote",
+    }
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -62,11 +220,10 @@ _STRIP_CHARS = ".,;:!?()[]{}\"'"
 
 
 class ResumeLine(BaseModel):
-    """One sentence/bullet with the verbatim profile quote it rests on."""
+    """One sentence/bullet plus the profile fact ids it rests on."""
 
     text: str
-    quote: str
-    source: EvidenceSource = EvidenceSource.profile
+    facts: list[str] = Field(default_factory=list)
 
 
 class DraftEntry(BaseModel):
@@ -75,19 +232,32 @@ class DraftEntry(BaseModel):
     bullets: list[ResumeLine] = Field(default_factory=list)
 
 
+class RequirementDraft(BaseModel):
+    """The model's coverage judgement for one job requirement."""
+
+    requirement: str = ""
+    status: str = "missing"
+    facts: list[str] = Field(default_factory=list)
+    quote: str = ""
+
+
 class ResumeDraft(BaseModel):
-    """Exactly what the model must return (lenient; code validates the rest)."""
+    """Exactly what the model must return (lenient; code validates the rest).
+
+    A stray ``skills`` key from an older prompt is ignored on purpose: skills are
+    assembled in code.
+    """
 
     summary: list[ResumeLine] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
     experience: list[DraftEntry] = Field(default_factory=list)
     projects: list[DraftEntry] = Field(default_factory=list)
+    requirements: list[RequirementDraft] = Field(default_factory=list)
 
 
 class ResumeHeader(BaseModel):
     name: str | None = None
     email: str | None = None
-    links: Links = Field(default_factory=Links)
+    links: Any = None
 
 
 class ExperienceEntry(BaseModel):
@@ -105,6 +275,22 @@ class ProjectEntry(BaseModel):
     title: str | None = None
     tech: list[str] = Field(default_factory=list)
     bullets: list[ResumeLine] = Field(default_factory=list)
+
+
+class RequirementCoverage(BaseModel):
+    """How the profile covers one job requirement."""
+
+    requirement: str
+    status: str = "missing"  # covered | partial | missing
+    facts: list[str] = Field(default_factory=list)
+    quote: str = ""
+
+
+class DroppedLine(BaseModel):
+    """A line the grounder rejected, kept for the owner-facing report."""
+
+    text: str
+    reason: str
 
 
 class ResumeBlockKind(str, Enum):
@@ -136,9 +322,6 @@ _FORBIDDEN_BLOCKS: dict[ResumeBlockKind, str] = {
     ResumeBlockKind.icon: "icon glyphs are not readable as text",
 }
 
-#: Zero-width and control characters that hide text from a human reader.
-_HIDDEN_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff\x00-\x08\x0e-\x1f]")
-
 
 class ATSReport(BaseModel):
     passed: bool = True
@@ -151,63 +334,234 @@ class TailoredResume(BaseModel):
     header: ResumeHeader = Field(default_factory=ResumeHeader)
     summary: list[ResumeLine] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
+    familiar_skills: list[str] = Field(default_factory=list)
     experience: list[ExperienceEntry] = Field(default_factory=list)
     projects: list[ProjectEntry] = Field(default_factory=list)
     education: list[dict[str, Any]] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
+    requirements: list[RequirementCoverage] = Field(default_factory=list)
     missing_requirements: list[str] = Field(default_factory=list)
+    dropped: list[DroppedLine] = Field(default_factory=list)
+    refused: bool = False
+    refusal_reason: str = ""
+    profile_gaps: list[str] = Field(default_factory=list)
     ats: ATSReport = Field(default_factory=ATSReport)
     prompt_version: str = ""
     model: str = ""
 
 
 # --------------------------------------------------------------------------- #
-# Source text
+# Token / skill helpers
 # --------------------------------------------------------------------------- #
 
 
-def resume_profile_text(profile: CandidateProfile) -> str:
-    """The profile text every resume line must quote from.
+def strip_proficiency(name: str) -> str:
+    """Drop a trailing "(strong)"/"(working)"/"(familiar)" tag from a skill name."""
+    return _PROFICIENCY_SUFFIX_RE.sub("", name or "").strip()
 
-    Extends :func:`render_profile` with education, certifications and links so a
-    line about them has a verbatim source. The evaluator/verifier keep using
-    ``render_profile`` unchanged.
-    """
-    lines = [render_profile(profile)]
-    if profile.education:
-        education = "; ".join(
-            f"{e.degree or '-'}, {e.field or '-'} @ {e.institution or '-'}"
-            + (f" (graduated {e.graduation_year})" if e.graduation_year is not None else "")
-            for e in profile.education
-        )
-        lines.append(f"Education: {education}")
-    if profile.certifications:
-        lines.append("Certifications: " + ", ".join(profile.certifications))
-    link_parts = []
-    for label in ("github", "linkedin", "portfolio"):
-        value = getattr(profile.links, label, None)
+
+def _singular(token: str) -> str:
+    """A crude singular form so "APIs" and "api" compare equal."""
+    if token.endswith("ies") and len(token) > 3:
+        return token[:-3] + "y"
+    if token.endswith("ss"):
+        return token
+    if token.endswith("s") and len(token) > 3:
+        return token[:-1]
+    return token
+
+
+def _tokenize(text: str) -> list[str]:
+    """Split on non-alphanumerics (``Git/GitHub`` -> ``git``, ``github``) + singular."""
+    return [_singular(m.group(0).lower()) for m in _TOKEN_RE.finditer(text or "")]
+
+
+def _canonical(name: str, ontology: SkillOntology) -> str:
+    """Alias-aware canonical key, ignoring any proficiency suffix."""
+    return ontology.canonicalize(strip_proficiency(name))
+
+
+def _profile_skill_keys(profile: CandidateProfile, ontology: SkillOntology) -> set[str]:
+    keys: set[str] = set()
+    for skill in profile.skills:
+        for value in (skill.name, skill.canonical_name):
+            keys.add(_canonical(value, ontology))
+    return keys
+
+
+def _jd_keyword_tokens(parsed_jd: ParsedJD, ontology: SkillOntology) -> set[str]:
+    tokens: set[str] = set()
+    for name in (*parsed_jd.must_have_skills, *parsed_jd.nice_to_have_skills):
+        for value in (name, _canonical(name, ontology)):
+            tokens.update(_tokenize(value))
+    return tokens
+
+
+def _jd_canonical(parsed_jd: ParsedJD, ontology: SkillOntology) -> set[str]:
+    return {
+        _canonical(name, ontology)
+        for name in (*parsed_jd.must_have_skills, *parsed_jd.nice_to_have_skills)
+    }
+
+
+def _dedup_requirements(parsed_jd: ParsedJD, ontology: SkillOntology) -> list[str]:
+    ordered = [*parsed_jd.must_have_skills, *parsed_jd.nice_to_have_skills]
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in ordered:
+        canonical = _canonical(name, ontology)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        out.append(name)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Profile facts
+# --------------------------------------------------------------------------- #
+
+
+class Fact(BaseModel):
+    """One citable profile fact with its stable id."""
+
+    id: str
+    text: str
+    entry: str
+    tech: list[str] = Field(default_factory=list)
+
+
+def _education_line(education: Any) -> str:
+    head = ", ".join(p for p in (education.degree, education.field) if p)
+    if education.institution:
+        head = f"{head} @ {education.institution}" if head else education.institution
+    if education.graduation_year is not None:
+        when = "expected" if getattr(education, "expected", False) else "graduated"
+        head += f" ({when} {education.graduation_year})"
+    return head
+
+
+def build_facts(profile: CandidateProfile) -> dict[str, Fact]:
+    """Numbered, citable facts from the profile (skills are deliberately excluded)."""
+    facts: dict[str, Fact] = {}
+
+    def add(fact_id: str, text: str | None, entry: str, tech: list[str]) -> None:
+        value = (text or "").strip()
         if value:
-            link_parts.append(f"{label}: {value}")
+            facts[fact_id] = Fact(id=fact_id, text=value, entry=entry, tech=list(tech))
+
+    for index, project in enumerate(profile.projects, start=1):
+        key = f"P{index}"
+        add(f"{key}.title", project.title, key, project.tech)
+        add(f"{key}.summary", project.summary, key, project.tech)
+        add(f"{key}.outcomes", project.outcomes, key, project.tech)
+        add(f"{key}.tech", ", ".join(project.tech), key, project.tech)
+    for label, entries in (("I", profile.internships), ("W", profile.work)):
+        for index, experience in enumerate(entries, start=1):
+            key = f"{label}{index}"
+            tech = experience.tech
+            add(f"{key}.role", experience.role, key, tech)
+            add(f"{key}.company", experience.company, key, tech)
+            add(f"{key}.dates", experience.dates, key, tech)
+            add(f"{key}.description", " ".join(experience.description), key, tech)
+            add(f"{key}.tech", ", ".join(tech), key, tech)
+    for index, education in enumerate(profile.education, start=1):
+        add(f"ED{index}.line", _education_line(education), f"ED{index}", [])
+    if profile.certifications:
+        add("CERT", ", ".join(profile.certifications), "CERT", [])
+    link_parts = [
+        f"{label}: {value}"
+        for label in ("github", "linkedin", "portfolio")
+        if (value := getattr(profile.links, label, None))
+    ]
     if link_parts:
-        lines.append("Links: " + "; ".join(link_parts))
+        add("LINK", "; ".join(link_parts), "LINK", [])
+    return facts
+
+
+def render_profile_facts(profile: CandidateProfile) -> str:
+    """The profile as numbered facts the model must cite, plus context-only skills."""
+    facts = build_facts(profile)
+    lines = ["Candidate facts (cite the [ID] of every fact you use):"]
+    for fact in facts.values():
+        lines.append(f"[{fact.id}] {fact.text}")
+    if profile.skills:
+        lines.append("")
+        lines.append("Known skills (context only; never cite as evidence):")
+        lines.append(
+            ", ".join(
+                f"{strip_proficiency(skill.name)} "
+                f"({getattr(skill.proficiency, 'value', skill.proficiency)})"
+                for skill in profile.skills
+            )
+        )
     return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
-# Deterministic grounding rules
+# Profile gaps (refusal)
 # --------------------------------------------------------------------------- #
 
 
-def _norm_token(token: str) -> str:
-    return token.strip(_STRIP_CHARS).lower()
+def profile_gaps(profile: CandidateProfile) -> list[str]:
+    """What the profile must add before a resume can be written (no padding)."""
+    gaps: list[str] = []
+    experiences = [("internship", x) for x in profile.internships] + [
+        ("work", x) for x in profile.work
+    ]
+    for label, experience in experiences:
+        if not any(line.strip() for line in experience.description):
+            name = f"{experience.role or '?'} @ {experience.company or '?'}"
+            gaps.append(f"{label} '{name}' has no description lines")
+    if not profile.internships and not profile.work:
+        gaps.append("no internship or work experience with a description")
+    for project in profile.projects:
+        if not (project.summary or project.outcomes):
+            gaps.append(f"project '{project.title or '?'}' has no summary or outcomes")
+    if not profile.projects:
+        gaps.append("no projects")
+    if not any((profile.links.github, profile.links.linkedin, profile.links.portfolio)):
+        gaps.append("no links (add a github, linkedin or portfolio URL)")
+    return gaps
 
 
-def _profile_token_set(profile_text: str) -> set[str]:
-    return {_norm_token(m.group(0)) for m in _TOKEN_RE.finditer(profile_text)} - {""}
+# --------------------------------------------------------------------------- #
+# Skills (built in code, never by the model)
+# --------------------------------------------------------------------------- #
 
 
-def _tokens(text: str) -> list[tuple[str, int]]:
-    return [(m.group(0), m.start()) for m in _TOKEN_RE.finditer(text)]
+def build_skills(
+    profile: CandidateProfile, parsed_jd: ParsedJD, ontology: SkillOntology
+) -> tuple[list[str], list[str]]:
+    """Return ``(skills, familiar)``:
+
+    ``skills`` = non-familiar profile skills, JD-matching first; ``familiar`` = the
+    "Familiar with" group (familiar proficiency only). Names are the profile's own,
+    with any proficiency suffix stripped.
+    """
+    jd_canonical = _jd_canonical(parsed_jd, ontology)
+    matching: list[str] = []
+    others: list[str] = []
+    familiar: list[str] = []
+    seen: set[str] = set()
+    for skill in profile.skills:
+        canonical = _canonical(skill.name or skill.canonical_name, ontology)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        name = strip_proficiency(skill.name)
+        if skill.proficiency == Proficiency.familiar:
+            familiar.append(name)
+        elif canonical in jd_canonical:
+            matching.append(name)
+        else:
+            others.append(name)
+    return matching + others, familiar
+
+
+# --------------------------------------------------------------------------- #
+# Grounding engine
+# --------------------------------------------------------------------------- #
 
 
 def _is_sentence_initial(text: str, start: int) -> bool:
@@ -215,56 +569,65 @@ def _is_sentence_initial(text: str, start: int) -> bool:
     return not preceding or preceding[-1] in ".!?\n:;"
 
 
-def _profile_skill_keys(profile: CandidateProfile, ontology: SkillOntology) -> set[str]:
-    keys = set()
-    for skill in profile.skills:
-        keys.add(skill.canonical_name)
-        keys.add(ontology.canonicalize(skill.canonical_name))
-        keys.add(ontology.canonicalize(skill.name))
-    return keys
+def _style_error(text: str) -> str:
+    match = _META_RE.search(text)
+    if match:
+        return f"meta/third-person wording: '{match.group(0)}'"
+    return ""
 
 
-def fabricated_tokens(
+def _starts_with_action_verb(text: str) -> bool:
+    match = _TOKEN_RE.search(text)
+    if not match:
+        return False
+    word = match.group(0).lower()
+    if word in _ACTION_VERBS:
+        return True
+    if len(word) >= 5 and word.endswith("ed"):
+        return True
+    return bool(len(word) >= 6 and word.endswith("ing"))
+
+
+def _keyword_counts(text: str, jd_tokens: set[str]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for token in _tokenize(text):
+        if token in jd_tokens:
+            counts[token] += 1
+    return counts
+
+
+def _ungrounded(
     text: str,
-    *,
-    profile_text: str,
-    profile_token_set: set[str],
-    profile_skill_keys: set[str],
+    allowed: set[str],
+    tech_tokens: set[str],
+    jd_tokens: set[str],
     ontology: SkillOntology,
 ) -> list[str]:
-    """Tokens in ``text`` that assert a fact the profile does not contain.
+    """Tokens that assert a fact absent from the cited text/tech.
 
-    Flags a number/metric/date token absent from the profile, a known technology
-    that is not one of the profile's skills, and any mid-sentence proper noun
-    (capitalised word) absent from the profile. Sentence-initial words and the
-    pronoun "I" are ignored so ordinary phrasing is not flagged.
+    Flags a number, a known technology, a mid-sentence proper noun or a job keyword
+    that the cited facts do not contain. Sentence-initial words and "I" are ignored.
     """
-    found: list[str] = []
-    for token, start in _tokens(text):
-        norm = _norm_token(token)
-        if not norm or token == "I":
+    flagged: list[str] = []
+    for match in _TOKEN_RE.finditer(text):
+        raw = match.group(0)
+        if raw.lower() == "i" or _is_sentence_initial(text, match.start()):
             continue
-        if _is_sentence_initial(text, start):
+        token = _singular(raw.lower())
+        if token in allowed or token in tech_tokens:
             continue
-        if any(ch.isdigit() for ch in token) and norm not in profile_token_set:
-            found.append(token)
+        if token in jd_tokens:
+            flagged.append(raw)
             continue
-        canonical = ontology.canonicalize(token)
-        if canonical in ontology.entries and canonical not in profile_skill_keys:
-            found.append(token)
+        if any(ch.isdigit() for ch in raw):
+            flagged.append(raw)
             continue
-        if token[0].isupper() and len(token) >= 2 and norm not in profile_token_set:
-            found.append(token)
-    return sorted(set(found))
-
-
-def _jd_keywords_used(text: str, jd_canonical: set[str], ontology: SkillOntology) -> set[str]:
-    used = set()
-    for token, _ in _tokens(text):
-        canonical = ontology.canonicalize(token)
-        if canonical in jd_canonical:
-            used.add(canonical)
-    return used
+        if _canonical(raw, ontology) in ontology.entries:
+            flagged.append(raw)
+            continue
+        if raw[0].isupper() and len(raw) >= 2:
+            flagged.append(raw)
+    return sorted(set(flagged))
 
 
 class _Grounder:
@@ -275,55 +638,49 @@ class _Grounder:
         *,
         profile: CandidateProfile,
         parsed_jd: ParsedJD,
-        jd_text: str,
         ontology: SkillOntology,
     ) -> None:
-        self.profile_text = resume_profile_text(profile)
-        self.profile_tokens = _profile_token_set(self.profile_text)
-        self.profile_skill_keys = _profile_skill_keys(profile, ontology)
+        self.facts = build_facts(profile)
         self.ontology = ontology
-        self.jd_text = jd_text
-        self.jd_canonical = {
-            ontology.canonicalize(name)
-            for name in (*parsed_jd.must_have_skills, *parsed_jd.nice_to_have_skills)
-        }
-        self.used_keywords: set[str] = set()
+        self.jd_tokens = _jd_keyword_tokens(parsed_jd, ontology)
+        self.counts: Counter[str] = Counter()
 
-    def keep_line(self, line: ResumeLine) -> tuple[bool, str]:
+    def seed_skill_keywords(self, names: list[str]) -> None:
+        """The Skills section counts once toward each keyword it lists."""
+        self.counts.update(_keyword_counts(" ".join(names), self.jd_tokens))
+
+    def keep_line(self, line: ResumeLine, *, is_bullet: bool) -> tuple[bool, str]:
         """Return ``(keep, reason)`` for one summary sentence or bullet."""
-        if not line.text.strip():
+        text = (line.text or "").strip()
+        if not text:
             return False, "empty text"
-        if line.source != EvidenceSource.profile:
-            return False, "candidate claim must quote the profile"
-        if not quote_valid(line.quote, EvidenceSource.profile, self.jd_text, self.profile_text):
-            return False, "quote not found in profile"
-        fabricated = fabricated_tokens(
-            line.text,
-            profile_text=self.profile_text,
-            profile_token_set=self.profile_tokens,
-            profile_skill_keys=self.profile_skill_keys,
-            ontology=self.ontology,
-        )
-        if fabricated:
-            return False, f"ungrounded term(s) not in profile: {', '.join(fabricated)}"
-        used = _jd_keywords_used(line.text, self.jd_canonical, self.ontology)
-        repeated = used & self.used_keywords
-        if repeated:
-            return False, f"repeats job keyword(s): {', '.join(sorted(repeated))}"
-        self.used_keywords |= used
+        style = _style_error(text)
+        if style:
+            return False, style
+        if _HIDDEN_RE.search(text):
+            return False, "hidden characters in text"
+        raw_ids = list(line.facts or [])
+        unknown = [fid for fid in raw_ids if fid not in self.facts]
+        if unknown:
+            return False, f"unknown fact id(s): {', '.join(unknown)}"
+        if not raw_ids:
+            return False, "no fact id cited"
+        cited_text = " ".join(self.facts[fid].text for fid in raw_ids)
+        tech = [t for fid in raw_ids for t in self.facts[fid].tech]
+        allowed = set(_tokenize(cited_text))
+        tech_tokens = set(_tokenize(" ".join(tech)))
+        if is_bullet and not _starts_with_action_verb(text):
+            return False, "bullet does not start with an action verb"
+        flagged = _ungrounded(text, allowed, tech_tokens, self.jd_tokens, self.ontology)
+        if flagged:
+            return False, f"term(s) not in cited facts: {', '.join(flagged)}"
+        counts = _keyword_counts(text, self.jd_tokens)
+        over = [key for key, value in counts.items() if self.counts[key] + value > KEYWORD_MAX]
+        if over:
+            return False, f"job keyword limit exceeded: {', '.join(sorted(over))}"
+        for key, value in counts.items():
+            self.counts[key] += value
         return True, ""
-
-    def keep_skills(self, skills: list[str]) -> list[str]:
-        """Keep only profile skills, deduped, in the model's relevance order."""
-        kept: list[str] = []
-        seen: set[str] = set()
-        for name in skills:
-            canonical = self.ontology.canonicalize(name)
-            if canonical not in self.profile_skill_keys or canonical in seen:
-                continue
-            seen.add(canonical)
-            kept.append(name)
-        return kept
 
 
 # --------------------------------------------------------------------------- #
@@ -340,6 +697,13 @@ def resume_blocks(resume: TailoredResume) -> list[ResumeBlock]:
     blocks.append(ResumeBlock(kind=ResumeBlockKind.heading, text="Skills"))
     if resume.skills:
         blocks.append(ResumeBlock(kind=ResumeBlockKind.paragraph, text=", ".join(resume.skills)))
+    if resume.familiar_skills:
+        blocks.append(
+            ResumeBlock(
+                kind=ResumeBlockKind.paragraph,
+                text=f"{FAMILIAR_HEADING}: " + ", ".join(resume.familiar_skills),
+            )
+        )
     blocks.append(ResumeBlock(kind=ResumeBlockKind.heading, text="Experience"))
     for entry in resume.experience:
         header = f"{entry.role or '-'} @ {entry.company or '-'}"
@@ -409,8 +773,8 @@ def ats_lint(target: TailoredResume | list[ResumeBlock]) -> ATSReport:
 
 def build_user_prompt(profile: CandidateProfile, job: Job, parsed_jd: ParsedJD) -> str:
     return (
-        "## Candidate profile\n"
-        f"{resume_profile_text(profile)}\n\n"
+        "## Candidate facts\n"
+        f"{render_profile_facts(profile)}\n\n"
         "## Job requirements\n"
         f"{render_parsed_jd(parsed_jd)}\n\n"
         "## Raw job posting\n"
@@ -422,11 +786,72 @@ def _retry_message(errors: list[str]) -> str:
     return (
         "Your previous draft did not pass validation:\n"
         + "\n".join(f"- {error}" for error in errors)
-        + "\nFix every item. Use ONLY facts in the candidate profile; every summary "
-        "sentence and bullet needs a verbatim profile quote; introduce no number, "
-        "metric, date, technology or proper noun the profile lacks; list each job "
-        "keyword at most once."
+        + "\nFix every item. Use ONLY facts in the candidate facts list; every summary "
+        "sentence and bullet must cite at least one [ID]; introduce no technology, "
+        "proper noun, number or job keyword the cited facts do not contain; never cite "
+        "a skill as evidence."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Requirement classification
+# --------------------------------------------------------------------------- #
+
+
+def _skill_fact(
+    requirement: str,
+    profile: CandidateProfile,
+    ontology: SkillOntology,
+    facts: dict[str, Fact],
+) -> Fact | None:
+    canonical = _canonical(requirement, ontology)
+    if canonical not in _profile_skill_keys(profile, ontology):
+        return None
+    for fact in facts.values():
+        if any(_canonical(tech, ontology) == canonical for tech in fact.tech):
+            return fact
+    for fact in facts.values():
+        if canonical in set(_tokenize(fact.text)):
+            return fact
+    return None
+
+
+def _classify_requirements(
+    profile: CandidateProfile,
+    parsed_jd: ParsedJD,
+    ontology: SkillOntology,
+    facts: dict[str, Fact],
+    drafts: list[RequirementDraft],
+) -> list[RequirementCoverage]:
+    by_canonical: dict[str, RequirementDraft] = {}
+    for item in drafts:
+        by_canonical.setdefault(_canonical(item.requirement, ontology), item)
+    results: list[RequirementCoverage] = []
+    for name in _dedup_requirements(parsed_jd, ontology):
+        canonical = _canonical(name, ontology)
+        draft = by_canonical.get(canonical)
+        coverage: RequirementCoverage | None = None
+        if draft is not None and draft.status in ("covered", "partial"):
+            cited = [facts[fid] for fid in draft.facts if fid in facts]
+            if cited:
+                cited_text = " ".join(fact.text for fact in cited)
+                if draft.quote and quote_valid(draft.quote, EvidenceSource.profile, "", cited_text):
+                    coverage = RequirementCoverage(
+                        requirement=name,
+                        status=draft.status,
+                        facts=[fact.id for fact in cited],
+                        quote=draft.quote,
+                    )
+        if coverage is None:
+            fact = _skill_fact(name, profile, ontology, facts)
+            if fact is not None:
+                coverage = RequirementCoverage(
+                    requirement=name, status="covered", facts=[fact.id], quote=fact.text
+                )
+        if coverage is None:
+            coverage = RequirementCoverage(requirement=name, status="missing")
+        results.append(coverage)
+    return results
 
 
 # --------------------------------------------------------------------------- #
@@ -434,14 +859,22 @@ def _retry_message(errors: list[str]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _keep_lines(lines: list[ResumeLine], grounder: _Grounder, label: str) -> list[ResumeLine]:
+def _keep_lines(
+    lines: list[ResumeLine],
+    grounder: _Grounder,
+    label: str,
+    *,
+    is_bullet: bool,
+    dropped: list[DroppedLine],
+) -> list[ResumeLine]:
     kept: list[ResumeLine] = []
     for line in lines:
-        keep, reason = grounder.keep_line(line)
+        keep, reason = grounder.keep_line(line, is_bullet=is_bullet)
         if keep:
-            kept.append(ResumeLine(text=line.text, quote=line.quote, source=line.source))
+            kept.append(ResumeLine(text=line.text.strip(), facts=list(line.facts)))
         else:
             logger.warning("tailored-resume %s dropped: %s", label, reason)
+            dropped.append(DroppedLine(text=(line.text or "").strip(), reason=reason))
     return kept
 
 
@@ -459,13 +892,16 @@ def _assemble(
     parsed_jd: ParsedJD,
     version: str,
     model: str,
-    jd_text: str,
     ontology: SkillOntology,
 ) -> TailoredResume:
-    grounder = _Grounder(profile=profile, parsed_jd=parsed_jd, jd_text=jd_text, ontology=ontology)
+    grounder = _Grounder(profile=profile, parsed_jd=parsed_jd, ontology=ontology)
+    skills, familiar = build_skills(profile, parsed_jd, ontology)
+    grounder.seed_skill_keywords([*skills, *familiar])
 
-    summary = _keep_lines(draft.summary, grounder, "summary")[:SUMMARY_MAX]
-    skills = grounder.keep_skills(draft.skills)
+    dropped: list[DroppedLine] = []
+    summary = _keep_lines(draft.summary, grounder, "summary", is_bullet=False, dropped=dropped)[
+        :SUMMARY_MAX
+    ]
 
     profile_experience = [*profile.internships, *profile.work]
     experience: list[ExperienceEntry] = []
@@ -476,7 +912,13 @@ def _assemble(
                 role=entry.role,
                 company=entry.company,
                 duration_months=entry.duration_months,
-                bullets=_keep_lines(bullets, grounder, f"experience[{index}]"),
+                bullets=_keep_lines(
+                    bullets,
+                    grounder,
+                    f"experience[{index}]",
+                    is_bullet=True,
+                    dropped=dropped,
+                ),
             )
         )
 
@@ -487,24 +929,33 @@ def _assemble(
             ProjectEntry(
                 title=project.title,
                 tech=list(project.tech),
-                bullets=_keep_lines(bullets, grounder, f"projects[{index}]"),
+                bullets=_keep_lines(
+                    bullets,
+                    grounder,
+                    f"projects[{index}]",
+                    is_bullet=True,
+                    dropped=dropped,
+                ),
             )
         )
 
-    missing = _missing_requirements(profile, parsed_jd, ontology)
+    requirements = _classify_requirements(
+        profile, parsed_jd, ontology, grounder.facts, draft.requirements
+    )
+    missing = [item.requirement for item in requirements if item.status == "missing"]
+
     resume = TailoredResume(
-        header=ResumeHeader(
-            name=profile.full_name,
-            email=profile.email,
-            links=profile.links,
-        ),
+        header=ResumeHeader(name=profile.full_name, email=profile.email, links=profile.links),
         summary=summary,
         skills=skills,
+        familiar_skills=familiar,
         experience=experience,
         projects=projects,
         education=[edu.model_dump() for edu in profile.education],
         certifications=list(profile.certifications),
+        requirements=requirements,
         missing_requirements=missing,
+        dropped=dropped,
         prompt_version=version,
         model=model,
     )
@@ -512,16 +963,23 @@ def _assemble(
     return resume
 
 
-def _missing_requirements(
-    profile: CandidateProfile, parsed_jd: ParsedJD, ontology: SkillOntology
-) -> list[str]:
-    """Job requirements the profile lacks; shown to the owner, never added."""
-    have = _profile_skill_keys(profile, ontology)
-    missing: list[str] = []
-    for name in (*parsed_jd.must_have_skills, *parsed_jd.nice_to_have_skills):
-        if ontology.canonicalize(name) not in have and name not in missing:
-            missing.append(name)
-    return missing
+def _refusal(
+    profile: CandidateProfile, version: str, model: str, gaps: list[str]
+) -> TailoredResume:
+    reason = (
+        "Refusing to write a resume: the approved profile is missing detail the "
+        "generator needs. Add on the Profile page: " + "; ".join(gaps) + "."
+    )
+    return TailoredResume(
+        header=ResumeHeader(name=profile.full_name, email=profile.email, links=profile.links),
+        education=[edu.model_dump() for edu in profile.education],
+        certifications=list(profile.certifications),
+        refused=True,
+        refusal_reason=reason,
+        profile_gaps=list(gaps),
+        prompt_version=version,
+        model=model,
+    )
 
 
 def generate_tailored_resume(
@@ -537,10 +995,14 @@ def generate_tailored_resume(
     settings = settings or get_settings()
     ontology = ontology or get_ontology()
     system_prompt, version = load_prompt("tailored_resume")
-    base_user = build_user_prompt(profile, job, parsed_jd)
-    jd_text = job_source_text(job)
     model = settings.models.evaluator
 
+    gaps = profile_gaps(profile)
+    if gaps:
+        logger.warning("tailored-resume refused: %s", "; ".join(gaps))
+        return _refusal(profile, version, model, gaps)
+
+    base_user = build_user_prompt(profile, job, parsed_jd)
     logger.info("Tailored resume: drafting for '%s' @ '%s'", job.title, job.company)
     draft: ResumeDraft | None = None
     errors: list[str] = []
@@ -567,7 +1029,6 @@ def generate_tailored_resume(
         parsed_jd=parsed_jd,
         version=version,
         model=model,
-        jd_text=jd_text,
         ontology=ontology,
     )
 

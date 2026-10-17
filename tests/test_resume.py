@@ -1,10 +1,13 @@
 """Tailored-resume generator tests (fake LLM, no network).
 
-Every summary sentence and bullet must carry a verbatim profile quote; a line
-that invents a skill, a metric or a technology, or repeats a job keyword, is
-dropped. Job requirements the profile lacks are listed as missing and never
-added. The layout must pass the ATS lint. Structural fields (dates, employers,
-education) are copied verbatim from the profile.
+Grounding is by profile *fact ids*: every summary sentence and bullet must cite at
+least one real ``[ID]`` and may only restate those facts. Skills are assembled in
+code (never by the model), a third-person/meta line is dropped, a bullet that adds a
+job term absent from its cited fact is dropped, a job keyword may appear only a few
+times across the resume, requirements are classified covered/partial/missing, and a
+profile without internship/work/project/link detail is refused rather than padded.
+Structural fields (dates, employers, education, certifications) are copied from the
+profile. The finished layout must pass the ATS lint.
 """
 
 from __future__ import annotations
@@ -32,10 +35,16 @@ from atlas.llm import LLMClient
 from atlas.pipeline import LLMCallBudgetExceeded
 from atlas.resume import (
     ResumeBlock,
+    _tokenize,
     ats_lint,
+    build_facts,
+    build_skills,
     generate_tailored_resume,
     generate_tailored_resume_under_caps,
+    profile_gaps,
+    render_profile_facts,
     resume_blocks,
+    strip_proficiency,
 )
 from atlas.schemas import (
     CandidateProfile,
@@ -45,25 +54,24 @@ from atlas.schemas import (
     Job,
     Links,
     ParsedJD,
+    Proficiency,
     Project,
     Skill,
     SkillCategory,
 )
+from atlas.skills import get_ontology
 
-VALID_SUMMARY = {
-    "text": "Built a live job pipeline.",
-    "quote": "Builds a job pipeline",
-    "source": "profile",
-}
-VALID_EXPERIENCE_BULLET = {
-    "text": "Built a job pipeline in Python.",
-    "quote": "Builds a job pipeline",
-    "source": "profile",
-}
+VALID_SUMMARY = {"text": "Builds a job pipeline.", "facts": ["W1.description"]}
+VALID_EXPERIENCE_BULLET = {"text": "Build a job pipeline in Python.", "facts": ["W1.description"]}
 VALID_PROJECT_BULLET = {
     "text": "Shipped a live job pipeline.",
+    "facts": ["P1.outcomes", "P1.summary"],
+}
+VALID_REQUIREMENT = {
+    "requirement": "Python",
+    "status": "covered",
+    "facts": ["W1.description"],
     "quote": "Builds a job pipeline",
-    "source": "profile",
 }
 
 
@@ -90,15 +98,42 @@ def _profile() -> CandidateProfile:
         ],
         certifications=["AWS Certified"],
         skills=[
-            Skill(name="Python", canonical_name="python", category=SkillCategory.language),
-            Skill(name="React", canonical_name="react", category=SkillCategory.framework),
-            Skill(name="Docker", canonical_name="docker", category=SkillCategory.tool),
+            Skill(
+                name="Python",
+                canonical_name="python",
+                category=SkillCategory.language,
+                proficiency=Proficiency.strong,
+            ),
+            Skill(
+                name="React",
+                canonical_name="react",
+                category=SkillCategory.framework,
+                proficiency=Proficiency.strong,
+            ),
+            Skill(
+                name="Docker",
+                canonical_name="docker",
+                category=SkillCategory.tool,
+                proficiency=Proficiency.working,
+            ),
             Skill(
                 name="PostgreSQL",
                 canonical_name="postgresql",
                 category=SkillCategory.database,
+                proficiency=Proficiency.working,
             ),
-            Skill(name="FastAPI", canonical_name="fastapi", category=SkillCategory.framework),
+            Skill(
+                name="FastAPI",
+                canonical_name="fastapi",
+                category=SkillCategory.framework,
+                proficiency=Proficiency.strong,
+            ),
+            Skill(
+                name="Rust",
+                canonical_name="rust",
+                category=SkillCategory.language,
+                proficiency=Proficiency.familiar,
+            ),
         ],
         projects=[
             Project(
@@ -109,7 +144,13 @@ def _profile() -> CandidateProfile:
             )
         ],
         work=[
-            Experience(role="Data engineer", company="Acme", duration_months=30, tech=["Python"])
+            Experience(
+                role="Data engineer",
+                company="Acme",
+                duration_months=30,
+                tech=["Python"],
+                description=["Builds a job pipeline"],
+            )
         ],
         target_roles=["Backend"],
     )
@@ -139,93 +180,233 @@ def _parsed_jd() -> ParsedJD:
 def _payload(**overrides) -> dict:
     base = {
         "summary": [VALID_SUMMARY],
-        "skills": ["Python", "React", "Docker"],
+        "skills": ["Python (strong)"],
         "experience": [{"bullets": [VALID_EXPERIENCE_BULLET]}],
         "projects": [{"bullets": [VALID_PROJECT_BULLET]}],
+        "requirements": [VALID_REQUIREMENT],
     }
     base.update(overrides)
     return base
 
 
-def _generate(payload: dict):
+def _generate(payload: dict, *, profile=None, job=None, parsed_jd=None):
     return generate_tailored_resume(
-        _client(payload), profile=_profile(), job=_job(), parsed_jd=_parsed_jd()
+        _client(payload),
+        profile=profile or _profile(),
+        job=job or _job(),
+        parsed_jd=parsed_jd or _parsed_jd(),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Grounded lines + code-built skills
+# --------------------------------------------------------------------------- #
 
 
 def test_generate_keeps_valid_grounded_lines_and_records_prompt_version():
     resume = _generate(_payload())
 
     assert [line.text for line in resume.summary] == [VALID_SUMMARY["text"]]
-    assert resume.skills == ["Python", "React", "Docker"]
     assert [b.text for b in resume.experience[0].bullets] == [VALID_EXPERIENCE_BULLET["text"]]
     assert [b.text for b in resume.projects[0].bullets] == [VALID_PROJECT_BULLET["text"]]
-    assert resume.prompt_version == "1"
+    assert resume.prompt_version == "2"
     assert resume.model
     assert resume.ats.passed is True
 
 
-def test_fabricated_skill_is_dropped():
-    resume = _generate(_payload(skills=["Python", "Kubernetes", "React"]))
+def test_skills_are_built_in_code_even_when_the_model_echoes_a_proficiency_suffix():
+    resume = _generate(_payload(skills=["Python (strong)", "Kubernetes"]))
 
-    assert resume.skills == ["Python", "React"]
+    assert resume.skills == ["Python", "React", "Docker", "PostgreSQL", "FastAPI"]
+    assert "Python (strong)" not in resume.skills
+    assert all("(" not in name for name in resume.skills)
     assert "Kubernetes" not in resume.skills
 
 
-def test_fabricated_metric_is_dropped():
+def test_familiar_skills_go_to_a_separate_group():
+    resume = _generate(_payload())
+
+    assert resume.skills == ["Python", "React", "Docker", "PostgreSQL", "FastAPI"]
+    assert resume.familiar_skills == ["Rust"]
+    assert "Rust" not in resume.skills
+
+
+def test_git_slash_github_and_plural_acronym_pass_grounding():
+    text = "Built Git/GitHub workflows and REST APIs."
+    profile = _profile()
+    profile.work[0].description = [text]
+    bullet = {"text": text, "facts": ["W1.description"]}
+
+    resume = _generate(_payload(experience=[{"bullets": [bullet]}]), profile=profile)
+
+    assert [b.text for b in resume.experience[0].bullets] == [text]
+
+
+def test_third_person_meta_sentence_is_rejected():
+    meta = {"text": "The candidate has strong Python skills.", "facts": ["W1.description"]}
+    resume = _generate(_payload(summary=[meta]))
+
+    assert resume.summary == []
+    assert any("meta" in line.reason for line in resume.dropped)
+
+
+def test_bullet_adding_a_job_term_absent_from_the_cited_fact_is_dropped():
     bullet = {
-        "text": "Built a job pipeline handling 5 million rows.",
-        "quote": "Builds a job pipeline",
-        "source": "profile",
+        "text": "Deployed services to Kubernetes.",
+        "facts": ["W1.description"],
     }
     resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
 
     assert resume.experience[0].bullets == []
-    assert "5 million" not in " ".join(line.text for line in resume.summary)
+    assert any("Kubernetes" in line.reason for line in resume.dropped)
 
 
-def test_bullet_without_a_valid_profile_quote_is_dropped():
+def test_bullet_with_a_fabricated_metric_is_dropped():
     bullet = {
-        "text": "Has a PhD in machine learning.",
-        "quote": "PhD in machine learning",
-        "source": "profile",
+        "text": "Built a job pipeline handling 5000000 rows.",
+        "facts": ["W1.description"],
     }
-    resume = _generate(_payload(projects=[{"bullets": [bullet]}]))
+    resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
 
-    assert resume.projects[0].bullets == []
-
-
-def test_job_keyword_is_not_repeated_across_bullets():
-    repeat = {
-        "text": "Wrote Python tools.",
-        "quote": "Builds a job pipeline",
-        "source": "profile",
-    }
-    resume = _generate(_payload(experience=[{"bullets": [VALID_EXPERIENCE_BULLET, repeat]}]))
-
-    texts = [b.text for b in resume.experience[0].bullets]
-    assert texts == [VALID_EXPERIENCE_BULLET["text"]]
-    assert "Wrote Python tools." not in texts
+    assert resume.experience[0].bullets == []
+    assert any("5000000" in line.reason for line in resume.dropped)
 
 
-def test_missing_requirements_are_listed_and_never_added():
-    resume = _generate(_payload(skills=["Python", "React", "Kubernetes"]))
+def test_bullet_without_a_cited_fact_is_dropped():
+    bullet = {"text": "Built a job pipeline.", "facts": []}
+    resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
 
-    assert resume.missing_requirements == ["Kubernetes"]
-    assert "Kubernetes" not in resume.skills
+    assert resume.experience[0].bullets == []
+    assert any("no fact id" in line.reason for line in resume.dropped)
+
+
+def test_bullet_that_does_not_start_with_an_action_verb_is_dropped():
+    bullet = {"text": "Responsible for a job pipeline.", "facts": ["W1.description"]}
+    resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
+
+    assert resume.experience[0].bullets == []
+    assert any("action verb" in line.reason for line in resume.dropped)
+
+
+def test_job_keyword_limit_drops_the_extras():
+    profile = _profile()
+    profile.work[0].description = ["Built REST services"]
+    bullet = {"text": "Built REST services.", "facts": ["W1.description"]}
+    parsed = ParsedJD(
+        title="Backend engineer", must_have_skills=["Python"], nice_to_have_skills=["REST"]
+    )
+    resume = _generate(
+        _payload(experience=[{"bullets": [bullet, bullet, bullet, bullet]}]),
+        profile=profile,
+        parsed_jd=parsed,
+    )
+
+    assert len(resume.experience[0].bullets) == 3
+    assert any("keyword limit" in line.reason for line in resume.dropped)
+
+
+# --------------------------------------------------------------------------- #
+# Requirements
+# --------------------------------------------------------------------------- #
+
+
+def test_missing_requirements_are_classified_and_never_added():
+    resume = _generate(_payload())
+
+    assert "Kubernetes" in resume.missing_requirements
+    assert "Python" not in resume.missing_requirements
     all_text = " ".join(line.text for line in resume.summary) + " ".join(
         b.text for entry in (*resume.experience, *resume.projects) for b in entry.bullets
     )
     assert "Kubernetes" not in all_text
 
 
-def test_reactjs_job_keyword_matches_the_profile_react_skill():
-    """The job's "ReactJS" wording is the profile's existing "React" skill."""
-    resume = _generate(_payload(skills=["Python", "ReactJS"]))
+def test_requirement_is_covered_from_a_profile_skill_without_a_model_judgement():
+    resume = _generate(_payload(requirements=[]))
 
-    assert "Kubernetes" in resume.missing_requirements
-    assert resume.missing_requirements == ["Kubernetes"]
-    assert resume.skills == ["Python", "ReactJS"]
+    coverage = {item.requirement: item.status for item in resume.requirements}
+    assert coverage["Python"] == "covered"
+    assert coverage["Kubernetes"] == "missing"
+
+
+def test_reactjs_job_requirement_matches_the_profile_react_skill():
+    profile = _profile()
+    profile.work[0].tech = ["Python", "React"]
+    resume = _generate(_payload(), profile=profile)
+    coverage = {item.requirement: item.status for item in resume.requirements}
+
+    assert coverage["ReactJS"] == "covered"
+
+
+# --------------------------------------------------------------------------- #
+# Refusal
+# --------------------------------------------------------------------------- #
+
+
+def test_refuses_when_an_internship_has_no_description():
+    profile = _profile()
+    profile.work = []
+    profile.internships = [
+        Experience(role="Intern", company="GameGenesis", duration_months=3, tech=["Python"])
+    ]
+
+    resume = _generate(_payload(), profile=profile)
+
+    assert resume.refused is True
+    assert resume.refusal_reason
+    assert "Profile page" in resume.refusal_reason
+    assert "GameGenesis" in resume.refusal_reason
+    assert resume.profile_gaps
+    assert resume.summary == []
+
+
+def test_refuses_and_lists_all_gaps_when_the_profile_is_thin():
+    profile = _profile()
+    profile.projects = []
+    profile.links = Links()
+    profile.work = [Experience(role="Data engineer", company="Acme", tech=["Python"])]
+
+    gaps = profile_gaps(profile)
+
+    assert any("no description lines" in gap for gap in gaps)
+    assert "no projects" in gaps
+    assert any("no links" in gap for gap in gaps)
+
+
+def test_refusal_never_calls_the_llm():
+    class _ExplodingClient:
+        tokens_used = 0
+
+        def call_json(self, **kwargs):
+            raise AssertionError("the LLM must not be called for a thin profile")
+
+    profile = _profile()
+    profile.projects = []
+    profile.links = Links()
+
+    resume = generate_tailored_resume(
+        _ExplodingClient(), profile=profile, job=_job(), parsed_jd=_parsed_jd()
+    )
+
+    assert resume.refused is True
+
+
+# --------------------------------------------------------------------------- #
+# Structural fields + ATS lint
+# --------------------------------------------------------------------------- #
+
+
+def test_dates_and_employers_are_preserved_from_the_profile():
+    resume = _generate(_payload())
+
+    entry = resume.experience[0]
+    assert entry.role == "Data engineer"
+    assert entry.company == "Acme"
+    assert entry.duration_months == 30
+    assert resume.projects[0].title == "Atlas Ops"
+    assert resume.projects[0].tech == ["Python", "FastAPI"]
+    assert resume.education[0]["institution"] == "University of X"
+    assert resume.certifications == ["AWS Certified"]
 
 
 def test_ats_lint_passes_a_clean_layout_and_flags_a_table():
@@ -248,17 +429,61 @@ def test_ats_lint_flags_hidden_text_and_missing_heading():
     assert any("missing standard heading" in reason for reason in report.reasons)
 
 
-def test_dates_and_employers_are_preserved_from_the_profile():
-    resume = _generate(_payload())
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 
-    entry = resume.experience[0]
-    assert entry.role == "Data engineer"
-    assert entry.company == "Acme"
-    assert entry.duration_months == 30
-    assert resume.projects[0].title == "Atlas Ops"
-    assert resume.projects[0].tech == ["Python", "FastAPI"]
-    assert resume.education[0]["institution"] == "University of X"
-    assert resume.certifications == ["AWS Certified"]
+
+def test_strip_proficiency_removes_only_a_trailing_tag():
+    assert strip_proficiency("Python (strong)") == "Python"
+    assert strip_proficiency("Docker (working)") == "Docker"
+    assert strip_proficiency("Rust (familiar)") == "Rust"
+    assert strip_proficiency("Git/GitHub") == "Git/GitHub"
+
+
+def test_tokenize_splits_on_punctuation_and_singularizes():
+    assert _tokenize("Git/GitHub APIs") == ["git", "github", "api"]
+    assert _tokenize("dependencies") == ["dependency"]
+
+
+def test_build_facts_excludes_skills_and_numbers_entries():
+    facts = build_facts(_profile())
+
+    assert facts["P1.summary"].text == "Builds a job pipeline"
+    assert set(facts) == {
+        "P1.title",
+        "P1.summary",
+        "P1.outcomes",
+        "P1.tech",
+        "W1.role",
+        "W1.company",
+        "W1.description",
+        "W1.tech",
+        "ED1.line",
+        "CERT",
+        "LINK",
+    }
+
+
+def test_render_profile_facts_marks_skills_as_context_only():
+    rendered = render_profile_facts(_profile())
+
+    assert "[W1.description] Builds a job pipeline" in rendered
+    assert "context only" in rendered
+    assert "never cite as evidence" in rendered
+
+
+def test_build_skills_orders_jd_matches_first():
+    skills, familiar = build_skills(_profile(), _parsed_jd(), get_ontology())
+
+    assert skills[0] == "Python"
+    assert skills[1] == "React"
+    assert familiar == ["Rust"]
+
+
+# --------------------------------------------------------------------------- #
+# Redaction
+# --------------------------------------------------------------------------- #
 
 
 def test_profile_and_job_text_never_reach_braintrust():
@@ -286,6 +511,11 @@ def test_profile_and_job_text_never_reach_braintrust():
     blob = "".join(span.sent() for span in sdk.spans).lower()
     assert profile_marker not in blob
     assert jd_marker not in blob
+
+
+# --------------------------------------------------------------------------- #
+# Caps
+# --------------------------------------------------------------------------- #
 
 
 def test_generation_under_caps_records_tokens_to_the_daily_budget(tmp_path):

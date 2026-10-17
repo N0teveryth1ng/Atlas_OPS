@@ -1,10 +1,10 @@
 # HANDOFF.md
 
-## State (verified 2026-10-16)
+## State (verified 2026-10-17)
 
-- Code state as of PR #37, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #37** (base `8abeaa1`).
-- Tests: **1145 passed** (`python -m pytest -q`).
+- Code state as of PR #38, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #38** (base `8abeaa1`).
+- Tests: **1154 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #37
+## Merged PRs #24 to #38
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -45,7 +45,8 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #34 | `5b0d6ea` | 2026-10-15T17:21:21Z | task/add-background-progress | feat(dashboard): run Add a job in the background with a progress page |
 | #35 | `224b376` | 2026-10-16T03:28:18Z | prA/transient-retries-and-live-report | fix(llm): read rate-limit headers from the raw response; cover transient retries |
 | #36 | `cac9b21` | 2026-10-16T03:55:07Z | prB/results-page-improvements | feat(dashboard): per-job result page with owner verdicts |
-| #37 | `—` | `—` | prC1/tailored-resume-generator | feat(resume): grounded tailored-resume generator (no UI) |
+| #37 | `a3ee389` | 2026-10-16T04:39:03Z | prC1/tailored-resume-generator | feat(resume): grounded tailored-resume generator (no UI) |
+| #38 | `bba204c` | 2026-10-16T09:30:13Z | prC/profile-editor | feat(profile): rich profile editor (internships/work/projects/education/links/certs) |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -55,7 +56,9 @@ kind, #23 non-job-listing filter.
 - Interface: CLI (`python -m atlas.cli`) + scheduler + local web dashboard. Email
   delivery is cancelled; the digest is local.
 - Dashboard flow: `/setup` (resume PDF <= 5MB + description) -> `/profile`
-  (review / edit / approve; pipeline blocked until approved) -> **Find jobs**
+  (review / edit / approve; since PR #38 also edits internships, work, projects,
+  education, links and certifications; approving re-filters; pipeline blocked until
+  approved) -> **Find jobs**
   (background thread, one-run lock) -> `/status` + `/api/status` -> results table
   (only APPLY/REVIEW decisions; SKIP hidden; undecided rows under "Not yet evaluated";
   stored APPLY with unknown seniority shown as REVIEW with a warning; source=manual
@@ -123,6 +126,25 @@ kind, #23 non-job-listing filter.
   call/token caps), records tokens via `add_llm_tokens`, and lets
   `GroqDailyLimitReached` propagate. Profile/resume text never reaches Braintrust
   (prompt fingerprints only; covered by a test).
+
+## Profile editor (PR #38)
+
+- `/profile` now edits the richer facts the tailored-resume generator needs, all stored
+  in the approved profile JSON (`atlas/schemas.py`, `profiles.data_json`):
+  - internships and work: role, company, months, free-text dates, tech, description
+    lines (one bullet per line);
+  - projects: title, summary, outcomes, tech;
+  - education: degree, field, institution, graduation year with an `expected` flag;
+  - links: github / linkedin / portfolio (kept only when absolute `http`/`https`);
+  - certifications; skills may carry an optional third token
+    `name:proficiency:evidenced-by`.
+- Add and remove entries. Validation: any internship, work or project entry missing a
+  description/outcome blocks approval with a warning naming the entry (nothing is
+  invented or auto-filled); non-`http`/`https` links are rejected. Everything is
+  HTML-escaped. Any change requires re-approval through the existing flow, which
+  re-filters (`reapply_filters`, reason `profile approved`).
+- The editor never calls the LLM and never sends profile text to Braintrust (covered by
+  a test). No changes to filter, decision, ranking or prompt logic.
 
 ## Groq budget controls (PRs #28-#31, #34)
 
@@ -244,12 +266,13 @@ Agreement"; the page's "Terms of Use" link points to
 
 Nothing below is implemented. Each needs the owner's go-ahead.
 
-- **(a) Tailored resume builder.** Generator BUILT (PR #37; `atlas/resume.py`, no UI).
-  It rewrites and reorders content drawn only from the approved profile; every
-  generated line traces back to a profile fact, and unmet requirements are listed but
-  never added. Still planned: the dashboard button, review page (diff vs base resume +
-  per-line quote/source), owner approval and ATS-friendly single-column DOCX/PDF
-  export (PR C2). No auto-submission.
+- **(a) Tailored resume builder.** Generator BUILT (PR #37; `atlas/resume.py`, no UI);
+  profile editor BUILT (PR #38; `/profile` captures internships, work, projects,
+  education, links, certifications). It rewrites and reorders content drawn only from
+  the approved profile; every generated line traces back to a profile fact, and unmet
+  requirements are listed but never added. Still planned: the dashboard button, review
+  page (diff vs base resume + per-line quote/source), owner approval and ATS-friendly
+  single-column DOCX/PDF export (PR C2). No auto-submission.
 - **(b) "Add a job" dashboard page.** BUILT (PR #33; background + progress page in
   PR #34). Owner pastes a JD's text and link; it is evaluated through the same
   pipeline with `source = "owner_added"`. The URL is **never fetched**.
