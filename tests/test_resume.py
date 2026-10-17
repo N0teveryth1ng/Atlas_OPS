@@ -42,6 +42,7 @@ from atlas.resume import (
     profile_gaps,
     render_profile_facts,
     resume_blocks,
+    skill_evidence_facts,
     strip_proficiency,
 )
 from atlas.schemas import (
@@ -264,6 +265,75 @@ def test_familiar_skills_go_to_a_separate_group():
     assert "Rust" not in resume.skills
 
 
+def test_concept_skill_is_evidenced_by_project_outcomes_prose():
+    profile = _profile()
+    profile.projects[0].outcomes = "Implemented caching and circuit breakers"
+    profile.skills.append(
+        Skill(
+            name="Caching",
+            canonical_name="caching",
+            category=SkillCategory.concept,
+            proficiency=Proficiency.strong,
+        )
+    )
+
+    assert skill_evidence_facts(profile, get_ontology())["Caching"] == "P1.outcomes"
+    skills, familiar = build_skills(profile, _parsed_jd(), get_ontology())
+    assert "Caching" in skills
+    assert "Caching" not in familiar
+
+
+def test_tech_skill_evidence_cites_the_tech_fact_not_the_entry_title():
+    profile = _profile()
+
+    facts = skill_evidence_facts(profile, get_ontology())
+
+    assert facts["FastAPI"] == "P1.tech"
+    assert facts["Python"] == "P1.tech"
+    assert all(not fact_id.endswith(".title") for fact_id in facts.values() if fact_id)
+
+
+def test_rest_api_design_is_evidenced_by_apis_in_summary_prose():
+    profile = _profile()
+    profile.projects[0].summary = "Builds a job pipeline exposing REST APIs"
+    profile.skills.append(
+        Skill(
+            name="REST API Design",
+            canonical_name="rest",
+            category=SkillCategory.concept,
+            proficiency=Proficiency.strong,
+        )
+    )
+
+    assert skill_evidence_facts(profile, get_ontology())["REST API Design"] == "P1.summary"
+
+
+def test_llm_pipeline_design_is_evidenced_by_internship_description_prose():
+    profile = _profile()
+    profile.work = []
+    profile.internships = [
+        Experience(
+            role="Intern",
+            company="GameGenesis",
+            duration_months=3,
+            tech=["Python"],
+            description=["Integrated LLM pipelines for CRM automation"],
+        )
+    ]
+    profile.skills.append(
+        Skill(
+            name="LLM pipeline design",
+            canonical_name="llm pipeline design",
+            category=SkillCategory.concept,
+            proficiency=Proficiency.strong,
+        )
+    )
+
+    facts = skill_evidence_facts(profile, get_ontology())
+
+    assert facts["LLM pipeline design"] == "I1.description"
+
+
 def test_git_slash_github_and_plural_acronym_pass_grounding():
     text = "Built Git/GitHub workflows and REST APIs."
     profile = _profile()
@@ -308,6 +378,37 @@ def test_ownership_claim_is_kept_when_the_fact_licenses_it():
     profile = _profile()
     profile.work[0].description = ["Owning the architecture and building services"]
     line = {"text": "Owning the architecture, building all services.", "facts": ["W1.description"]}
+
+    resume = _generate(_payload(experience=[{"bullets": [line]}]), profile=profile)
+
+    assert [b.text for b in resume.experience[0].bullets] == [line["text"]]
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "production-grade",
+        "from scratch",
+        "core",
+        "enterprise",
+        "scalable",
+        "end-to-end",
+        "delivered",
+    ],
+)
+def test_new_strength_terms_are_rejected_without_a_licensing_fact(phrase):
+    line = {"text": f"Built {phrase} systems.", "facts": ["W1.description"]}
+
+    resume = _generate(_payload(experience=[{"bullets": [line]}]))
+
+    assert resume.experience[0].bullets == []
+    assert any(phrase in dropped.reason for dropped in resume.dropped)
+
+
+def test_new_strength_term_is_kept_when_the_fact_licenses_it():
+    profile = _profile()
+    profile.work[0].description = ["Built core systems from scratch"]
+    line = {"text": "Built core systems from scratch.", "facts": ["W1.description"]}
 
     resume = _generate(_payload(experience=[{"bullets": [line]}]), profile=profile)
 
@@ -432,6 +533,58 @@ def test_coverage_derives_apis_and_design_patterns_from_skills():
     assert "FastAPI" in items["APIs"].quote
     assert items["software design patterns"].facts == ["P1.outcomes"]
     assert "idempotency" in items["software design patterns"].quote.lower()
+
+
+def test_data_structures_stays_missing_even_with_a_caching_fact():
+    profile = _profile()
+    profile.projects[0].outcomes = "Implemented caching, circuit breaker and idempotency"
+    parsed = ParsedJD(
+        title="Backend engineer", must_have_skills=["data structures"], nice_to_have_skills=[]
+    )
+
+    resume = _generate(_payload(requirements=[]), profile=profile, parsed_jd=parsed)
+    coverage = {item.requirement: item.status for item in resume.requirements}
+
+    assert coverage["data structures"] == "missing"
+    assert "data structures" in resume.missing_requirements
+
+
+def test_data_structures_is_covered_when_a_fact_names_one():
+    profile = _profile()
+    profile.projects[0].outcomes = "Used a priority queue and a binary tree"
+    parsed = ParsedJD(
+        title="Backend engineer", must_have_skills=["data structures"], nice_to_have_skills=[]
+    )
+
+    resume = _generate(_payload(requirements=[]), profile=profile, parsed_jd=parsed)
+    item = next(i for i in resume.requirements if i.requirement == "data structures")
+
+    assert item.status == "covered"
+    assert item.facts == ["P1.outcomes"]
+
+
+def test_system_design_patterns_is_not_satisfied_by_a_database_alone():
+    profile = _profile()
+    profile.skills = [
+        Skill(
+            name="PostgreSQL",
+            canonical_name="postgresql",
+            category=SkillCategory.database,
+            proficiency=Proficiency.strong,
+        )
+    ]
+    profile.projects[0].tech = ["PostgreSQL"]
+    profile.work[0].tech = ["PostgreSQL"]
+    parsed = ParsedJD(
+        title="Backend engineer",
+        must_have_skills=["system design patterns"],
+        nice_to_have_skills=[],
+    )
+
+    resume = _generate(_payload(requirements=[]), profile=profile, parsed_jd=parsed)
+    coverage = {item.requirement: item.status for item in resume.requirements}
+
+    assert coverage["system design patterns"] == "missing"
 
 
 def test_familiar_cloud_skills_give_partial_cloud_coverage():
