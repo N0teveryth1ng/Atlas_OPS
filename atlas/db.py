@@ -177,15 +177,19 @@ CREATE TABLE IF NOT EXISTS owner_verdicts (
 );
 
 CREATE TABLE IF NOT EXISTS tailored_resumes (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id         INTEGER REFERENCES jobs(id),
-    version        INTEGER NOT NULL,
-    content_json   TEXT NOT NULL,
-    prompt_version TEXT,
-    model          TEXT,
-    profile_hash   TEXT,
-    created_at     TEXT NOT NULL,
-    approved_at    TEXT
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id            INTEGER REFERENCES jobs(id),
+    version           INTEGER NOT NULL,
+    content_json      TEXT NOT NULL,
+    prompt_version    TEXT,
+    generator_version TEXT,
+    model             TEXT,
+    profile_hash      TEXT,
+    tokens            INTEGER,
+    calls             INTEGER,
+    created_at        TEXT NOT NULL,
+    edited_at         TEXT,
+    approved_at       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -239,6 +243,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     resume_cols = {row["name"] for row in conn.execute("PRAGMA table_info(tailored_resumes)")}
     if resume_cols and "profile_hash" not in resume_cols:
         conn.execute("ALTER TABLE tailored_resumes ADD COLUMN profile_hash TEXT")
+    if resume_cols and "generator_version" not in resume_cols:
+        conn.execute("ALTER TABLE tailored_resumes ADD COLUMN generator_version TEXT")
+    if resume_cols and "tokens" not in resume_cols:
+        conn.execute("ALTER TABLE tailored_resumes ADD COLUMN tokens INTEGER")
+    if resume_cols and "calls" not in resume_cols:
+        conn.execute("ALTER TABLE tailored_resumes ADD COLUMN calls INTEGER")
+    if resume_cols and "edited_at" not in resume_cols:
+        conn.execute("ALTER TABLE tailored_resumes ADD COLUMN edited_at TEXT")
 
 
 # --------------------------------------------------------------------------- #
@@ -432,14 +444,20 @@ def save_tailored_resume(
     model: str,
     prompt_version: str,
     profile_hash: str = "",
+    generator_version: str = "",
+    tokens: int | None = None,
+    calls: int | None = None,
+    edited_at: str | None = None,
 ) -> int:
-    """Store one generated tailored resume for a job; return its new id.
+    """Store one generated (or owner-edited) tailored resume; return its new id.
 
     Versions are per job: the stored version is one more than the highest already
-    stored for that job, so every build is kept and auditable. ``approved_at``
-    starts NULL and is only set by :func:`approve_tailored_resume`.
-    ``profile_hash`` is the hash of the profile the resume was built from, used by
-    :func:`find_cached_tailored_resume` to answer a repeat build with no LLM calls.
+    stored for that job, so every build and every edit is kept and auditable.
+    ``approved_at`` starts NULL and is only set by :func:`approve_tailored_resume`.
+    ``profile_hash`` and ``generator_version`` (with ``prompt_version``) form the
+    cache key used by :func:`find_cached_tailored_resume` to answer a repeat build
+    with no LLM calls. ``tokens``/``calls`` record what the build cost, and
+    ``edited_at`` marks a version saved by the owner rather than the model.
     """
     row = conn.execute(
         "SELECT COALESCE(MAX(version), 0) AS v FROM tailored_resumes WHERE job_id = ?",
@@ -448,10 +466,22 @@ def save_tailored_resume(
     version = int(row["v"] if row is not None else 0) + 1
     cur = conn.execute(
         "INSERT INTO tailored_resumes "
-        "(job_id, version, content_json, prompt_version, model, profile_hash, "
-        "created_at, approved_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
-        (job_id, version, content_json, prompt_version, model, profile_hash, _now()),
+        "(job_id, version, content_json, prompt_version, generator_version, model, "
+        "profile_hash, tokens, calls, created_at, edited_at, approved_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        (
+            job_id,
+            version,
+            content_json,
+            prompt_version,
+            generator_version,
+            model,
+            profile_hash,
+            tokens,
+            calls,
+            _now(),
+            edited_at,
+        ),
     )
     conn.commit()
     return int(cur.lastrowid or 0)
@@ -462,20 +492,23 @@ def find_cached_tailored_resume(
     job_id: int,
     profile_hash: str,
     prompt_version: str,
+    generator_version: str = "",
 ) -> dict[str, Any] | None:
-    """The most recent stored resume built from the same profile + prompt version.
+    """The most recent stored resume built from the same profile + prompt + generator.
 
-    A non-``None`` result means the exact ``(profile hash, job id, prompt version)``
-    key was already built, so the caller can return it with zero LLM calls.
+    A non-``None`` result means the exact
+    ``(profile hash, job id, prompt version, generator version)`` key was already
+    built, so the caller can return it with zero LLM calls.
     """
     if not profile_hash:
         return None
     row = conn.execute(
-        "SELECT id, job_id, version, content_json, prompt_version, model, "
-        "created_at, approved_at FROM tailored_resumes "
+        "SELECT id, job_id, version, content_json, prompt_version, generator_version, "
+        "model, tokens, calls, created_at, edited_at, approved_at FROM tailored_resumes "
         "WHERE job_id = ? AND profile_hash = ? AND prompt_version = ? "
+        "AND COALESCE(generator_version, '') = ? "
         "ORDER BY id DESC LIMIT 1",
-        (job_id, profile_hash, prompt_version),
+        (job_id, profile_hash, prompt_version, generator_version),
     ).fetchone()
     return dict(row) if row is not None else None
 
@@ -483,8 +516,8 @@ def find_cached_tailored_resume(
 def latest_tailored_resume(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
     """The most recent tailored resume for a job as a raw dict, or ``None``."""
     row = conn.execute(
-        "SELECT id, job_id, version, content_json, prompt_version, model, "
-        "created_at, approved_at FROM tailored_resumes "
+        "SELECT id, job_id, version, content_json, prompt_version, generator_version, "
+        "model, tokens, calls, created_at, edited_at, approved_at FROM tailored_resumes "
         "WHERE job_id = ? ORDER BY id DESC LIMIT 1",
         (job_id,),
     ).fetchone()
@@ -494,8 +527,9 @@ def latest_tailored_resume(conn: sqlite3.Connection, job_id: int) -> dict[str, A
 def get_tailored_resume(conn: sqlite3.Connection, resume_id: int) -> dict[str, Any] | None:
     """One tailored resume by id as a raw dict, or ``None``."""
     row = conn.execute(
-        "SELECT id, job_id, version, content_json, prompt_version, model, "
-        "created_at, approved_at FROM tailored_resumes WHERE id = ?",
+        "SELECT id, job_id, version, content_json, prompt_version, generator_version, "
+        "model, tokens, calls, created_at, edited_at, approved_at FROM tailored_resumes "
+        "WHERE id = ?",
         (resume_id,),
     ).fetchone()
     return dict(row) if row is not None else None
@@ -523,8 +557,8 @@ def approve_tailored_resume(conn: sqlite3.Connection, resume_id: int) -> None:
 def approved_tailored_resume(conn: sqlite3.Connection, job_id: int) -> dict[str, Any] | None:
     """The most recently approved tailored resume for a job, or ``None``."""
     row = conn.execute(
-        "SELECT id, job_id, version, content_json, prompt_version, model, "
-        "created_at, approved_at FROM tailored_resumes "
+        "SELECT id, job_id, version, content_json, prompt_version, generator_version, "
+        "model, tokens, calls, created_at, edited_at, approved_at FROM tailored_resumes "
         "WHERE job_id = ? AND approved_at IS NOT NULL ORDER BY id DESC LIMIT 1",
         (job_id,),
     ).fetchone()

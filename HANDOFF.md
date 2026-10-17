@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-17)
 
-- Code state as of PR #44, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #44** (base `8abeaa1`).
-- Tests: **1208 passed** (`python -m pytest -q`).
+- Code state as of PR #46, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #46** (base `8abeaa1`).
+- Tests: **1222 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #44
+## Merged PRs #24 to #46
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -53,6 +53,8 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #42 | `462d198` | 2026-10-17T05:52:44Z | prC1e/audit-claim-coverage | fix(resume): stricter claim/coverage grounding; evidence concept skills from prose |
 | #43 | `6cb8caa` | 2026-10-17T06:10:11Z | prC1f/data-structure-nouns | fix(resume): cover 'data structures' only when a fact names a noun form |
 | #44 | `d5fce39` | 2026-10-17T07:36:13Z | prC1d/lexical-grounding-repair | fix(resume): ground bullets by sentence facts, repair thin sections, clean tech |
+| #45 | `90bdd99` | 2026-10-17T11:37:50Z | prC1e/empty-sections-skills-cache | fix(resume): guarantee non-empty sections, cap/dedupe skills, cache on demand |
+| #46 | `511b943` | 2026-10-17T11:50:17Z | prC1e/date-proper-case | fix(resume): render free-text month names in proper case |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -75,7 +77,10 @@ kind, #23 non-job-listing filter.
   quote + source), and deduped reasons (each quote once, split into "Cited on both
   sides" / reasons for / reasons against / "Evidence"), plus **Prepare application**
   (opens `/jobs/{id}/kit` for any decision, including SKIP) and a **Your verdict**
-  form -> `/rejected` with filter rule + reason -> `/health`. **Add a job** (`/add`,
+  form -> `/rejected` with filter rule + reason -> `/health`. The page also offers
+  **Build tailored resume** -> `/jobs/{id}/resume` (background build with a progress
+  page, side-by-side review, inline editing, approval and DOCX/PDF export; PR C2).
+  **Add a job** (`/add`,
   owner-only; PR #33) pastes a JD and runs the same pipeline; since PR #34 it
   evaluates in a background thread and redirects (303) to `/add/progress`, which polls
   `/api/add-status` (current step, Groq rate-limit wait, LLM calls / tokens) and
@@ -102,12 +107,15 @@ kind, #23 non-job-listing filter.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
-## Tailored resume generator (PRs #37, #39, #40, #41, #42, #43, #44, + the empty-section/skills-cache fix)
+## Tailored resume generator (PRs #37, #39, #40, #41, #42, #43, #44, #45, #46, + the C2 review/export UI)
 
 - `atlas/resume.py` + `prompts/tailored_resume.md` (version 4) turn the approved
-  profile and one parsed job into a `TailoredResume`. **No UI yet** (PR C2 adds the
-  job-page button, review page, approval and DOCX/PDF export); the generator is code
-  only and nothing runs it automatically.
+  profile and one parsed job into a `TailoredResume`. Generation stays **on demand
+  only** and nothing runs it automatically; the dashboard UI (button, review page,
+  approval and DOCX/PDF export) is added by PR C2 (see below).
+- The cache key is `(profile hash, job id, prompt version, generator version)`; bump
+  the `GENERATOR_VERSION` constant whenever the resume rules change so a stale resume
+  is never served.
 - Grounding is by profile **fact ids**, not free-text quotes. `build_facts` numbers the
   profile into citable facts and splits every prose field into **sentence** facts
   (`[P1.summary.s1]`, `[P1.outcomes.s2]`, `[I1.s2]`, `[W1.s1]`, `[W1.tech]`,
@@ -176,18 +184,51 @@ kind, #23 non-job-listing filter.
   image, text box, icon or header/footer content, on hidden characters, on empty text
   and on a missing standard heading (Summary/Skills/Experience/Projects/Education).
 - Storage: `tailored_resumes` table (`job_id`, `version`, `content_json`,
-  `prompt_version`, `model`, `profile_hash`, `created_at`, `approved_at`);
-  `save_tailored_resume` versions per job, `latest_tailored_resume`,
-  `find_cached_tailored_resume`, `approve_tailored_resume` (idempotent),
-  `approved_tailored_resume`. Only approved versions are meant to be exported (C2).
+  `prompt_version`, `model`, `profile_hash`, `created_at`, `approved_at`,
+  `generator_version`, `tokens`, `calls`, `edited_at`); `save_tailored_resume` versions
+  per job, `latest_tailored_resume`, `find_cached_tailored_resume`,
+  `approve_tailored_resume` (idempotent), `approved_tailored_resume`. Only approved
+  versions are exported (C2).
 - Determinism and cost: every resume LLM call uses `temperature 0`, and
-  `generate_tailored_resume_cached` caches by `(profile hash, job id, prompt version)`
-  so a repeat build returns the identical resume with **zero** LLM calls. Generation is
-  **on demand only** (never in a bulk run) and reports the tokens and calls it spent.
+  `generate_tailored_resume_cached` caches by
+  `(profile hash, job id, prompt version, generator version)` so a repeat build returns
+  the identical resume with **zero** LLM calls (`regenerate=True` bypasses the cache).
+  Generation is **on demand only** (never in a bulk run) and reports the tokens and
+  calls it spent.
 - `generate_tailored_resume_under_caps` wraps the client in `_BudgetedClient` (per-run
   call/token caps), records tokens via `add_llm_tokens`, and lets
   `GroqDailyLimitReached` propagate. Profile/resume text never reaches Braintrust
   (prompt fingerprints only; covered by a test).
+
+## Tailored resume review screen + export (PR C2)
+
+- The per-job result page has a **Build tailored resume** link -> `GET /jobs/{id}/resume`.
+  When no resume exists the page offers to build one with an estimated token cost; an
+  **Approve a version before exporting** guard blocks export until a version is approved.
+- `POST /jobs/{id}/resume` starts a build in a **background thread under the existing
+  single-run lock** and 303-redirects to `/jobs/{id}/resume/progress`, which polls
+  `/api/jobs/{id}/resume-status` for the current step, Groq rate-limit wait, and the
+  tokens / calls spent. `regenerate=1` bypasses the cache (with a confirm showing the
+  estimated tokens). Generation is on demand only (never in a bulk run); the daily-limit
+  guard and per-run caps apply. All POSTs require login and a same-origin check.
+- The review page shows the **base vs tailored resume** and the shared
+  Missing requirements / Familiar skills / Additional tools / ATS-lint result. Every
+  line carries its cited fact ids, a **source badge** (`model` / `profile-verbatim` /
+  `owner-edited`) and any claim-strength flags; warnings are **deduped to one per section
+  plus a count** of verbatim fallbacks.
+- **Inline editing** (`POST /jobs/{id}/resume/edit`): each line is editable; an edit is
+  saved as a **new version** marked `owner-edited`, and an edit that introduces a
+  technology or number the profile does not contain shows a **warning (not blocked)**.
+  Owner edits are stored with an empty `profile_hash` so the generator cache never
+  serves them.
+- **Approve** (`POST /jobs/{id}/resume/approve`) marks a version approved; only approved
+  versions export. `atlas/export.py` writes an ATS-friendly **single column** DOCX
+  (`python-docx==1.2.0`, MIT) and PDF (`fpdf2==2.8.9`, LGPL-3.0-only) with real
+  selectable text, standard headings (Summary / Skills / Experience / Projects /
+  Education), a standard font, **no tables / images / text boxes / header-footer**, and
+  filename `Name_Role_Company`. Text is ASCII-normalized and marker-free so the DOCX and
+  PDF text match the approved content exactly. `lxml` (BSD) backs `python-docx`.
+- **No auto-submission anywhere.** The apply link only opens the job page.
 
 ## Profile editor (PR #38)
 
@@ -329,16 +370,18 @@ Agreement"; the page's "Terms of Use" link points to
 
 Nothing below is implemented. Each needs the owner's go-ahead.
 
-- **(a) Tailored resume builder.** Generator BUILT (PR #37; fact-ID grounding #39;
+- **(a) Tailored resume builder.** BUILT (generator PR #37; fact-ID grounding #39;
   claim-strength + coverage + evidence-linked skills #40; sentence-level facts +
   thin-section repair #44; empty-section guarantee, verbatim fallback, skills cap and
-  on-demand cache in the current fix; `atlas/resume.py`, no UI);
+  on-demand cache #45; proper-case dates #46; review screen + approval + DOCX/PDF export
+  in PR C2 — `atlas/resume.py`, `atlas/export.py`, dashboard routes);
   profile editor BUILT (PR #38; `/profile` captures internships, work, projects,
   education, links, certifications). It rewrites and reorders content drawn only from
   the approved profile; every generated line traces back to a profile fact, and unmet
-  requirements are listed but never added. Still planned: the dashboard button, review
-  page (diff vs base resume + per-line quote/source), owner approval and ATS-friendly
-  single-column DOCX/PDF export (PR C2). No auto-submission.
+  requirements are listed but never added. The dashboard button, side-by-side review
+  page (base vs tailored, per-line fact ids / source badge / claim flags), inline
+  editing (new `owner-edited` version), owner approval and ATS-friendly single-column
+  DOCX/PDF export are now in place. No auto-submission.
 - **(b) "Add a job" dashboard page.** BUILT (PR #33; background + progress page in
   PR #34). Owner pastes a JD's text and link; it is evaluated through the same
   pipeline with `source = "owner_added"`. The URL is **never fetched**.
