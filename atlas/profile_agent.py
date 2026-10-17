@@ -24,6 +24,7 @@ from .schemas import (
     ProfileExtraction,
     Skill,
 )
+from .text import clean_tech_items
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,18 @@ def _extraction_to_profile(
         experience_level=level,
         education=extraction.education,
         skills=skills,
-        projects=extraction.projects,
-        internships=extraction.internships,
-        work=extraction.work,
+        projects=[
+            project.model_copy(update={"tech": clean_tech_items(project.tech)})
+            for project in extraction.projects
+        ],
+        internships=[
+            entry.model_copy(update={"tech": clean_tech_items(entry.tech)})
+            for entry in extraction.internships
+        ],
+        work=[
+            entry.model_copy(update={"tech": clean_tech_items(entry.tech)})
+            for entry in extraction.work
+        ],
         target_roles=extraction.target_roles,
         certifications=extraction.certifications,
         ambiguities=ambiguities,

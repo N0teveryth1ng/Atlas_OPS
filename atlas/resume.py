@@ -3,12 +3,15 @@
 Given the approved profile and one parsed job, draft a resume tailored to that job.
 Grounding is by *fact IDs*, not free-text quotes:
 
-* the profile is rendered to the model as numbered facts with stable ids
-  (``[P1.summary]``, ``[I1.description]``, ``[ED1.line]``, ...);
+* the profile is rendered to the model as numbered facts with stable ids; prose fields
+  are split into sentence facts (``[P1.summary.s1]``, ``[I1.s1]``, ``[ED1.line]``, ...);
 * every summary sentence and bullet must cite one or more of those ids;
 * code maps each id back to its verbatim text and verifies that every technology,
   proper noun and number in the line appears in the cited text (or that entry's tech
   list), so a line cannot add a claim the cited facts do not contain;
+* every content word of a line (nouns/adjectives/adverbs, minus the leading verb, stop
+  words and a short neutral list) must also appear in the cited text by stem or through a
+  small synonym map; more than one ungrounded content word drops the line;
 * skills are assembled in code, never by the model: JD-matching profile skills first,
   then the other non-familiar skills, with "familiar" skills in a separate group;
 * a line is rejected when it is third-person / meta, when a bullet does not start
@@ -53,6 +56,7 @@ from .prompt_store import load_prompt
 from .render import render_job, render_parsed_jd
 from .schemas import CandidateProfile, EvidenceSource, Job, ParsedJD, Proficiency
 from .skills import SkillOntology, get_ontology
+from .text import clean_tech_items
 
 logger = logging.getLogger(__name__)
 
@@ -67,45 +71,53 @@ SUMMARY_MAX = 3
 #: Skills section counts once toward each keyword it lists.
 KEYWORD_MAX = 3
 
+#: Fewer than this many grounded internship bullets triggers the one repair pass.
+MIN_INTERNSHIP_BULLETS = 3
+
 #: Headings an ATS expects, in order. A clean layout has all of them.
 STANDARD_HEADINGS: tuple[str, ...] = ("Summary", "Skills", "Experience", "Projects", "Education")
 
 #: Heading for the second, lower-confidence skill group.
 FAMILIAR_HEADING = "Familiar with (confirm before use)"
 
-#: Words that claim ownership, leadership, reliability or scale. Each must appear
-#: verbatim in the cited fact text, so a "Sole engineer" fact cannot license "led"
-#: or "architected", and a plain project cannot license "production-grade",
-#: "from scratch", "core", "enterprise", "scalable", "end-to-end" or "delivered".
+#: Words that claim ownership, leadership, reliability or scale. Single-word stems are
+#: matched as a *prefix* of a line token (so "delivering" is caught by "deliver" and
+#: "scalable" by "scal"), and a stem is allowed only when the same stem appears in the
+#: cited fact. Multi-word phrases must appear whole. "led" is matched as a whole token so
+#: "Apex Ledger" cannot license it. A "Sole engineer" fact cannot license "led" or
+#: "architected", and a plain project cannot license "production-grade", "from scratch",
+#: "core", "enterprise", "scalable", "end-to-end" or "delivered".
 _CLAIM_TERMS: tuple[str, ...] = (
-    "led",
-    "lead",
-    "leads",
-    "leading",
-    "owned",
-    "owning",
+    "deliver",
     "own",
-    "owns",
-    "architected",
+    "lead",
+    "led",
     "architect",
+    "manage",
+    "mentor",
+    "robust",
+    "reliab",
+    "scal",
     "production-grade",
     "from scratch",
     "core",
     "enterprise",
-    "scalable",
     "end-to-end",
-    "delivered",
     "zero-downtime",
-    "robust",
-    "reliable",
     "high-scale",
     "millions",
     "expert",
-    "mentored",
-    "mentor",
-    "managed",
-    "managing",
-    "manage",
+)
+
+#: Claim terms matched as a whole token (never a prefix).
+_CLAIM_EXACT: frozenset[str] = frozenset({"led"})
+
+#: Multi-word claim phrases, matched as a whole token set.
+_CLAIM_PHRASES: tuple[str, ...] = tuple(term for term in _CLAIM_TERMS if " " in term or "-" in term)
+
+#: Single-word claim stems, matched as a prefix of a line token.
+_CLAIM_PREFIXES: tuple[str, ...] = tuple(
+    term for term in _CLAIM_TERMS if term not in _CLAIM_EXACT and term not in _CLAIM_PHRASES
 )
 
 #: Generic nouns that never need grounding (they carry no technology or number).
@@ -141,6 +153,36 @@ _GENERIC_TERMS: frozenset[str] = frozenset(
 
 #: Synonyms applied on both sides of a grounding comparison.
 _SYNONYMS: dict[str, str] = {"ai": "llm", "api": "rest", "apis": "rest"}
+
+#: Stop words a content-word grounding check ignores (function words, not facts).
+_STOPWORDS: frozenset[str] = frozenset(
+    "a am an and any are as at be been being below between both but by can could did do does "  # noqa: SIM905 - one word list reads better than one word per line
+    "doing done down during each even every few for from further get gets got had has have having "
+    "he her here hers him his how i in into is it its just make makes many may me might mine more "
+    "most much must my no nor not of off on once only onto or other others our ours out over per "
+    "shall she should so some such than that the their theirs them then there these they this those "
+    "through to too toward towards under until up upon use used uses using very via we well were "
+    "what when where which while who whom whose why will with within without would yet you your yours".split()
+)
+
+#: Content words that never need grounding: the generic nouns plus a few structural
+#: nouns (system, service, application, feature) the owner named as neutral.
+_NEUTRAL_CONTENT: frozenset[str] = _GENERIC_TERMS | frozenset({"feature", "features"})
+
+#: A small synonym map so equivalent verbs and words ground each other. Keys are the
+#: singular/stemmed surface forms; every value is the canonical content key.
+_CONTENT_SYNONYMS: dict[str, str] = {
+    "build": "implement",
+    "built": "implement",
+    "creat": "implement",
+    "create": "implement",
+    "develop": "implement",
+    "implement": "implement",
+    "api": "endpoint",
+    "endpoint": "endpoint",
+    "llm": "ai",
+    "ai": "ai",
+}
 
 #: Data structures and algorithms a "data structures" requirement may lean on. Only
 #: the noun forms are matched (see ``_data_structure_named``): a plural that is also a
@@ -463,6 +505,17 @@ class ResumeDraft(BaseModel):
     requirements: list[RequirementDraft] = Field(default_factory=list)
 
 
+class ResumeRepair(BaseModel):
+    """A repair pass: replacement bullets for the thin sections only.
+
+    ``experience``/``projects`` are aligned to the profile's entries (same order as the
+    draft); a section that is not thin stays empty.
+    """
+
+    experience: list[DraftEntry] = Field(default_factory=list)
+    projects: list[DraftEntry] = Field(default_factory=list)
+
+
 class ResumeHeader(BaseModel):
     name: str | None = None
     email: str | None = None
@@ -592,6 +645,21 @@ def _raw_words(text: str) -> list[str]:
     return [m.group(0).lower() for m in _RAW_WORD_RE.finditer(text or "")]
 
 
+def _stem(token: str) -> str:
+    """A crude stem so "enabling"/"enabled" compare with "enable"."""
+    value = _singular(token or "")
+    for suffix in ("ing", "ed", "ly", "ment", "ion"):
+        if value.endswith(suffix) and len(value) - len(suffix) >= 3:
+            return value[: -len(suffix)]
+    return value
+
+
+def _content_key(token: str) -> str:
+    """The comparable key for a content word (synonyms first, then a light stem)."""
+    stemmed = _stem(token)
+    return _CONTENT_SYNONYMS.get(stemmed, stemmed)
+
+
 def _data_structure_named(text: str, term: str) -> bool:
     """Whether ``text`` names the data structure ``term`` as a noun.
 
@@ -671,6 +739,7 @@ class Fact(BaseModel):
     text: str
     entry: str
     tech: list[str] = Field(default_factory=list)
+    kind: str = "field"
 
 
 def _education_line(education: Any) -> str:
@@ -683,41 +752,58 @@ def _education_line(education: Any) -> str:
     return head
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split prose into sentences so each can be cited on its own."""
+    parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    return [part.strip() for part in parts if part.strip()]
+
+
 def build_facts(profile: CandidateProfile) -> dict[str, Fact]:
-    """Numbered, citable facts from the profile (skills are deliberately excluded)."""
+    """Numbered, citable facts from the profile (skills are deliberately excluded).
+
+    Prose fields are split into sentence facts (``I1.s1``, ``P1.summary.s1``,
+    ``P1.outcomes.s2`` ...) so a bullet cites the exact sentence it rests on and cannot
+    borrow unrelated detail from the rest of the field. Each fact carries a ``kind``
+    (``tech``/``prose``/``field``) used to route evidence and coverage.
+    """
     facts: dict[str, Fact] = {}
 
-    def add(fact_id: str, text: str | None, entry: str, tech: list[str]) -> None:
+    def add(fact_id: str, text: str | None, entry: str, tech: list[str], kind: str) -> None:
         value = (text or "").strip()
         if value:
-            facts[fact_id] = Fact(id=fact_id, text=value, entry=entry, tech=list(tech))
+            facts[fact_id] = Fact(id=fact_id, text=value, entry=entry, tech=list(tech), kind=kind)
+
+    def add_sentences(prefix: str, text: str | None, entry: str, tech: list[str]) -> None:
+        for index, sentence in enumerate(_split_sentences(text or ""), start=1):
+            add(f"{prefix}.s{index}", sentence, entry, tech, "prose")
 
     for index, project in enumerate(profile.projects, start=1):
         key = f"P{index}"
-        add(f"{key}.title", project.title, key, project.tech)
-        add(f"{key}.summary", project.summary, key, project.tech)
-        add(f"{key}.outcomes", project.outcomes, key, project.tech)
-        add(f"{key}.tech", ", ".join(project.tech), key, project.tech)
+        tech = clean_tech_items(project.tech)
+        add(f"{key}.title", project.title, key, tech, "field")
+        add_sentences(f"{key}.summary", project.summary, key, tech)
+        add_sentences(f"{key}.outcomes", project.outcomes, key, tech)
+        add(f"{key}.tech", ", ".join(tech), key, tech, "tech")
     for label, entries in (("I", profile.internships), ("W", profile.work)):
         for index, experience in enumerate(entries, start=1):
             key = f"{label}{index}"
-            tech = experience.tech
-            add(f"{key}.role", experience.role, key, tech)
-            add(f"{key}.company", experience.company, key, tech)
-            add(f"{key}.dates", experience.dates, key, tech)
-            add(f"{key}.description", " ".join(experience.description), key, tech)
-            add(f"{key}.tech", ", ".join(tech), key, tech)
+            tech = clean_tech_items(experience.tech)
+            add(f"{key}.role", experience.role, key, tech, "field")
+            add(f"{key}.company", experience.company, key, tech, "field")
+            add(f"{key}.dates", experience.dates, key, tech, "field")
+            add_sentences(key, " ".join(experience.description), key, tech)
+            add(f"{key}.tech", ", ".join(tech), key, tech, "tech")
     for index, education in enumerate(profile.education, start=1):
-        add(f"ED{index}.line", _education_line(education), f"ED{index}", [])
+        add(f"ED{index}.line", _education_line(education), f"ED{index}", [], "field")
     if profile.certifications:
-        add("CERT", ", ".join(profile.certifications), "CERT", [])
+        add("CERT", ", ".join(profile.certifications), "CERT", [], "field")
     link_parts = [
         f"{label}: {value}"
         for label in ("github", "linkedin", "portfolio")
         if (value := getattr(profile.links, label, None))
     ]
     if link_parts:
-        add("LINK", "; ".join(link_parts), "LINK", [])
+        add("LINK", "; ".join(link_parts), "LINK", [], "field")
     return facts
 
 
@@ -776,10 +862,10 @@ def _evidence_index(profile: CandidateProfile, ontology: SkillOntology) -> dict[
     """Map an evidence token to the fact id that provides it.
 
     Evidence comes from every project/internship/work *tech list* (its ``.tech`` fact)
-    **and** from a project's ``.summary``/``.outcomes`` prose and an internship/work
-    ``.description`` prose. So a concept skill (Idempotency, Caching, Circuit Breakers,
-    REST API Design, LLM pipeline design) can be evidenced by prose, not only a tech
-    list. ``API``/``REST`` and ``AI``/``LLM`` are synonyms on both sides.
+    **and** from a project's summary/outcomes prose and an internship/work description
+    prose (now split into sentence facts). So a concept skill (Idempotency, Caching,
+    Circuit Breakers, REST API Design, LLM pipeline design) can be evidenced by prose, not
+    only a tech list. ``API``/``REST`` and ``AI``/``LLM`` are synonyms on both sides.
     """
     facts = build_facts(profile)
     index: dict[str, str] = {}
@@ -790,28 +876,28 @@ def _evidence_index(profile: CandidateProfile, ontology: SkillOntology) -> dict[
             index[key] = fact_id
 
     for fact in facts.values():
-        if fact.id.endswith(".tech"):
+        if fact.kind == "tech":
             for tech in fact.tech:
                 add(_canonical(tech, ontology), fact.id)
                 for token in _tokenize(tech):
                     add(token, fact.id)
-        elif fact.id.endswith((".summary", ".outcomes", ".description")):
+        elif fact.kind == "prose":
             for token in _tokenize(fact.text):
                 add(token, fact.id)
     return index
 
 
-def _skill_evidence_fact(skill: Any, index: dict[str, str], ontology: SkillOntology) -> str:
-    """The fact id that evidences ``skill``, or ``""`` when nothing does.
+def _evidence_fact_for_name(name: str, index: dict[str, str], ontology: SkillOntology) -> str:
+    """The fact id in ``index`` that evidences a skill name, or ``""``.
 
-    Prefer the skill's canonical form, then any of its name tokens (ignoring generic
-    nouns), then — for an all-generic concept name such as "LLM pipeline design" — every
-    token of length >= 3.
+    Prefer the canonical form, then any of the name's tokens (ignoring generic nouns),
+    then — for an all-generic concept name such as "LLM pipeline design" — every token of
+    length >= 3.
     """
-    canonical = _canonical(skill.name or skill.canonical_name, ontology)
+    canonical = _canonical(name, ontology)
     if canonical in index:
         return index[canonical]
-    tokens = [token for token in _tokenize(skill.name) if len(token) > 1]
+    tokens = [token for token in _tokenize(name) if len(token) > 1]
     meaningful = [token for token in tokens if token not in _GENERIC_TERMS]
     for token in meaningful or [token for token in tokens if len(token) >= 3]:
         if token in index:
@@ -822,14 +908,64 @@ def _skill_evidence_fact(skill: Any, index: dict[str, str], ontology: SkillOntol
     return ""
 
 
+def _skill_evidence_fact(skill: Any, index: dict[str, str], ontology: SkillOntology) -> str:
+    """The fact id that evidences ``skill``, or ``""`` when nothing does."""
+    return _evidence_fact_for_name(skill.name or skill.canonical_name, index, ontology)
+
+
+def _all_tech_items(profile: CandidateProfile) -> list[str]:
+    """Every project/internship/work tech item, cleaned and deduplicated in order."""
+    items: list[str] = []
+    for project in profile.projects:
+        items.extend(project.tech)
+    for experience in (*profile.internships, *profile.work):
+        items.extend(experience.tech)
+    return clean_tech_items(items)
+
+
+#: A trailing parenthetical on a tech item ("PostgreSQL (Neon)" -> base + "Neon").
+_TECH_PAREN_RE = re.compile(r"^(?P<base>.*?)\s*[\(\[]\s*(?P<inner>[^\)\]]+?)\s*[\)\]]\s*$")
+
+
+def _expand_tech_item(item: str) -> list[str]:
+    """A tech item plus its parenthetical base/inner so "PostgreSQL (Neon)" yields Neon."""
+    out = [item]
+    match = _TECH_PAREN_RE.match(item)
+    if match:
+        for part in (match.group("base").strip(), match.group("inner").strip()):
+            if part and part not in out:
+                out.append(part)
+    return out
+
+
+def _tech_skill_names(profile: CandidateProfile, ontology: SkillOntology) -> list[str]:
+    """Skill names taken straight from the project/internship tech lists, in order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in _all_tech_items(profile):
+        for candidate in _expand_tech_item(item):
+            value = candidate.strip()
+            if not value:
+                continue
+            key = _canonical(value, ontology) or value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(value)
+    return out
+
+
 def skill_evidence_facts(profile: CandidateProfile, ontology: SkillOntology) -> dict[str, str]:
-    """The evidence fact id for each of the owner's skills (``""`` when un-evidenced)."""
+    """The evidence fact id for each shown skill (owner skills + tech-list skills)."""
     index = _evidence_index(profile, ontology)
     out: dict[str, str] = {}
     for skill in profile.skills:
         name = strip_proficiency(skill.name)
         if name and name not in out:
             out[name] = _skill_evidence_fact(skill, index, ontology)
+    for name in _tech_skill_names(profile, ontology):
+        if name and name not in out:
+            out[name] = _evidence_fact_for_name(name, index, ontology)
     return out
 
 
@@ -838,32 +974,58 @@ def build_skills(
 ) -> tuple[list[str], list[str]]:
     """Return ``(skills, familiar)``:
 
-    ``skills`` = JD-matching first, then other skills that are evidenced in a
-    project/internship/work tech list or in a project summary/outcomes or an
-    internship/work description, or confirmed by the owner. ``familiar`` = the
-    "Familiar with (confirm before use)" group: familiar-proficiency skills and any
-    skill with no evidence and no confirmation. Names are the profile's own, with any
-    proficiency suffix stripped.
+    ``skills`` = JD-matching first, then other skills. A skill is in the main group when
+    it is confirmed, or evidenced in a project/internship/work **tech list** (so a
+    tech-list technology, even one the profile only marked "familiar", is promoted), or
+    evidenced elsewhere with a non-familiar proficiency. Every project/internship/work
+    technology is also added as an evidence-linked skill. ``familiar`` = the "Familiar
+    with (confirm before use)" group. Names are the profile's own, with any proficiency
+    suffix stripped.
     """
     jd_canonical = _jd_canonical(parsed_jd, ontology)
     index = _evidence_index(profile, ontology)
+    tech_index: dict[str, str] = {}
+    for fact in build_facts(profile).values():
+        if fact.kind != "tech":
+            continue
+        for tech in fact.tech:
+            for value in (_canonical(tech, ontology), *_tokenize(tech)):
+                key = _SYNONYMS.get(value, value)
+                if key and key not in tech_index:
+                    tech_index[key] = fact.id
     matching: list[str] = []
     others: list[str] = []
     familiar: list[str] = []
     seen: set[str] = set()
+
+    def place(name: str, canonical: str) -> None:
+        if canonical in jd_canonical:
+            matching.append(name)
+        else:
+            others.append(name)
+
     for skill in profile.skills:
         canonical = _canonical(skill.name or skill.canonical_name, ontology)
         if canonical in seen:
             continue
         seen.add(canonical)
         name = strip_proficiency(skill.name)
-        evidenced = skill.confirmed or bool(_skill_evidence_fact(skill, index, ontology))
-        if skill.proficiency == Proficiency.familiar or not evidenced:
+        evidenced = bool(_skill_evidence_fact(skill, index, ontology))
+        tech_evidenced = bool(_skill_evidence_fact(skill, tech_index, ontology))
+        if skill.confirmed or tech_evidenced:
+            place(name, canonical)
+        elif skill.proficiency == Proficiency.familiar or not evidenced:
             familiar.append(name)
-        elif canonical in jd_canonical:
-            matching.append(name)
         else:
-            others.append(name)
+            place(name, canonical)
+
+    for name in _tech_skill_names(profile, ontology):
+        canonical = _canonical(name, ontology)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        place(name, canonical)
+
     return matching + others, familiar
 
 
@@ -940,14 +1102,50 @@ def _ungrounded(
     return sorted(set(flagged))
 
 
+def _ungrounded_content(text: str, grounded_tokens: set[str]) -> list[str]:
+    """Content words (nouns/adjectives/adverbs) absent from the cited facts.
+
+    Ignore the leading verb (index 0), stop words and the neutral generic nouns. Two
+    words ground each other when they share a stem or a small synonym
+    (built/created/developed/implemented, API/endpoint, LLM/AI). The caller drops the line
+    when more than one content word is ungrounded.
+    """
+    tokens = _tokenize(text)
+    if not tokens:
+        return []
+    grounded_keys = {_content_key(token) for token in grounded_tokens}
+    flagged: list[str] = []
+    for index, token in enumerate(tokens):
+        if index == 0:
+            continue
+        if token in _STOPWORDS or token in _NEUTRAL_CONTENT:
+            continue
+        if _content_key(token) in grounded_keys:
+            continue
+        flagged.append(token)
+    return sorted(set(flagged))
+
+
 def _claim_error(text: str, grounded: set[str]) -> str:
-    """Reject a strength/ownership claim whose words are absent from the cited facts."""
+    """Reject a strength/ownership claim whose words are absent from the cited facts.
+
+    A single-word stem matches any line token that *starts with* the stem, and is licensed
+    only by a cited token that starts with the same stem, so "delivering" needs a fact
+    that says "deliver...". Multi-word phrases must appear whole; "led" is matched whole.
+    """
     line_tokens = set(_tokenize(text))
     grounded = set(grounded) | {_SYNONYMS.get(token, token) for token in grounded}
-    for term in _CLAIM_TERMS:
-        term_tokens = set(_tokenize(term))
-        if term_tokens and term_tokens <= line_tokens and not term_tokens <= grounded:
+    for stem in _CLAIM_PREFIXES:
+        matched = next((token for token in sorted(line_tokens) if token.startswith(stem)), None)
+        if matched and not any(token.startswith(stem) for token in grounded):
+            return f"claim not supported by cited facts: '{matched}'"
+    for term in sorted(_CLAIM_EXACT):
+        if term in line_tokens and term not in grounded:
             return f"claim not supported by cited facts: '{term}'"
+    for phrase in _CLAIM_PHRASES:
+        phrase_tokens = set(_tokenize(phrase))
+        if phrase_tokens and phrase_tokens <= line_tokens and not phrase_tokens <= grounded:
+            return f"claim not supported by cited facts: '{phrase}'"
     return ""
 
 
@@ -998,6 +1196,9 @@ class _Grounder:
         claim = _claim_error(text, allowed | tech_tokens)
         if claim:
             return False, claim
+        ungrounded = _ungrounded_content(text, allowed | tech_tokens)
+        if len(ungrounded) > 1:
+            return False, f"content words not in cited facts: {', '.join(ungrounded)}"
         counts = _keyword_counts(text, self.jd_tokens)
         over = [key for key, value in counts.items() if self.counts[key] + value > KEYWORD_MAX]
         if over:
@@ -1185,6 +1386,20 @@ def _targets_for_requirement(name: str, ontology: SkillOntology) -> list[str]:
     return targets
 
 
+def _requirement_named_in(name: str, text: str) -> bool:
+    """Whether the requirement's own meaningful words appear in a cited text.
+
+    A requirement met only through an adjacent technology ("security awareness" via a
+    fact that mentions JWT) is not *named*, so a free-text "covered" judgement for it
+    degrades to "partial" (item 7). A requirement made of generic nouns only is treated
+    as named, so it is never downgraded this way.
+    """
+    tokens = {token for token in _tokenize(name) if len(token) > 2 and token not in _GENERIC_TERMS}
+    if not tokens:
+        return True
+    return bool(tokens & set(_tokenize(text)))
+
+
 def _classify_requirements(
     profile: CandidateProfile,
     parsed_jd: ParsedJD,
@@ -1239,9 +1454,12 @@ def _classify_requirements(
                     if draft.quote and quote_valid(
                         draft.quote, EvidenceSource.profile, "", cited_text
                     ):
+                        status = draft.status
+                        if status == "covered" and not _requirement_named_in(name, cited_text):
+                            status = "partial"
                         coverage = RequirementCoverage(
                             requirement=name,
-                            status=draft.status,
+                            status=status,
                             facts=[fact.id for fact in cited],
                             quote=draft.quote,
                         )
@@ -1284,6 +1502,46 @@ def _draft_errors(draft: ResumeDraft) -> list[str]:
     return errors
 
 
+def _join_and(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+
+def _code_summary(profile: CandidateProfile, skills: list[str]) -> ResumeLine:
+    """The summary's first sentence, assembled in code from profile fields + top skills.
+
+    No model sentence can state the candidate's level/experience/skills more reliably, and
+    a project sentence must never stand in for the summary.
+    """
+    level = getattr(profile.experience_level, "value", profile.experience_level)
+    level = str(level or "fresher").strip().capitalize()
+    role = (profile.target_roles[0] if profile.target_roles else "").strip().lower()
+    if not role:
+        role = "software"
+    if "developer" not in role and "engineer" not in role:
+        role = f"{role} developer"
+    internship_months = sum(entry.duration_months or 0 for entry in profile.internships)
+    months = internship_months or profile.total_experience_months or 0
+    top = [name for name in skills[:3] if name]
+    scope = ("internship experience" if internship_months else "experience") if months else ""
+    if top and months:
+        text = f"{level} {role} with {months} months of {scope} in {_join_and(top)}."
+    elif top:
+        text = f"{level} {role} with experience in {_join_and(top)}."
+    else:
+        text = f"{level} {role} with hands-on experience."
+    return ResumeLine(text=text, facts=[])
+
+
+def _cites_only_projects(line: ResumeLine, facts: dict[str, Fact]) -> bool:
+    """True when every cited fact belongs to a project (so it cannot be the summary)."""
+    ids = [fact_id for fact_id in line.facts if fact_id in facts]
+    return bool(ids) and all(fact_id.startswith("P") for fact_id in ids)
+
+
 def _assemble(
     draft: ResumeDraft,
     *,
@@ -1299,9 +1557,15 @@ def _assemble(
     grounder.seed_skill_keywords([*skills, *familiar])
 
     dropped: list[DroppedLine] = []
-    summary = _keep_lines(draft.summary, grounder, "summary", is_bullet=False, dropped=dropped)[
-        :SUMMARY_MAX
+    code_line = _code_summary(profile, skills)
+    grounder.counts.update(_keyword_counts(code_line.text, grounder.jd_tokens))
+    model_summary = _keep_lines(
+        draft.summary, grounder, "summary", is_bullet=False, dropped=dropped
+    )
+    model_summary = [
+        line for line in model_summary if not _cites_only_projects(line, grounder.facts)
     ]
+    summary = [code_line, *model_summary[: SUMMARY_MAX - 1]]
 
     profile_experience = [*profile.internships, *profile.work]
     experience: list[ExperienceEntry] = []
@@ -1328,7 +1592,7 @@ def _assemble(
         projects.append(
             ProjectEntry(
                 title=project.title,
-                tech=list(project.tech),
+                tech=clean_tech_items(project.tech),
                 bullets=_keep_lines(
                     bullets,
                     grounder,
@@ -1391,6 +1655,85 @@ def _refusal(
     )
 
 
+def _thin_sections(
+    resume: TailoredResume, profile: CandidateProfile
+) -> tuple[list[int], list[int]]:
+    """Experience indices (internships) and project indices left too thin after validation.
+
+    The internship section is thin when it has fewer than ``MIN_INTERNSHIP_BULLETS``
+    grounded bullets in total; a project is thin when it has no bullets at all.
+    """
+    internship_indices = list(range(len(profile.internships)))
+    internship_bullets = sum(
+        len(resume.experience[index].bullets)
+        for index in internship_indices
+        if index < len(resume.experience)
+    )
+    thin_experience = (
+        internship_indices
+        if profile.internships and internship_bullets < MIN_INTERNSHIP_BULLETS
+        else []
+    )
+    thin_projects = [index for index, project in enumerate(resume.projects) if not project.bullets]
+    return thin_experience, thin_projects
+
+
+def _repair_user(
+    base_user: str,
+    thin_experience: list[int],
+    thin_projects: list[int],
+    resume: TailoredResume,
+) -> str:
+    """The single repair prompt: ask only for grounded replacements for thin sections."""
+    labels: list[str] = []
+    if thin_experience:
+        labels.append("the internship experience section")
+    if thin_projects:
+        labels.append("project " + ", ".join(str(index + 1) for index in thin_projects))
+    dropped = [f"- {line.text}: {line.reason}" for line in resume.dropped]
+    fixed = "the internship (one bullet per fact sentence, three or more in total)"
+    parts = [
+        base_user,
+        "",
+        "## Repair pass",
+        "A previous draft left these sections with too few grounded bullets: "
+        + "; ".join(labels)
+        + ".",
+        "Rewrite ONLY those sections. Everywhere else, return an empty list.",
+        "Lines that already failed validation (do not repeat their mistakes):",
+        *(dropped or ["- (none)"]),
+        f"Focus on {fixed}.",
+        (
+            'Return ONLY the "experience" and "projects" keys, each an array in the SAME '
+            "order as the candidate facts (fill only the thin sections; empty bullets elsewhere)."
+        ),
+        (
+            "Consider EVERY internship sentence for a bullet; condense or reword only, add "
+            "nothing. Cite sentence ids like [I1.s2] or [P2.outcomes.s1]."
+        ),
+    ]
+    return "\n".join(parts)
+
+
+def _merge_repair(
+    draft: ResumeDraft,
+    repair: ResumeRepair,
+    thin_experience: list[int],
+    thin_projects: list[int],
+) -> None:
+    """Copy repaired bullets into the draft for the thin sections only."""
+    while len(draft.experience) <= max(thin_experience, default=-1):
+        draft.experience.append(DraftEntry())
+    while len(draft.projects) <= max(thin_projects, default=-1):
+        draft.projects.append(DraftEntry())
+    for index in thin_experience:
+        if index < len(repair.experience) and repair.experience[index].bullets:
+            draft.experience[index] = repair.experience[index]
+    for index in thin_projects:
+        if index < len(repair.projects) and repair.projects[index].bullets:
+            draft.projects[index] = repair.projects[index]
+
+
 def generate_tailored_resume(
     client: LLMClient,
     *,
@@ -1432,14 +1775,39 @@ def generate_tailored_resume(
             MAX_RESUME_RETRIES + 1,
             errors,
         )
-    return _assemble(
-        cast(ResumeDraft, draft),
+
+    draft = cast(ResumeDraft, draft)
+    resume = _assemble(
+        draft,
         profile=profile,
         parsed_jd=parsed_jd,
         version=version,
         model=model,
         ontology=ontology,
     )
+    thin_experience, thin_projects = _thin_sections(resume, profile)
+    if thin_experience or thin_projects:
+        logger.info(
+            "tailored-resume repair pass: %s thin experience entry/entries, %s empty project(s)",
+            len(thin_experience),
+            len(thin_projects),
+        )
+        repair = client.call_json(
+            schema=ResumeRepair,
+            system=system_prompt,
+            user=_repair_user(base_user, thin_experience, thin_projects, resume),
+            model=model,
+        )
+        _merge_repair(draft, cast(ResumeRepair, repair), thin_experience, thin_projects)
+        resume = _assemble(
+            draft,
+            profile=profile,
+            parsed_jd=parsed_jd,
+            version=version,
+            model=model,
+            ontology=ontology,
+        )
+    return resume
 
 
 def generate_tailored_resume_under_caps(
