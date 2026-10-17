@@ -1521,12 +1521,14 @@ def _parse_skills(text: str) -> list[Skill]:
         entry = chunk.strip()
         if not entry:
             continue
-        parts = entry.split(":", 2)
+        parts = entry.split(":", 3)
         name = parts[0].strip()
         if not name:
             continue
         prof = parts[1].strip() if len(parts) > 1 else ""
         evidenced_by = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
+        confirm_raw = parts[3].strip().lower() if len(parts) > 3 else ""
+        confirmed = confirm_raw in {"confirm", "confirmed", "yes", "true", "1"}
         try:
             proficiency = Proficiency(prof.lower())
         except ValueError:
@@ -1537,6 +1539,7 @@ def _parse_skills(text: str) -> list[Skill]:
                 canonical_name=normalize_skill_name(name),
                 proficiency=proficiency,
                 evidenced_by=evidenced_by,
+                confirmed=confirmed,
             )
         )
     return skills
@@ -1725,11 +1728,13 @@ document.addEventListener('click', function (event) {
 
 
 def _skill_text(profile: CandidateProfile) -> str:
-    return "\n".join(
-        f"{s.name}:{getattr(s.proficiency, 'value', s.proficiency)}"
-        + (f":{s.evidenced_by}" if s.evidenced_by else "")
-        for s in profile.skills
-    )
+    lines: list[str] = []
+    for s in profile.skills:
+        parts = [s.name, str(getattr(s.proficiency, "value", s.proficiency)), s.evidenced_by or ""]
+        if s.confirmed:
+            parts.append("confirm")
+        lines.append(":".join(parts))
+    return "\n".join(lines)
 
 
 def _experience_row(entry: Experience | None) -> str:
@@ -1831,8 +1836,9 @@ def _profile_page(
         f'<input type="text" name="level" value="{html.escape(profile.experience_level.value)}"></label></p>'
         "<p><label>Total experience (months):<br>"
         f'<input type="text" name="months" value="{profile.total_experience_months}"></label></p>'
-        "<p><label>Skills (one per line, name:proficiency, optional third part "
-        "name:proficiency:evidenced-by project or internship):<br>"
+        "<p><label>Skills (one per line, name:proficiency; optional third part "
+        "name:proficiency:evidenced-by project or internship; add a fourth part "
+        '":confirm" to list it without tech-list evidence):<br>'
         f'<textarea name="skills" rows="8">{html.escape(_skill_text(profile))}</textarea></label></p>'
         "<p><label>Target roles (comma separated):<br>"
         f'<input type="text" name="target_roles" value="{html.escape(", ".join(profile.target_roles))}"></label></p>'

@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-17)
 
-- Code state as of PR #38, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #38** (base `8abeaa1`).
-- Tests: **1154 passed** (`python -m pytest -q`).
+- Code state as of PR #39, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #39** (base `8abeaa1`).
+- Tests: **1168 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #38
+## Merged PRs #24 to #39
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -47,6 +47,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #36 | `cac9b21` | 2026-10-16T03:55:07Z | prB/results-page-improvements | feat(dashboard): per-job result page with owner verdicts |
 | #37 | `a3ee389` | 2026-10-16T04:39:03Z | prC1/tailored-resume-generator | feat(resume): grounded tailored-resume generator (no UI) |
 | #38 | `bba204c` | 2026-10-16T09:30:13Z | prC/profile-editor | feat(profile): rich profile editor (internships/work/projects/education/links/certs) |
+| #39 | `c6a6276` | 2026-10-17T04:11:02Z | prC1b/resume-fact-grounding | fix(resume): ground tailored-resume lines by profile fact ids; build skills in code |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -96,22 +97,28 @@ kind, #23 non-job-listing filter.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
-## Tailored resume generator (PR #37)
+## Tailored resume generator (PRs #37, #39)
 
-- `atlas/resume.py` + `prompts/tailored_resume.md` (version 1) turn the approved
+- `atlas/resume.py` + `prompts/tailored_resume.md` (version 2) turn the approved
   profile and one parsed job into a `TailoredResume`. **No UI yet** (PR C2 adds the
   job-page button, review page, approval and DOCX/PDF export); the generator is code
   only and nothing runs it automatically.
+- Grounding is by profile **fact ids**, not free-text quotes. `build_facts` numbers the
+  profile into citable facts (`[P1.summary]`, `[I1.description]`, `[W1.tech]`,
+  `[ED1.line]`, `[CERT]`, `[LINK]`); `render_profile_facts` shows them to the model.
+  Every summary sentence and bullet must cite at least one real id, and code maps each
+  id back to its verbatim text.
 - The model may only rewrite the candidate's own material; code, not the prompt,
   enforces the hard rules:
-  - a skill is kept only if the profile already has it, alias-aware via the skill
-    ontology (the job's `ReactJS` matches the profile's `React`);
-  - every summary sentence and bullet must carry a verbatim profile quote
-    (`evidence.quote_valid`, `source=profile`); a line that fails is dropped;
-  - a line that introduces a number, metric, date, technology or mid-sentence proper
-    noun the profile does not contain is dropped (`fabricated_tokens`);
-  - each job keyword appears at most once in Skills and at most once across bullets;
+  - a line is dropped when it is third-person/meta, when it carries hidden characters,
+    when a bullet does not start with an action verb, when it introduces a technology,
+    number or mid-sentence proper noun its cited facts lack, or when any JD keyword
+    would exceed the global cap;
+  - skills are **built in code, never by the model**: JD-matching profile skills first,
+    then the other non-familiar skills, with "familiar" skills in a separate group;
   - requirements the profile lacks go to `missing_requirements` and are never added.
+- If the profile lacks internship/work/project/link detail the generator **refuses**
+  (before any LLM call) and lists exactly what to add on the Profile page; it never pads.
 - Header, experience role/company/duration, project titles/tech, education and
   certifications are copied verbatim from the profile, so dates and employers cannot
   change.
@@ -266,7 +273,8 @@ Agreement"; the page's "Terms of Use" link points to
 
 Nothing below is implemented. Each needs the owner's go-ahead.
 
-- **(a) Tailored resume builder.** Generator BUILT (PR #37; `atlas/resume.py`, no UI);
+- **(a) Tailored resume builder.** Generator BUILT (PR #37; fact-ID grounding in #39;
+  `atlas/resume.py`, no UI);
   profile editor BUILT (PR #38; `/profile` captures internships, work, projects,
   education, links, certifications). It rewrites and reorders content drawn only from
   the approved profile; every generated line traces back to a profile fact, and unmet
