@@ -59,17 +59,18 @@ from atlas.schemas import (
     SkillCategory,
 )
 from atlas.skills import get_ontology
+from atlas.text import clean_tech_items
 
-VALID_SUMMARY = {"text": "Builds a job pipeline.", "facts": ["W1.description"]}
-VALID_EXPERIENCE_BULLET = {"text": "Build a job pipeline in Python.", "facts": ["W1.description"]}
+VALID_SUMMARY = {"text": "Builds a job pipeline.", "facts": ["W1.s1"]}
+VALID_EXPERIENCE_BULLET = {"text": "Build a job pipeline in Python.", "facts": ["W1.s1"]}
 VALID_PROJECT_BULLET = {
     "text": "Shipped a live job pipeline.",
-    "facts": ["P1.outcomes", "P1.summary"],
+    "facts": ["P1.outcomes.s1", "P1.summary.s1"],
 }
 VALID_REQUIREMENT = {
     "requirement": "Python",
     "status": "covered",
-    "facts": ["W1.description"],
+    "facts": ["W1.s1"],
     "quote": "Builds a job pipeline",
 }
 
@@ -205,10 +206,12 @@ def _generate(payload: dict, *, profile=None, job=None, parsed_jd=None):
 def test_generate_keeps_valid_grounded_lines_and_records_prompt_version():
     resume = _generate(_payload())
 
-    assert [line.text for line in resume.summary] == [VALID_SUMMARY["text"]]
+    assert [line.text for line in resume.summary[1:]] == [VALID_SUMMARY["text"]]
+    assert resume.summary[0].text.startswith("Mid backend developer")
+    assert "Python" in resume.summary[0].text
     assert [b.text for b in resume.experience[0].bullets] == [VALID_EXPERIENCE_BULLET["text"]]
     assert [b.text for b in resume.projects[0].bullets] == [VALID_PROJECT_BULLET["text"]]
-    assert resume.prompt_version == "3"
+    assert resume.prompt_version == "4"
     assert resume.model
     assert resume.ats.passed is True
 
@@ -277,7 +280,7 @@ def test_concept_skill_is_evidenced_by_project_outcomes_prose():
         )
     )
 
-    assert skill_evidence_facts(profile, get_ontology())["Caching"] == "P1.outcomes"
+    assert skill_evidence_facts(profile, get_ontology())["Caching"] == "P1.outcomes.s1"
     skills, familiar = build_skills(profile, _parsed_jd(), get_ontology())
     assert "Caching" in skills
     assert "Caching" not in familiar
@@ -305,7 +308,7 @@ def test_rest_api_design_is_evidenced_by_apis_in_summary_prose():
         )
     )
 
-    assert skill_evidence_facts(profile, get_ontology())["REST API Design"] == "P1.summary"
+    assert skill_evidence_facts(profile, get_ontology())["REST API Design"] == "P1.summary.s1"
 
 
 def test_llm_pipeline_design_is_evidenced_by_internship_description_prose():
@@ -331,14 +334,14 @@ def test_llm_pipeline_design_is_evidenced_by_internship_description_prose():
 
     facts = skill_evidence_facts(profile, get_ontology())
 
-    assert facts["LLM pipeline design"] == "I1.description"
+    assert facts["LLM pipeline design"] == "I1.s1"
 
 
 def test_git_slash_github_and_plural_acronym_pass_grounding():
     text = "Built Git/GitHub workflows and REST APIs."
     profile = _profile()
     profile.work[0].description = [text]
-    bullet = {"text": text, "facts": ["W1.description"]}
+    bullet = {"text": text, "facts": ["W1.s1"]}
 
     resume = _generate(_payload(experience=[{"bullets": [bullet]}]), profile=profile)
 
@@ -350,7 +353,7 @@ def test_generic_ai_api_data_and_pipeline_do_not_cause_drops():
     profile.work[0].description = ["Built REST APIs"]
     bullet = {
         "text": "Built REST APIs for AI data services and pipelines.",
-        "facts": ["W1.description"],
+        "facts": ["W1.s1"],
     }
 
     resume = _generate(_payload(experience=[{"bullets": [bullet]}]), profile=profile)
@@ -359,25 +362,26 @@ def test_generic_ai_api_data_and_pipeline_do_not_cause_drops():
 
 
 def test_third_person_meta_sentence_is_rejected():
-    meta = {"text": "The candidate has strong Python skills.", "facts": ["W1.description"]}
+    meta = {"text": "The candidate has strong Python skills.", "facts": ["W1.s1"]}
     resume = _generate(_payload(summary=[meta]))
 
-    assert resume.summary == []
+    assert len(resume.summary) == 1
+    assert meta["text"] not in [line.text for line in resume.summary]
     assert any("meta" in line.reason for line in resume.dropped)
 
 
 def test_led_claim_is_rejected_without_a_licensing_fact():
-    claim = {"text": "Led backend development for a startup.", "facts": ["W1.description"]}
+    claim = {"text": "Led backend development for a startup.", "facts": ["W1.s1"]}
     resume = _generate(_payload(summary=[claim]))
 
-    assert resume.summary == []
+    assert claim["text"] not in [line.text for line in resume.summary]
     assert any("claim not supported" in line.reason for line in resume.dropped)
 
 
 def test_ownership_claim_is_kept_when_the_fact_licenses_it():
     profile = _profile()
     profile.work[0].description = ["Owning the architecture and building services"]
-    line = {"text": "Owning the architecture, building all services.", "facts": ["W1.description"]}
+    line = {"text": "Owning the architecture, building all services.", "facts": ["W1.s1"]}
 
     resume = _generate(_payload(experience=[{"bullets": [line]}]), profile=profile)
 
@@ -397,7 +401,7 @@ def test_ownership_claim_is_kept_when_the_fact_licenses_it():
     ],
 )
 def test_new_strength_terms_are_rejected_without_a_licensing_fact(phrase):
-    line = {"text": f"Built {phrase} systems.", "facts": ["W1.description"]}
+    line = {"text": f"Built {phrase} systems.", "facts": ["W1.s1"]}
 
     resume = _generate(_payload(experience=[{"bullets": [line]}]))
 
@@ -408,7 +412,7 @@ def test_new_strength_terms_are_rejected_without_a_licensing_fact(phrase):
 def test_new_strength_term_is_kept_when_the_fact_licenses_it():
     profile = _profile()
     profile.work[0].description = ["Built core systems from scratch"]
-    line = {"text": "Built core systems from scratch.", "facts": ["W1.description"]}
+    line = {"text": "Built core systems from scratch.", "facts": ["W1.s1"]}
 
     resume = _generate(_payload(experience=[{"bullets": [line]}]), profile=profile)
 
@@ -416,7 +420,7 @@ def test_new_strength_term_is_kept_when_the_fact_licenses_it():
 
 
 def test_bullet_adding_a_technology_absent_from_the_cited_fact_is_dropped():
-    bullet = {"text": "Deployed services to Kubernetes.", "facts": ["W1.description"]}
+    bullet = {"text": "Deployed services to Kubernetes.", "facts": ["W1.s1"]}
     resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
 
     assert resume.experience[0].bullets == []
@@ -424,7 +428,7 @@ def test_bullet_adding_a_technology_absent_from_the_cited_fact_is_dropped():
 
 
 def test_bullet_with_a_fabricated_metric_is_dropped():
-    bullet = {"text": "Built a job pipeline handling 5000000 rows.", "facts": ["W1.description"]}
+    bullet = {"text": "Built a job pipeline handling 5000000 rows.", "facts": ["W1.s1"]}
     resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
 
     assert resume.experience[0].bullets == []
@@ -440,7 +444,7 @@ def test_bullet_without_a_cited_fact_is_dropped():
 
 
 def test_bullet_that_does_not_start_with_an_action_verb_is_dropped():
-    bullet = {"text": "Responsible for a job pipeline.", "facts": ["W1.description"]}
+    bullet = {"text": "Responsible for a job pipeline.", "facts": ["W1.s1"]}
     resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
 
     assert resume.experience[0].bullets == []
@@ -450,7 +454,7 @@ def test_bullet_that_does_not_start_with_an_action_verb_is_dropped():
 def test_job_keyword_limit_drops_the_extras():
     profile = _profile()
     profile.work[0].description = ["Built REST services"]
-    bullet = {"text": "Built REST services.", "facts": ["W1.description"]}
+    bullet = {"text": "Built REST services.", "facts": ["W1.s1"]}
     parsed = ParsedJD(
         title="Backend engineer", must_have_skills=["Python"], nice_to_have_skills=["REST"]
     )
@@ -531,7 +535,7 @@ def test_coverage_derives_apis_and_design_patterns_from_skills():
     items = {item.requirement: item for item in resume.requirements}
     assert items["APIs"].facts == ["P1.tech"]
     assert "FastAPI" in items["APIs"].quote
-    assert items["software design patterns"].facts == ["P1.outcomes"]
+    assert items["software design patterns"].facts == ["P1.outcomes.s1"]
     assert "idempotency" in items["software design patterns"].quote.lower()
 
 
@@ -560,7 +564,7 @@ def test_data_structures_is_covered_when_a_fact_names_one():
     item = next(i for i in resume.requirements if i.requirement == "data structures")
 
     assert item.status == "covered"
-    assert item.facts == ["P1.outcomes"]
+    assert item.facts == ["P1.outcomes.s1"]
 
 
 def test_data_structures_is_not_covered_by_a_bare_plural_verb():
@@ -588,7 +592,7 @@ def test_data_structures_is_covered_by_a_plural_noun_with_a_premodifier():
     item = next(i for i in resume.requirements if i.requirement == "data structures")
 
     assert item.status == "covered"
-    assert item.facts == ["P1.outcomes"]
+    assert item.facts == ["P1.outcomes.s1"]
 
 
 def test_data_structures_is_not_covered_by_a_full_stack_phrase():
@@ -617,7 +621,7 @@ def test_data_structures_is_covered_by_an_algorithm_phrase():
     item = next(i for i in resume.requirements if i.requirement == "algorithms")
 
     assert item.status == "covered"
-    assert item.facts == ["P1.outcomes"]
+    assert item.facts == ["P1.outcomes.s1"]
 
 
 def test_system_design_patterns_is_not_satisfied_by_a_database_alone():
@@ -728,8 +732,8 @@ def test_thin_internship_emits_a_warning_and_is_not_padded():
             description=["Builds a job pipeline"],
         )
     ]
-    internship_bullet = {"text": "Build a job pipeline in Python.", "facts": ["I1.description"]}
-    work_bullet = {"text": "Build a job pipeline in Python.", "facts": ["W1.description"]}
+    internship_bullet = {"text": "Build a job pipeline in Python.", "facts": ["I1.s1"]}
+    work_bullet = {"text": "Build a job pipeline in Python.", "facts": ["W1.s1"]}
 
     resume = _generate(
         _payload(experience=[{"bullets": [internship_bullet]}, {"bullets": [work_bullet]}]),
@@ -738,6 +742,228 @@ def test_thin_internship_emits_a_warning_and_is_not_padded():
 
     assert len(resume.experience[0].bullets) == 1
     assert any("internship section thin" in warning for warning in resume.warnings)
+
+
+# --------------------------------------------------------------------------- #
+# Lexical grounding, sentence facts, repair pass (PR C1d)
+# --------------------------------------------------------------------------- #
+
+
+def test_prose_fields_are_split_into_sentence_facts():
+    profile = _profile()
+    profile.work[0].description = ["First sentence here.", "Second sentence here."]
+
+    facts = build_facts(profile)
+
+    assert facts["W1.s1"].text == "First sentence here."
+    assert facts["W1.s2"].text == "Second sentence here."
+    assert facts["W1.s1"].kind == "prose"
+    assert "W1.description" not in facts
+
+
+def test_bullet_with_content_words_absent_from_the_cited_sentence_is_dropped():
+    profile = _profile()
+    profile.work[0].description = [
+        (
+            "Sole engineer at an early-stage startup, owning the core backend, CRM and "
+            "production systems, and building them from scratch with FastAPI and PostgreSQL."
+        )
+    ]
+    bullet = {
+        "text": (
+            "Designed and built backend APIs with FastAPI and PostgreSQL, "
+            "enabling real-time data access."
+        ),
+        "facts": ["W1.s1"],
+    }
+
+    resume = _generate(_payload(experience=[{"bullets": [bullet]}]), profile=profile)
+
+    assert resume.experience[0].bullets == []
+    assert any("content words not in cited facts" in line.reason for line in resume.dropped)
+
+
+def test_a_stemmed_strength_word_is_rejected_without_a_licensing_fact():
+    bullet = {"text": "Delivering robust APIs.", "facts": ["W1.s1"]}
+
+    resume = _generate(_payload(experience=[{"bullets": [bullet]}]))
+
+    assert resume.experience[0].bullets == []
+    assert any("delivering" in line.reason for line in resume.dropped)
+
+
+def test_repair_call_fills_a_project_the_first_draft_left_empty():
+    project_bullet = {
+        "text": "Shipped a live job pipeline.",
+        "facts": ["P1.outcomes.s1", "P1.summary.s1"],
+    }
+    first = _payload(projects=[{"bullets": []}])
+    second = {"experience": [], "projects": [{"bullets": [project_bullet]}]}
+    calls = {"n": 0}
+
+    def handler(kwargs):
+        calls["n"] += 1
+        return json.dumps(first if calls["n"] == 1 else second)
+
+    resume = generate_tailored_resume(
+        LLMClient(client=FakeClient(handler)),
+        profile=_profile(),
+        job=_job(),
+        parsed_jd=_parsed_jd(),
+    )
+
+    assert calls["n"] == 2
+    assert [b.text for b in resume.projects[0].bullets] == [project_bullet["text"]]
+
+
+def test_repair_call_fills_a_thin_internship_section():
+    profile = _profile()
+    profile.internships = [
+        Experience(
+            role="Intern",
+            company="GameGenesis",
+            duration_months=3,
+            tech=["Python"],
+            description=[
+                "Built the core API in Python.",
+                "Shipped the reporting dashboard.",
+                "Fixed the caching layer.",
+            ],
+        )
+    ]
+    first = _payload(experience=[{"bullets": []}, {"bullets": []}])
+    second = {
+        "experience": [
+            {
+                "bullets": [
+                    {"text": "Built the core API in Python.", "facts": ["I1.s1"]},
+                    {"text": "Shipped the reporting dashboard.", "facts": ["I1.s2"]},
+                    {"text": "Fixed the caching layer.", "facts": ["I1.s3"]},
+                ]
+            },
+            {"bullets": []},
+        ],
+        "projects": [],
+    }
+    calls = {"n": 0}
+
+    def handler(kwargs):
+        calls["n"] += 1
+        return json.dumps(first if calls["n"] == 1 else second)
+
+    resume = generate_tailored_resume(
+        LLMClient(client=FakeClient(handler)),
+        profile=profile,
+        job=_job(),
+        parsed_jd=_parsed_jd(),
+    )
+
+    assert calls["n"] == 2
+    assert len(resume.experience[0].bullets) == 3
+    assert not any("internship section thin" in warning for warning in resume.warnings)
+
+
+def test_a_familiar_skill_evidenced_by_a_tech_list_is_promoted_to_main():
+    profile = _profile()
+    profile.projects[0].tech = ["Python", "FastAPI", "Flask"]
+    profile.skills.append(
+        Skill(
+            name="Flask",
+            canonical_name="flask",
+            category=SkillCategory.framework,
+            proficiency=Proficiency.familiar,
+        )
+    )
+
+    skills, familiar = build_skills(profile, _parsed_jd(), get_ontology())
+
+    assert "Flask" in skills
+    assert "Flask" not in familiar
+
+
+def test_project_tech_is_cleaned_and_becomes_an_evidence_linked_skill():
+    profile = _profile()
+    profile.projects[0].tech = ["Python", "and Vercel."]
+
+    resume = _generate(_payload(), profile=profile)
+
+    assert resume.projects[0].tech == ["Python", "Vercel"]
+    assert "Vercel" in resume.skills
+
+
+def test_clean_tech_items_strips_leading_and_trailing_period_and_dedupes():
+    assert clean_tech_items(["and Vercel.", "  and Render. ", "Vercel", "", "  "]) == [
+        "Vercel",
+        "Render",
+    ]
+
+
+def test_summary_opens_with_a_code_built_sentence():
+    resume = _generate(_payload())
+
+    first = resume.summary[0]
+    assert first.text.startswith("Mid backend developer with 30 months of experience in ")
+    assert first.text.endswith(".")
+    assert first.facts == []
+
+
+def test_code_summary_uses_internship_months_and_top_skills():
+    profile = _profile()
+    profile.internships = [
+        Experience(
+            role="Intern",
+            company="GameGenesis",
+            duration_months=3,
+            tech=["Python"],
+            description=["Builds a job pipeline"],
+        )
+    ]
+    profile.experience_level = "fresher"
+    profile.target_roles = ["Backend"]
+
+    resume = _generate(_payload(), profile=profile)
+
+    first = resume.summary[0].text
+    assert first.startswith("Fresher backend developer with 3 months of internship experience in ")
+    assert "Python" in first
+
+
+def test_a_project_only_summary_sentence_is_not_used():
+    project_only = {
+        "text": "Shipped a live job pipeline.",
+        "facts": ["P1.outcomes.s1", "P1.summary.s1"],
+    }
+
+    resume = _generate(_payload(summary=[project_only]))
+
+    assert project_only["text"] not in [line.text for line in resume.summary]
+
+
+def test_adjacent_technology_coverage_is_downgraded_to_partial():
+    profile = _profile()
+    profile.projects[0].summary = "Builds a job pipeline with JWT authentication"
+    parsed = ParsedJD(
+        title="Backend engineer",
+        must_have_skills=["security awareness"],
+        nice_to_have_skills=[],
+        confidence=0.9,
+    )
+    requirement = {
+        "requirement": "security awareness",
+        "status": "covered",
+        "facts": ["P1.summary.s1"],
+        "quote": "JWT authentication",
+    }
+
+    resume = _generate(
+        _payload(requirements=[requirement]),
+        profile=profile,
+        parsed_jd=parsed,
+    )
+
+    item = next(i for i in resume.requirements if i.requirement == "security awareness")
+    assert item.status == "partial"
+    assert item.facts == ["P1.summary.s1"]
 
 
 # --------------------------------------------------------------------------- #
@@ -801,15 +1027,15 @@ def test_tokenize_splits_on_punctuation_and_singularizes():
 def test_build_facts_excludes_skills_and_numbers_entries():
     facts = build_facts(_profile())
 
-    assert facts["P1.summary"].text == "Builds a job pipeline"
+    assert facts["P1.summary.s1"].text == "Builds a job pipeline"
     assert set(facts) == {
         "P1.title",
-        "P1.summary",
-        "P1.outcomes",
+        "P1.summary.s1",
+        "P1.outcomes.s1",
         "P1.tech",
         "W1.role",
         "W1.company",
-        "W1.description",
+        "W1.s1",
         "W1.tech",
         "ED1.line",
         "CERT",
@@ -820,7 +1046,7 @@ def test_build_facts_excludes_skills_and_numbers_entries():
 def test_render_profile_facts_marks_skills_as_context_only():
     rendered = render_profile_facts(_profile())
 
-    assert "[W1.description] Builds a job pipeline" in rendered
+    assert "[W1.s1] Builds a job pipeline" in rendered
     assert "context only" in rendered
     assert "never cite as evidence" in rendered
 

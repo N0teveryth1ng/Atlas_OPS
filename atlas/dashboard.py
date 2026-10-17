@@ -72,6 +72,7 @@ from .schemas import (
     Seniority,
     Skill,
 )
+from .text import clean_tech_items
 
 _LABELS = {"APLD": "Applied", "NTAPLD": "Not applied", "PEND": "Pending"}
 _COLORS = {"APLD": "#1a7f37", "NTAPLD": "#cf222e", "PEND": "#9a6700"}
@@ -1600,7 +1601,7 @@ def _parse_experiences(form: FormData, prefix: str) -> list[Experience]:
         company = _at(companies, index).strip()
         month = _at(months, index)
         date = _at(dates, index).strip()
-        techs = _split_items(_at(tech, index))
+        techs = clean_tech_items(_split_items(_at(tech, index)))
         description = _split_lines(_at(descriptions, index))
         if not any((role, company, month.strip(), date, techs, description)):
             continue
@@ -1628,7 +1629,7 @@ def _parse_projects(form: FormData) -> list[Project]:
         title = _at(titles, index).strip()
         summary = _at(summaries, index).strip()
         outcome = _at(outcomes, index).strip()
-        techs = _split_items(_at(tech, index))
+        techs = clean_tech_items(_split_items(_at(tech, index)))
         if not any((title, summary, outcome, techs)):
             continue
         entries.append(
