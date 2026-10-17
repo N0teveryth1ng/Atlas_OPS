@@ -12,8 +12,14 @@ Grounding is by *fact IDs*, not free-text quotes:
 * skills are assembled in code, never by the model: JD-matching profile skills first,
   then the other non-familiar skills, with "familiar" skills in a separate group;
 * a line is rejected when it is third-person / meta, when a bullet does not start
-  with an action verb, when it carries hidden characters, when it adds a JD term its
-  cited facts lack, or when any JD keyword would exceed the global cap;
+  with an action verb, when it carries hidden characters, when it adds a technology,
+  number or proper noun its cited facts lack, when it claims ownership / leadership /
+  reliability / scale the facts do not state, or when any JD keyword would exceed the
+  global cap; generic nouns (data, design, system, API, AI, service, platform, pipeline)
+  never need grounding;
+* skills are evidence-linked: a skill is only in the main group when a project or
+  internship tech list contains it (or the owner confirmed it), otherwise it moves to
+  "Familiar with (confirm before use)";
 * job requirements are classified covered / partial / missing with the fact id and
   quote that support them; only truly unsupported ones are missing.
 
@@ -62,7 +68,85 @@ KEYWORD_MAX = 3
 STANDARD_HEADINGS: tuple[str, ...] = ("Summary", "Skills", "Experience", "Projects", "Education")
 
 #: Heading for the second, lower-confidence skill group.
-FAMILIAR_HEADING = "Familiar with"
+FAMILIAR_HEADING = "Familiar with (confirm before use)"
+
+#: Words that claim ownership, leadership, reliability or scale. Each must appear
+#: verbatim in the cited fact text, so a "Sole engineer" fact cannot license "led"
+#: or "architected".
+_CLAIM_TERMS: tuple[str, ...] = (
+    "led",
+    "lead",
+    "leads",
+    "leading",
+    "owned",
+    "owning",
+    "own",
+    "owns",
+    "architected",
+    "architect",
+    "zero-downtime",
+    "robust",
+    "reliable",
+    "high-scale",
+    "millions",
+    "expert",
+    "mentored",
+    "mentor",
+    "managed",
+    "managing",
+    "manage",
+)
+
+#: Generic nouns that never need grounding (they carry no technology or number).
+_GENERIC_TERMS: frozenset[str] = frozenset(
+    {
+        "data",
+        "design",
+        "system",
+        "systems",
+        "api",
+        "apis",
+        "ai",
+        "service",
+        "services",
+        "platform",
+        "platforms",
+        "pipeline",
+        "pipelines",
+        "llm",
+        "llms",
+        "app",
+        "apps",
+        "application",
+        "applications",
+        "tool",
+        "tools",
+        "workflow",
+        "workflows",
+        "module",
+        "modules",
+    }
+)
+
+#: Synonyms applied on both sides of a grounding comparison.
+_SYNONYMS: dict[str, str] = {"ai": "llm", "api": "rest", "apis": "rest"}
+
+#: How a job requirement is covered by a profile concept family. Keys are
+#: key-normalised requirement wordings; values are words whose presence in the
+#: profile (skill or tech) satisfies the requirement.
+_REQUIREMENT_FAMILIES: dict[str, tuple[str, ...]] = {
+    "api": ("fastapi", "flask", "django", "graphql", "rest"),
+    "apis": ("fastapi", "flask", "django", "graphql", "rest"),
+    "softwaredesignpatterns": ("idempotency", "circuitbreakers", "caching", "rest"),
+    "systemdesignpatterns": ("idempotency", "circuitbreakers", "caching", "redis", "postgresql"),
+    "designpatterns": ("idempotency", "circuitbreakers", "caching", "rest"),
+    "datastructures": ("idempotency", "circuitbreakers", "caching", "redis", "postgresql"),
+    "storagesolutions": ("postgresql", "redis", "mongodb", "mysql", "sql"),
+    "storage": ("postgresql", "redis", "mongodb", "mysql", "sql"),
+    "databases": ("postgresql", "redis", "mongodb", "mysql", "sql"),
+    "cloudinfrastructure": ("aws", "gcp", "azure"),
+    "cloud": ("aws", "gcp", "azure"),
+}
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
@@ -345,6 +429,7 @@ class TailoredResume(BaseModel):
     refused: bool = False
     refusal_reason: str = ""
     profile_gaps: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     ats: ATSReport = Field(default_factory=ATSReport)
     prompt_version: str = ""
     model: str = ""
@@ -379,14 +464,6 @@ def _tokenize(text: str) -> list[str]:
 def _canonical(name: str, ontology: SkillOntology) -> str:
     """Alias-aware canonical key, ignoring any proficiency suffix."""
     return ontology.canonicalize(strip_proficiency(name))
-
-
-def _profile_skill_keys(profile: CandidateProfile, ontology: SkillOntology) -> set[str]:
-    keys: set[str] = set()
-    for skill in profile.skills:
-        for value in (skill.name, skill.canonical_name):
-            keys.add(_canonical(value, ontology))
-    return keys
 
 
 def _jd_keyword_tokens(parsed_jd: ParsedJD, ontology: SkillOntology) -> set[str]:
@@ -530,16 +607,43 @@ def profile_gaps(profile: CandidateProfile) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
+def _evidence_tokens(profile: CandidateProfile, ontology: SkillOntology) -> set[str]:
+    """Token/canonical vocabulary present in project and internship/work tech lists."""
+    tokens: set[str] = set()
+    tech_lists = [project.tech for project in profile.projects]
+    tech_lists += [experience.tech for experience in profile.internships]
+    tech_lists += [experience.tech for experience in profile.work]
+    for tech_list in tech_lists:
+        for tech in tech_list:
+            tokens.update(_tokenize(tech))
+            tokens.add(_canonical(tech, ontology))
+    return tokens
+
+
+def _skill_is_evidenced(skill: Any, evidence: set[str], ontology: SkillOntology) -> bool:
+    """True when the skill appears in a project/internship tech list."""
+    canonical = _canonical(skill.name or skill.canonical_name, ontology)
+    if canonical in evidence:
+        return True
+    meaningful = {
+        token for token in _tokenize(skill.name) if token not in _GENERIC_TERMS and len(token) > 1
+    }
+    return bool(meaningful & evidence)
+
+
 def build_skills(
     profile: CandidateProfile, parsed_jd: ParsedJD, ontology: SkillOntology
 ) -> tuple[list[str], list[str]]:
     """Return ``(skills, familiar)``:
 
-    ``skills`` = non-familiar profile skills, JD-matching first; ``familiar`` = the
-    "Familiar with" group (familiar proficiency only). Names are the profile's own,
-    with any proficiency suffix stripped.
+    ``skills`` = JD-matching first, then other skills that are evidenced in a
+    project/internship tech list or confirmed by the owner. ``familiar`` = the
+    "Familiar with (confirm before use)" group: familiar-proficiency skills and any
+    skill with no evidence and no confirmation. Names are the profile's own, with any
+    proficiency suffix stripped.
     """
     jd_canonical = _jd_canonical(parsed_jd, ontology)
+    evidence = _evidence_tokens(profile, ontology)
     matching: list[str] = []
     others: list[str] = []
     familiar: list[str] = []
@@ -550,7 +654,8 @@ def build_skills(
             continue
         seen.add(canonical)
         name = strip_proficiency(skill.name)
-        if skill.proficiency == Proficiency.familiar:
+        evidenced = skill.confirmed or _skill_is_evidenced(skill, evidence, ontology)
+        if skill.proficiency == Proficiency.familiar or not evidenced:
             familiar.append(name)
         elif canonical in jd_canonical:
             matching.append(name)
@@ -600,24 +705,26 @@ def _ungrounded(
     text: str,
     allowed: set[str],
     tech_tokens: set[str],
-    jd_tokens: set[str],
     ontology: SkillOntology,
 ) -> list[str]:
     """Tokens that assert a fact absent from the cited text/tech.
 
-    Flags a number, a known technology, a mid-sentence proper noun or a job keyword
-    that the cited facts do not contain. Sentence-initial words and "I" are ignored.
+    Only a technology (ontology entry), a number or a mid-sentence proper noun needs
+    grounding; generic nouns (data, design, system, API, AI, service, platform,
+    pipeline) are ignored. ``AI``/``LLM`` and ``API``/``REST`` are treated as synonyms.
+    Sentence-initial words and "I" are ignored.
     """
+    grounded = set(allowed) | set(tech_tokens)
+    grounded |= {_SYNONYMS.get(token, token) for token in grounded}
     flagged: list[str] = []
     for match in _TOKEN_RE.finditer(text):
         raw = match.group(0)
         if raw.lower() == "i" or _is_sentence_initial(text, match.start()):
             continue
         token = _singular(raw.lower())
-        if token in allowed or token in tech_tokens:
+        if token in _GENERIC_TERMS:
             continue
-        if token in jd_tokens:
-            flagged.append(raw)
+        if token in grounded or _SYNONYMS.get(token, token) in grounded:
             continue
         if any(ch.isdigit() for ch in raw):
             flagged.append(raw)
@@ -628,6 +735,17 @@ def _ungrounded(
         if raw[0].isupper() and len(raw) >= 2:
             flagged.append(raw)
     return sorted(set(flagged))
+
+
+def _claim_error(text: str, grounded: set[str]) -> str:
+    """Reject a strength/ownership claim whose words are absent from the cited facts."""
+    line_tokens = set(_tokenize(text))
+    grounded = set(grounded) | {_SYNONYMS.get(token, token) for token in grounded}
+    for term in _CLAIM_TERMS:
+        term_tokens = set(_tokenize(term))
+        if term_tokens and term_tokens <= line_tokens and not term_tokens <= grounded:
+            return f"claim not supported by cited facts: '{term}'"
+    return ""
 
 
 class _Grounder:
@@ -671,9 +789,12 @@ class _Grounder:
         tech_tokens = set(_tokenize(" ".join(tech)))
         if is_bullet and not _starts_with_action_verb(text):
             return False, "bullet does not start with an action verb"
-        flagged = _ungrounded(text, allowed, tech_tokens, self.jd_tokens, self.ontology)
+        flagged = _ungrounded(text, allowed, tech_tokens, self.ontology)
         if flagged:
             return False, f"term(s) not in cited facts: {', '.join(flagged)}"
+        claim = _claim_error(text, allowed | tech_tokens)
+        if claim:
+            return False, claim
         counts = _keyword_counts(text, self.jd_tokens)
         over = [key for key, value in counts.items() if self.counts[key] + value > KEYWORD_MAX]
         if over:
@@ -798,22 +919,52 @@ def _retry_message(errors: list[str]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _skill_fact(
-    requirement: str,
-    profile: CandidateProfile,
-    ontology: SkillOntology,
-    facts: dict[str, Fact],
-) -> Fact | None:
-    canonical = _canonical(requirement, ontology)
-    if canonical not in _profile_skill_keys(profile, ontology):
-        return None
+def _fact_for_concept(concept: str, facts: dict[str, Fact], ontology: SkillOntology) -> Fact | None:
+    """A fact whose tech list or text evidences ``concept``."""
     for fact in facts.values():
-        if any(_canonical(tech, ontology) == canonical for tech in fact.tech):
+        if any(_canonical(tech, ontology) == concept for tech in fact.tech):
             return fact
     for fact in facts.values():
-        if canonical in set(_tokenize(fact.text)):
+        if concept in set(_tokenize(fact.text)):
             return fact
     return None
+
+
+def _profile_concepts(
+    profile: CandidateProfile, ontology: SkillOntology, facts: dict[str, Fact]
+) -> dict[str, tuple[str, bool]]:
+    """Map a profile concept to ``(fact_id, is_familiar)``.
+
+    Concepts come from the owner's skills (with their proficiency) and from every
+    project/internship/work tech list. A later entry never downgrades an earlier one.
+    """
+    concepts: dict[str, tuple[str, bool]] = {}
+    for fact in facts.values():
+        for tech in fact.tech:
+            canonical = _canonical(tech, ontology)
+            concepts.setdefault(canonical, (fact.id, False))
+    for skill in profile.skills:
+        canonical = _canonical(skill.name or skill.canonical_name, ontology)
+        familiar = skill.proficiency == Proficiency.familiar
+        found = _fact_for_concept(canonical, facts, ontology)
+        fact_id = found.id if found is not None else ""
+        existing = concepts.get(canonical)
+        if existing is None:
+            concepts[canonical] = (fact_id, familiar)
+        else:
+            concepts[canonical] = (existing[0] or fact_id, existing[1] and familiar)
+    return concepts
+
+
+def _targets_for_requirement(name: str, ontology: SkillOntology) -> list[str]:
+    canonical = _canonical(name, ontology)
+    key = "".join(ch for ch in (name or "").lower().strip() if ch not in {" ", ".", "-", "_", "/"})
+    targets = [canonical]
+    for family_key in (key, canonical):
+        for target in _REQUIREMENT_FAMILIES.get(family_key, ()):
+            if target not in targets:
+                targets.append(target)
+    return targets
 
 
 def _classify_requirements(
@@ -823,31 +974,56 @@ def _classify_requirements(
     facts: dict[str, Fact],
     drafts: list[RequirementDraft],
 ) -> list[RequirementCoverage]:
+    """Classify each requirement covered / partial / missing.
+
+    Ontology, alias-map and concept-family matching run first (so "REST API Design"
+    covers "APIs", "Circuit Breakers"/"Idempotency" cover design patterns, and
+    "PostgreSQL"/"Redis" cover storage). A familiar concept yields ``partial``. Only a
+    free-text judgement from the model needs an 8-character verbatim quote; a skill or
+    tech name does not.
+    """
     by_canonical: dict[str, RequirementDraft] = {}
     for item in drafts:
         by_canonical.setdefault(_canonical(item.requirement, ontology), item)
+    concepts = _profile_concepts(profile, ontology, facts)
     results: list[RequirementCoverage] = []
     for name in _dedup_requirements(parsed_jd, ontology):
         canonical = _canonical(name, ontology)
-        draft = by_canonical.get(canonical)
         coverage: RequirementCoverage | None = None
-        if draft is not None and draft.status in ("covered", "partial"):
-            cited = [facts[fid] for fid in draft.facts if fid in facts]
-            if cited:
-                cited_text = " ".join(fact.text for fact in cited)
-                if draft.quote and quote_valid(draft.quote, EvidenceSource.profile, "", cited_text):
-                    coverage = RequirementCoverage(
-                        requirement=name,
-                        status=draft.status,
-                        facts=[fact.id for fact in cited],
-                        quote=draft.quote,
-                    )
+        fallback: RequirementCoverage | None = None
+        for target in _targets_for_requirement(name, ontology):
+            if target not in concepts:
+                continue
+            fact_id, familiar = concepts[target]
+            status = "partial" if familiar else "covered"
+            candidate = RequirementCoverage(
+                requirement=name,
+                status=status,
+                facts=[fact_id] if fact_id else [],
+                quote=next((f.text for f in facts.values() if f.id == fact_id), ""),
+            )
+            if fact_id:
+                coverage = candidate
+                break
+            if fallback is None:
+                fallback = candidate
         if coverage is None:
-            fact = _skill_fact(name, profile, ontology, facts)
-            if fact is not None:
-                coverage = RequirementCoverage(
-                    requirement=name, status="covered", facts=[fact.id], quote=fact.text
-                )
+            draft = by_canonical.get(canonical)
+            if draft is not None and draft.status in ("covered", "partial"):
+                cited = [facts[fid] for fid in draft.facts if fid in facts]
+                if cited:
+                    cited_text = " ".join(fact.text for fact in cited)
+                    if draft.quote and quote_valid(
+                        draft.quote, EvidenceSource.profile, "", cited_text
+                    ):
+                        coverage = RequirementCoverage(
+                            requirement=name,
+                            status=draft.status,
+                            facts=[fact.id for fact in cited],
+                            quote=draft.quote,
+                        )
+        if coverage is None:
+            coverage = fallback
         if coverage is None:
             coverage = RequirementCoverage(requirement=name, status="missing")
         results.append(coverage)
@@ -944,6 +1120,13 @@ def _assemble(
     )
     missing = [item.requirement for item in requirements if item.status == "missing"]
 
+    warnings: list[str] = []
+    internship_bullets = sum(
+        len(experience[index].bullets) for index in range(len(profile.internships))
+    )
+    if profile.internships and internship_bullets < 2:
+        warnings.append("internship section thin: add detail on the Profile page")
+
     resume = TailoredResume(
         header=ResumeHeader(name=profile.full_name, email=profile.email, links=profile.links),
         summary=summary,
@@ -956,6 +1139,7 @@ def _assemble(
         requirements=requirements,
         missing_requirements=missing,
         dropped=dropped,
+        warnings=warnings,
         prompt_version=version,
         model=model,
     )

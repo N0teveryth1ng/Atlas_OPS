@@ -145,6 +145,9 @@ class Skill(BaseModel):
     # Optional free-text name of a project or internship that evidences the
     # skill ("GameGenesis internship", "Portfolio site"). Owner-entered only.
     evidenced_by: str | None = None
+    # Owner explicitly confirmed the skill is worth listing even without a
+    # project/internship tech-list entry.
+    confirmed: bool = False
 
 
 # --------------------------------------------------------------------------- #
