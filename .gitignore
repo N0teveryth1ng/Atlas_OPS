@@ -31,6 +31,11 @@ eval/labeling_pool.jsonl
 selfcheck_report.json
 # personal resume: never committed
 resume.pdf
+# generated resume exports (Approve -> DOCX/PDF): never commit
+*.docx
+*.pdf
+*.odt
+*.rtf
 
 # --- os / editor ---
 .DS_Store
