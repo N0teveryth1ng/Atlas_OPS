@@ -14,6 +14,8 @@ Usage::
     python -m atlas.cli eval             # golden-set evaluation
     python -m atlas.cli feedback <job_id> good|bad --reason <code>
     python -m atlas.cli label          # interactively label pool jobs (a/s/u/q)
+    python -m atlas.cli label-sheet --count 10   # next N pending jobs as text (read-only)
+    python -m atlas.cli label-import FILE        # append a TSV after you type "yes"
 """
 
 from __future__ import annotations
@@ -670,6 +672,40 @@ def cmd_label(args: argparse.Namespace) -> int:
     return run_label_session(pool, args.labels)
 
 
+def cmd_label_sheet(args: argparse.Namespace) -> int:
+    from .labeling_cli import load_pool, run_label_sheet
+
+    try:
+        pool = load_pool(args.pool)
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if not pool:
+        print(f"No pool jobs in {args.pool}.", file=sys.stderr)
+        return 2
+    return run_label_sheet(pool, args.labels, args.count)
+
+
+def cmd_label_import(args: argparse.Namespace) -> int:
+    from .labeling_cli import load_pool, run_label_import
+
+    if not sys.stdin.isatty():
+        print(
+            "label-import refuses non-interactive input (run it in a terminal).",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        pool = load_pool(args.pool)
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if not pool:
+        print(f"No pool jobs in {args.pool}.", file=sys.stderr)
+        return 2
+    return run_label_import(pool, args.labels, Path(args.file))
+
+
 # --------------------------------------------------------------------------- #
 # Parser
 # --------------------------------------------------------------------------- #
@@ -738,6 +774,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
     )
     p_label.set_defaults(func=cmd_label)
+
+    p_sheet = sub.add_parser(
+        "label-sheet",
+        help="Print the next unlabeled pool jobs as a compact text sheet (read-only)",
+    )
+    p_sheet.add_argument(
+        "--count", type=int, default=10, help="How many pending jobs to print (default 10)"
+    )
+    p_sheet.add_argument(
+        "--labels", default="eval/labels.jsonl", help="Path to the labels JSONL file"
+    )
+    p_sheet.add_argument(
+        "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
+    )
+    p_sheet.set_defaults(func=cmd_label_sheet)
+
+    p_import = sub.add_parser(
+        "label-import",
+        help="Append a TSV of labels (short_id, label, reason) after a typed yes",
+    )
+    p_import.add_argument("file", help="TSV file with header: short_id<TAB>label<TAB>reason")
+    p_import.add_argument(
+        "--labels", default="eval/labels.jsonl", help="Path to the labels JSONL file"
+    )
+    p_import.add_argument(
+        "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
+    )
+    p_import.set_defaults(func=cmd_label_import)
 
     p_sched = sub.add_parser("schedule", help="Run once now, then daily at the configured hour")
     p_sched.add_argument("--hour", type=int, default=None, help="Local hour 0-23 (default: config)")

@@ -77,8 +77,8 @@ dash, curly quote or accent and the stored content is unchanged. It is grounded
 generation only: it never submits an application.
 
 ## Current state (2026-10-18)
-Code state as of PR #49, 1261 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #49
+Code state as of PR #50, 1279 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #50
 (base `8abeaa1`). The tailored-resume generator, review UI, inline editing, approval and
 DOCX/PDF export are all merged and working (a regression test covers PDF glyph folding).
 A final audit then rewrote `README.md` to the real product (both input modes, the
@@ -92,10 +92,14 @@ none an env file, DB, resume, upload or export), and deleted every merged branch
 remains open is the Phase 8 auto-apply hold and the owner-only gates below. See
 HANDOFF.md for detail.
 
-The current branch adds an interactive `python -m atlas.cli label` command so the owner
-can produce those labels one keypress at a time: one raw pool job shown at a time (no
-score, decision or model output), a/s/u/q keys, append-only writes, resumable, and the
-same report as `label-check` at the end.
+The current branch adds an offline pair for the same workflow:
+`python -m atlas.cli label-sheet --count N` prints the next N pending pool jobs in the
+same fixed-seed order as `label` (compact text, capped description digest,
+`[non-English?]` heuristic, nothing computed), and `python -m atlas.cli label-import
+FILE` validates a TSV of short_ids, shows a summary table and appends to
+`eval/labels.jsonl` only after the owner types `yes` (non-interactive input is
+refused), then prints the 40/15/10 tally and the `label-check` report. The `label`
+command from PR #50 remains the interactive path.
 
 ## Owner-only (blocking completion)
 Label 40 real JDs (15 traps, 10 apply) into `eval/labels.jsonl` with
