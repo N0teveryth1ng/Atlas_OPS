@@ -289,14 +289,30 @@ def test_sheet_contains_no_system_output(tmp_path: Path) -> None:
 
 
 def test_sheet_never_touches_the_real_eval_files(tmp_path: Path) -> None:
+    """The CLI entry point must never create or modify the real eval files.
+
+    Runs through ``main()`` with explicit tmp paths (the real pool is gitignored
+    and absent in CI), then asserts both real files are byte-identical - or still
+    absent - afterwards.
+    """
+
     def snapshot(path: Path) -> tuple[bool, bytes]:
         return (path.exists(), path.read_bytes() if path.exists() else b"")
 
     before = (snapshot(REAL_POOL), snapshot(REAL_LABELS))
     entries = [_entry(i) for i in range(3)]
-    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
-    _run_sheet(pool, tmp_path / "labels.jsonl", 3)
-    rc = main(["label-sheet", "--count", "2"])
+    pool_path = _write_pool(tmp_path, entries)
+    rc = main(
+        [
+            "label-sheet",
+            "--count",
+            "2",
+            "--pool",
+            str(pool_path),
+            "--labels",
+            str(tmp_path / "labels.jsonl"),
+        ]
+    )
     after = (snapshot(REAL_POOL), snapshot(REAL_LABELS))
     assert rc == 0
     assert after == before
