@@ -7,7 +7,7 @@ local dashboard (email delivery cancelled).
 ## Pipeline
 profile, query planner, collectors, normalize/dedupe, JD parser (regex+LLM), hard
 filters, skill matching, evaluator, adversarial verifier, ranker, decision engine
-(APPLY/REVIEW/SKIP), digest, dashboard, feedback, selfcheck, eval, label-check.
+(APPLY/REVIEW/SKIP), digest, dashboard, feedback, selfcheck, eval, label, label-check.
 
 ## Rules
 experience tolerance 1 year; hard filters in code (deterministic first, LLM second);
@@ -77,12 +77,12 @@ dash, curly quote or accent and the stored content is unchanged. It is grounded
 generation only: it never submits an application.
 
 ## Current state (2026-10-18)
-Code state as of PR #48, 1246 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #48
+Code state as of PR #49, 1261 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #49
 (base `8abeaa1`). The tailored-resume generator, review UI, inline editing, approval and
 DOCX/PDF export are all merged and working (a regression test covers PDF glyph folding).
 A final audit then rewrote `README.md` to the real product (both input modes, the
-pipeline, every dashboard page and route, all 14 CLI commands, Groq limits and the
+pipeline, every dashboard page and route, every CLI command, Groq limits and the
 daily-limit pause, safety rules, setup with every `.env` variable), added `*.docx`,
 `*.pdf`, `*.odt`, `*.rtf` to `.gitignore` so a generated export can never be committed,
 verified the secret/history audit (0 secret matches in all commits; 149 tracked files,
@@ -92,8 +92,14 @@ none an env file, DB, resume, upload or export), and deleted every merged branch
 remains open is the Phase 8 auto-apply hold and the owner-only gates below. See
 HANDOFF.md for detail.
 
+The current branch adds an interactive `python -m atlas.cli label` command so the owner
+can produce those labels one keypress at a time: one raw pool job shown at a time (no
+score, decision or model output), a/s/u/q keys, append-only writes, resumable, and the
+same report as `label-check` at the end.
+
 ## Owner-only (blocking completion)
-Label 40 real JDs (15 traps, 10 apply) into `eval/labels.jsonl` + `label-check`;
+Label 40 real JDs (15 traps, 10 apply) into `eval/labels.jsonl` with
+`python -m atlas.cli label` + `label-check`;
 rotate ALL keys (Groq, Gemini, Resend, Braintrust) and confirm; run mutmut under
 WSL/Linux; authorize `eval --with-llm`; sign off `review_sample.md`; one complete
 browser run with screenshots; decide T7 on Windows (`pytest-socket --disable-socket`

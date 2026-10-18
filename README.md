@@ -197,7 +197,9 @@ rate-limit wait, and the tokens/calls spent.
 - **The dashboard only records clicks.** `jobs.application_status` changes when you click
   `APLD`/`NTAPLD`/`PEND`; the tool never opens an application form.
 - **`eval/labels.jsonl` is human-owned.** It is created, edited and relabelled only by the
-  owner; the tooling reads it (`label-check`, `eval`) and never writes it.
+  owner; `label-check` and `eval` read it and never write it, and the interactive
+  `label` command appends one record only when the owner presses `a` or `s` (and
+  rewrites only when they press `u`). The agent never writes this file.
 - **No secrets in git.** `.env`, `atlas.db`, `uploads/`, `data/`, resumes and generated
   exports are gitignored and untracked.
 
@@ -219,6 +221,7 @@ python -m atlas.cli eval                       # golden-set evaluation (determin
 python -m atlas.cli eval --with-llm            # + live LLM precision@10 gate (costs tokens)
 python -m atlas.cli feedback <job_id> good     # or: bad --reason <code>
 python -m atlas.cli label-check                # validate a human-labelled labels file (read-only)
+python -m atlas.cli label                      # interactively label pool jobs (owner: a=apply s=skip u=undo q=quit)
 python -m atlas.cli selfcheck --fast           # deterministic pre-flight checks
 python -m atlas.cli selfcheck --full           # + coverage / lint / types / mutation / network
 ```
@@ -336,7 +339,13 @@ coverage/lint/type/mutation/network checks; `--report out.json` writes the
 machine-readable result.
 
 The golden set lives in `eval/golden_set.jsonl`; the human-labelled set lives in
-`eval/labels.jsonl` (owner-owned) and is validated by `label-check`.
+`eval/labels.jsonl` (owner-owned) and is validated by `label-check`. Labels are
+produced with `python -m atlas.cli label`, which shows one pool job at a time (title,
+company, location, remote type, source, posted date, URL, full description - never a
+score or a decision) in a fixed-seed random order, appends
+`{pool_id, url, label, reason, labeled_by}` on the owner's keypress, skips anything
+already labelled so a session is resumable, and ends with the same report as
+`label-check`.
 
 ## Project layout
 

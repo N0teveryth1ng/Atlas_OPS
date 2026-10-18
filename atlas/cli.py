@@ -13,6 +13,7 @@ Usage::
     python -m atlas.cli explain <job_id>  # print the latest decision for a job
     python -m atlas.cli eval             # golden-set evaluation
     python -m atlas.cli feedback <job_id> good|bad --reason <code>
+    python -m atlas.cli label          # interactively label pool jobs (a/s/u/q)
 """
 
 from __future__ import annotations
@@ -655,6 +656,20 @@ def cmd_label_check(args: argparse.Namespace) -> int:
     return 0 if report.meets_minimums else 1
 
 
+def cmd_label(args: argparse.Namespace) -> int:
+    from .labeling_cli import load_pool, run_label_session
+
+    try:
+        pool = load_pool(args.pool)
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if not pool:
+        print(f"No labelable pool jobs in {args.pool}.", file=sys.stderr)
+        return 2
+    return run_label_session(pool, args.labels)
+
+
 # --------------------------------------------------------------------------- #
 # Parser
 # --------------------------------------------------------------------------- #
@@ -711,6 +726,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
     )
     p_labels.set_defaults(func=cmd_label_check)
+
+    p_label = sub.add_parser(
+        "label",
+        help="Interactively label pool jobs into the labels file (human keypresses only)",
+    )
+    p_label.add_argument(
+        "--labels", default="eval/labels.jsonl", help="Path to the labels JSONL file"
+    )
+    p_label.add_argument(
+        "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
+    )
+    p_label.set_defaults(func=cmd_label)
 
     p_sched = sub.add_parser("schedule", help="Run once now, then daily at the configured hour")
     p_sched.add_argument("--hour", type=int, default=None, help="Local hour 0-23 (default: config)")
