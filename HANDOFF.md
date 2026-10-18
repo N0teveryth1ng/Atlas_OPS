@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-18)
 
-- Code state as of PR #49, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #49** (base `8abeaa1`).
-- Tests: **1261 passed** (`python -m pytest -q`).
+- Code state as of PR #50, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #50** (base `8abeaa1`).
+- Tests: **1279 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -49,7 +49,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
     weakened (no ignore rules, no disabled test, no relaxed threshold).
   All four are owner/environment-dependent gates and are not marked PASS here.
 
-## Merged PRs #24 to #49
+## Merged PRs #24 to #50
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -79,6 +79,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #47 | `7ca35f2` | 2026-10-18T04:10:14Z | prC2/resume-review-and-export | feat(resume): review screen, approval and DOCX/PDF export |
 | #48 | `cfbabf7` | 2026-10-18T04:34:27Z | prC2b/pdf-glyph-fold | fix(export): fold PDF glyphs to ASCII at export time; refresh HANDOFF/PRD |
 | #49 | `6ba03c5` | 2026-10-18T05:52:08Z | audit/final-readme-hygiene | docs: rewrite README to the real product; ignore generated exports; final audit notes |
+| #50 | `2bf4f43` | 2026-10-18T09:58:51Z | feat/interactive-label-tool | feat(label): interactive resumable label command for the owner |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -466,9 +467,9 @@ Merged in #49 (`6ba03c5`), on top of #48:
   (#14, #15, #16, #17, #18, #21/#38 heads + `task1/himalayas-collect-report`); only
   `main` / `origin/main` remain.
 
-## Interactive label tool (this PR)
+## Interactive label tool (PR #50, merged)
 
-Everything below is in this branch, on top of #49.
+Merged in #50 (`2bf4f43`), on top of #49:
 
 - **New subcommand `python -m atlas.cli label`** (`atlas/labeling_cli.py` +
   `cmd_label` in `atlas/cli.py`). It shows **one** unlabeled pool job at a time -
@@ -500,7 +501,52 @@ Everything below is in this branch, on top of #49.
 - The agent has **not** run the tool against `eval/labels.jsonl`; labelling is the
   owner's keypresses only. The refreshed pool holds **80 fresh jobs** (five sources),
   selected by title keyword class + source round-robin + recency only - no scores,
-  filters, decisions or model output were used.
+  filters, decisions or model output were used. The owner has since started labelling:
+  `eval/labels.jsonl` exists with the owner's first human-written record (untracked,
+  never created or edited by the agent).
+
+## Label sheet + import (this PR)
+
+Everything below is in this branch, on top of #50.
+
+- **`python -m atlas.cli label-sheet --count N`** (read-only) prints the next N
+  unlabeled jobs walking **the same fixed-seed order** as `label`
+  (`labeling_cli.pending_pool`, seed `20261018`): `short_id` (first 8 characters of
+  `pool_id`), title, company, location, remote, source, posted date, URL and a
+  description digest - the first 250 characters plus up to 6 sentences mentioning
+  experience/years/required/must/minimum/senior/lead/own/mentor **or a technology
+  name** from the repo ontology (`skills.yaml`, names >= 3 characters), capped at
+  **1,300 characters**. A heuristic `[non-English?]` flag is added when >= 10% of the
+  letters in title+description are non-ASCII (and at least 5 of them). The sheet
+  contains no score, decision, filter result, ranking, model output or log line.
+- **`python -m atlas.cli label-import FILE`** takes a TSV whose header is exactly
+  `short_id<TAB>label<TAB>reason`. Every row is validated (short_id resolves to a
+  single **unlabeled** pool job, label is `a` or `s`, reason non-empty, no duplicate
+  short_id, 3 columns) and a summary table of **all** rows is printed with `OK`/`BAD`
+  plus the failure detail. Any bad row aborts with nothing written. When all rows are
+  valid the owner must type `yes` - anything else (including EOF) aborts with nothing
+  written - and only then are the records appended in the existing format
+  (`{pool_id, url, label, reason, labeled_by: "human"}`, `a` -> `apply`, `s` ->
+  `skip`). It then prints the 40/15/10 tally and the `label-check` report and returns
+  0 only if the minimums are now met (2 = unusable TSV or non-TTY stdin;
+  `cmd_label_import` refuses non-interactive input up front).
+- **Tests** (`tests/test_label_sheet.py`, 18 new): tmp pool + tmp labels + scripted
+  fake input everywhere; asserts the sheet walks the identical order to the `label`
+  session, the digest prefix/cap/sentence limits, the non-English heuristic, no
+  system output in the sheet, bad rows rejected with the labels file byte-identical,
+  `yes` required (wrong answer and EOF both write nothing), exact record keys,
+  non-interactive refusal through `main(...)`, and the real
+  `eval/labeling_pool.jsonl` / `eval/labels.jsonl` untouched.
+- The agent did **not** run `label-import` against the real files and never writes
+  `eval/labels.jsonl`.
+- **Regression found and fixed in this PR (separate commit):** the owner's first real
+  label made `tests/test_observability.py::test_decision_agreement_is_not_published_
+  without_labels` fail, because it asserted `not eval/labels.jsonl.exists()` - an
+  assumption about owner state. The test now redirects `DECISION_LABELS_PATH` to a
+  fresh tmp file: both score-skip assertions and the "eval never creates a labels
+  file" proof are unchanged, and the test no longer depends on whether the owner has
+  labelled. Nothing was deleted, skipped or weakened (raw failure:
+  `1 failed, 1278 passed`, `AssertionError: assert not True ... D:/Atlas/eval/labels.jsonl`).
 
 ## Owner-only
 
@@ -508,8 +554,9 @@ These cannot be done by the agent and are not marked PASS on the agent's own aut
 
 1. Label **40 real JDs** (>= 15 traps, >= 10 apply) from `eval/labeling_pool.jsonl` into
    `eval/labels.jsonl` with `python -m atlas.cli label` (interactive, resumable; the
-   agent cannot press the keys) and run `atlas label-check` (feeds G5 / DEC6). The agent
-   must not create, edit, or relabel `eval/labels.jsonl`.
+   agent cannot press the keys), or the offline pair `label-sheet --count N` + a TSV
+   through `label-import FILE` (which needs a typed `yes`), and run `atlas label-check`
+   (feeds G5 / DEC6). The agent must not create, edit, or relabel `eval/labels.jsonl`.
 2. Rotate **ALL** keys (Groq, Gemini, Resend, Braintrust) and confirm (G1).
 3. Run `mutmut` under WSL/Linux (G2 / T5).
 4. Authorize the live `python -m atlas.cli eval --with-llm` run (G6, spend).
@@ -527,6 +574,7 @@ These cannot be done by the agent and are not marked PASS on the agent's own aut
 Entry point is `python -m atlas.cli`. Commands:
 `profile`, `review`, `status`, `run [--collect] [--limit]`, `decide [--limit]`,
 `explain job_id`, `label-check [--labels] [--pool]`, `label [--labels] [--pool]`,
+`label-sheet [--count] [--labels] [--pool]`, `label-import FILE [--labels] [--pool]`,
 `schedule`, `collect`,
 `eval [--golden] [--with-llm]`, `selfcheck [--fast] [--full] [--report]`,
 `feedback`, `dashboard [--host] [--port]`.

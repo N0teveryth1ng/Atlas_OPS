@@ -5,6 +5,14 @@ labeling pool at a time - title, company, location, remote type, source, posted
 date, URL and the full description - in a random order drawn with a fixed seed,
 and appends exactly one JSON object to the labels file per accepted label.
 
+The same fixed-seed order also backs the offline pair:
+
+* ``label-sheet --count N`` prints the next N pending jobs as compact text
+  (short_id, the fields above, a capped description digest, an optional
+  ``[non-English?]`` flag) so the owner can label away from the terminal.
+* ``label-import FILE`` validates a TSV of those short_ids, shows a summary
+  table, and appends to the labels file only after the owner types ``yes``.
+
 Deliberate properties:
 
 * **No anchoring.** The pool itself is raw JD text, so no score, decision, hard
@@ -26,11 +34,15 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from .labeling import MIN_APPLY, MIN_CASES, MIN_TRAPS, format_report, validate_labels
+from .skills import get_ontology
 
 #: Fixed shuffle seed, so two people (or one person, twice) see the same order.
 SHUFFLE_SEED = 20261018
@@ -50,6 +62,26 @@ RECORD_KEYS: tuple[str, ...] = ("pool_id", "url", "label", "reason", "labeled_by
 
 #: Keypress -> stored label (the stored value is what ``label-check`` validates).
 KEY_TO_LABEL: dict[str, str] = {"a": "apply", "s": "skip"}
+
+#: ``label-sheet`` knobs.
+SHORT_ID_LEN = 8
+DIGEST_PREFIX_CHARS = 250
+DIGEST_MAX_CHARS = 1300
+DIGEST_MAX_SENTENCES = 6
+NON_ENGLISH_MIN_NON_ASCII_LETTERS = 5
+NON_ENGLISH_RATIO = 0.10
+
+#: Columns of the TSV accepted by ``label-import``.
+TSV_COLUMNS: tuple[str, ...] = ("short_id", "label", "reason")
+
+#: Words that make a description sentence worth quoting in a digest.
+_SENTENCE_HINT_RE = re.compile(
+    r"\b(?:experience|years?|required|must|minimum|senior|lead|own|mentor)\w*",
+    re.IGNORECASE,
+)
+
+#: Sentence-ish chunks (up to the punctuation, trailing whitespace kept out).
+_SENTENCE_SPLIT_RE = re.compile(r"[^.!?\n]+[.!?]*")
 
 
 # --------------------------------------------------------------------------- #
@@ -107,6 +139,14 @@ def ordered_pool(pool: Sequence[dict], *, seed: int = SHUFFLE_SEED) -> list[dict
     return order
 
 
+def pending_pool(
+    pool: Sequence[dict], labels_path: Path | str, *, seed: int = SHUFFLE_SEED
+) -> list[dict]:
+    """Unlabeled jobs in the same fixed-seed order ``label`` walks them."""
+    already = labeled_pool_ids(labels_path)
+    return [e for e in ordered_pool(pool, seed=seed) if str(e["pool_id"]) not in already]
+
+
 # --------------------------------------------------------------------------- #
 # Display
 # --------------------------------------------------------------------------- #
@@ -151,11 +191,11 @@ def _progress_text(pool_size: int, done: int, session: int, left: int) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# File writes (keypress only)
+# File writes (only on an owner keypress or a typed "yes")
 # --------------------------------------------------------------------------- #
 
 
-def _append_label(labels_path: Path, entry: dict, label: str, reason: str) -> dict[str, str]:
+def append_label(labels_path: Path, entry: dict, label: str, reason: str) -> dict[str, str]:
     record = {
         "pool_id": str(entry["pool_id"]),
         "url": str(entry["url"]),
@@ -245,7 +285,7 @@ def run_label_session(
     pool_by_id = {str(e.get("pool_id", "")): e for e in pool_list}
 
     already = labeled_pool_ids(labels)
-    queue = [e for e in ordered_pool(pool_list, seed=seed) if str(e["pool_id"]) not in already]
+    queue = pending_pool(pool_list, labels, seed=seed)
     session_labeled = 0
 
     say(f"label: {len(pool_list)} pool jobs, {len(already)} already labeled, {len(queue)} to go")
@@ -317,7 +357,7 @@ def run_label_session(
         if reason is None:
             break
 
-        _append_label(labels, entry, label, reason)
+        append_label(labels, entry, label, reason)
         session_labeled += 1
         already.add(str(entry["pool_id"]))
         say(f"saved: {label} {entry['pool_id']} - {reason}")
@@ -327,5 +367,288 @@ def run_label_session(
     say("")
     say("final check (same as label-check):")
     report = validate_labels(labels, pool_by_id=pool_by_id)
+    say(format_report(report))
+    return 0 if report.meets_minimums else 1
+
+
+# --------------------------------------------------------------------------- #
+# label-sheet: the next pending jobs as compact offline text
+# --------------------------------------------------------------------------- #
+
+
+def short_id_of(pool_id: Any) -> str:
+    """The stable short id shared by ``label-sheet`` and ``label-import``."""
+    return str(pool_id)[:SHORT_ID_LEN]
+
+
+@lru_cache(maxsize=1)
+def _tech_terms() -> frozenset[str]:
+    """Technology names from the repo ontology (>= 3 characters), lowercase."""
+    try:
+        ontology = get_ontology()
+    except OSError:
+        return frozenset()
+    names = {str(name).strip().lower() for name in ontology.entries}
+    return frozenset(name for name in names if len(name) >= 3)
+
+
+def non_english_flag(*texts: Any) -> bool:
+    """Heuristic ``[non-English?]`` flag: >=10% of letters non-ASCII (min 5)."""
+    letters = 0
+    non_ascii = 0
+    for text in texts:
+        for char in str(text or ""):
+            if char.isalpha():
+                letters += 1
+                if ord(char) > 127:
+                    non_ascii += 1
+    if letters == 0 or non_ascii < NON_ENGLISH_MIN_NON_ASCII_LETTERS:
+        return False
+    return non_ascii / letters >= NON_ENGLISH_RATIO
+
+
+def _sentence_wanted(sentence: str, tech_terms: frozenset[str]) -> bool:
+    if _SENTENCE_HINT_RE.search(sentence):
+        return True
+    lowered = sentence.lower()
+    return any(term in lowered for term in tech_terms)
+
+
+def description_digest(description: Any, tech_terms: frozenset[str] | None = None) -> str:
+    """First 250 characters plus up to 6 hint/technology sentences, capped at 1300.
+
+    A sentence counts when it mentions experience/years/required/must/minimum/
+    senior/lead/own/mentor (stem-matched) or a technology name from the ontology.
+    The part of a sentence already covered by the 250-character prefix is not
+    repeated. The result is never longer than ``DIGEST_MAX_CHARS``.
+    """
+    text = str(description or "")
+    if tech_terms is None:
+        tech_terms = _tech_terms()
+    pieces: list[str] = []
+    for match in _SENTENCE_SPLIT_RE.finditer(text):
+        sentence = match.group(0).strip()
+        if not sentence or not _sentence_wanted(sentence, tech_terms):
+            continue
+        start, end = match.span()
+        if end <= DIGEST_PREFIX_CHARS:
+            continue
+        piece = sentence if start >= DIGEST_PREFIX_CHARS else text[DIGEST_PREFIX_CHARS:end].strip()
+        if piece:
+            pieces.append(piece)
+        if len(pieces) >= DIGEST_MAX_SENTENCES:
+            break
+    digest = text[:DIGEST_PREFIX_CHARS]
+    if pieces:
+        digest = f"{digest} {' '.join(pieces)}"
+    return digest[:DIGEST_MAX_CHARS]
+
+
+def _field(entry: dict, name: str) -> str:
+    return str(entry.get(name) or "-")
+
+
+def render_sheet(entries: Sequence[dict]) -> str:
+    """Compact text block list: no score, decision, filter result or ranking."""
+    blocks: list[str] = []
+    for entry in entries:
+        description = str(entry.get("description") or "")
+        lines = [
+            f"short_id : {short_id_of(entry.get('pool_id', ''))}",
+            f"title    : {_field(entry, 'title')}",
+            f"company  : {_field(entry, 'company')}",
+            f"location : {_field(entry, 'location')}",
+            f"remote   : {_field(entry, 'remote_type')}",
+            f"source   : {_field(entry, 'source')}",
+            f"posted   : {str(entry.get('posted_at') or '-')[:10]}",
+            f"url      : {_field(entry, 'url')}",
+            f"digest   : {description_digest(description)}",
+        ]
+        if non_english_flag(entry.get("title"), description):
+            lines.append("flags    : [non-English?]")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def run_label_sheet(
+    pool: Sequence[dict],
+    labels_path: Path | str,
+    count: int,
+    *,
+    seed: int = SHUFFLE_SEED,
+    print_fn: Callable[[str], None] | None = None,
+) -> int:
+    """Print the next ``count`` unlabeled jobs in the same order ``label`` uses."""
+    say = print_fn if print_fn is not None else print
+    if count < 1:
+        say("--count must be >= 1")
+        return 2
+    labels = Path(labels_path)
+    pending = pending_pool(pool, labels, seed=seed)
+    shown = pending[:count]
+    say(
+        f"label sheet: pool {len(pool)}  labeled {len(pool) - len(pending)}  "
+        f"pending {len(pending)}  showing {len(shown)} (fixed seed {seed})"
+    )
+    say("raw pool text only - nothing computed, nothing ranked")
+    if not shown:
+        say("no pending jobs left to label.")
+        return 0
+    for index, entry in enumerate(shown, start=1):
+        say("")
+        say(f"job {index} of {len(shown)}")
+        say(render_sheet([entry]))
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# label-import: append an owner-confirmed TSV
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class TsvRow:
+    """One data line of a label-import TSV; ``detail`` non-empty means rejected."""
+
+    line: int
+    short_id: str
+    label: str
+    reason: str
+    detail: str = ""
+    entry: dict | None = field(default=None, repr=False)
+
+    @property
+    def ok(self) -> bool:
+        return not self.detail
+
+
+def _fail(row: TsvRow, detail: str) -> None:
+    if not row.detail:
+        row.detail = detail
+
+
+def parse_label_tsv(path: Path | str) -> tuple[list[TsvRow], str]:
+    """Read the TSV; returns ``(rows, fatal_error)`` - a fatal error means unusable."""
+    tsv = Path(path)
+    if not tsv.exists():
+        return [], f"TSV file not found: {tsv}"
+    lines = tsv.read_text(encoding="utf-8-sig").splitlines()
+    header_index = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if header_index is None:
+        return [], "TSV file is empty"
+    header = tuple(col.strip().lower() for col in lines[header_index].split("\t"))
+    if header != TSV_COLUMNS:
+        return [], "header must be exactly: " + "\t".join(TSV_COLUMNS)
+    rows: list[TsvRow] = []
+    for line_no, line in enumerate(lines[header_index + 1 :], start=header_index + 2):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) != len(TSV_COLUMNS):
+            rows.append(
+                TsvRow(
+                    line_no,
+                    parts[0].strip() if parts else "",
+                    "",
+                    "",
+                    detail=f"expected {len(TSV_COLUMNS)} tab-separated columns, got {len(parts)}",
+                )
+            )
+            continue
+        rows.append(TsvRow(line_no, parts[0].strip(), parts[1].strip(), parts[2].strip()))
+    if not rows:
+        return [], "TSV has a header but no data rows"
+    return rows, ""
+
+
+def _validate_rows(rows: list[TsvRow], pool: Sequence[dict], labels_path: Path) -> None:
+    already = labeled_pool_ids(labels_path)
+    pending = pending_pool(pool, labels_path)
+    pending_ids = [str(entry["pool_id"]) for entry in pending]
+    seen: set[str] = set()
+    for row in rows:
+        short_id = row.short_id
+        if not short_id:
+            _fail(row, "empty short_id")
+            continue
+        matches = [pid for pid in pending_ids if pid.startswith(short_id)]
+        if not matches:
+            if any(pid.startswith(short_id) for pid in already):
+                _fail(row, "already labeled")
+            else:
+                _fail(row, "unknown short_id")
+            continue
+        if len(matches) > 1:
+            _fail(row, "ambiguous short_id")
+            continue
+        if short_id in seen:
+            _fail(row, "duplicate short_id")
+            continue
+        seen.add(short_id)
+        if row.label.lower() not in KEY_TO_LABEL:
+            _fail(row, f"label must be a or s (got {row.label!r})")
+            continue
+        if not row.reason.strip():
+            _fail(row, "empty reason")
+            continue
+        row.entry = next(entry for entry in pending if str(entry["pool_id"]) == matches[0])
+
+
+def run_label_import(
+    pool: Sequence[dict],
+    labels_path: Path | str,
+    tsv_path: Path | str,
+    *,
+    input_fn: Callable[[str], str] | None = None,
+    print_fn: Callable[[str], None] | None = None,
+) -> int:
+    """Validate a TSV and append it to the labels file after a typed ``yes``.
+
+    Returns ``2`` for an unusable TSV, ``1`` for rejected rows / no confirmation /
+    unmet minimums, and ``0`` only when everything validated, was confirmed and
+    the label-check minimums are met. Writes nothing on any other path.
+    """
+    read = input_fn if input_fn is not None else input
+    say = print_fn if print_fn is not None else print
+    labels = Path(labels_path)
+    rows, fatal = parse_label_tsv(tsv_path)
+    if fatal:
+        say(fatal)
+        return 2
+    _validate_rows(rows, pool, labels)
+
+    good = sum(1 for row in rows if row.ok)
+    say(f"label import: {tsv_path}")
+    say(f"rows: {len(rows)}  ok: {good}  bad: {len(rows) - good}")
+    say(f"{'line':>4}  {'short_id':<{SHORT_ID_LEN}}  {'label':<5}  {'status':<6}  detail")
+    for row in rows:
+        status = "OK" if row.ok else "BAD"
+        say(
+            f"{row.line:>4}  {row.short_id:<{SHORT_ID_LEN}}  {row.label or '-':<5}  "
+            f"{status:<6}  {row.detail or row.reason}"
+        )
+    if good != len(rows):
+        say("validation failed - nothing was written.")
+        return 1
+
+    prompt = f'type "yes" to append {len(rows)} label(s) to {labels}: '
+    try:
+        answer = read(prompt)
+    except (EOFError, KeyboardInterrupt):
+        say("")
+        say("input closed - aborted, nothing written.")
+        return 1
+    if answer.strip() != "yes":
+        say(f'aborted - you typed {answer.strip()!r}, not "yes"; nothing was written.')
+        return 1
+
+    for row in rows:
+        if row.entry is None:
+            continue
+        append_label(labels, row.entry, KEY_TO_LABEL[row.label.lower()], row.reason.strip())
+    say(f"appended {len(rows)} label(s) to {labels}")
+    pool_by_id = {str(entry.get("pool_id", "")): entry for entry in pool}
+    report = validate_labels(labels, pool_by_id=pool_by_id)
+    say(_tally_text(report))
     say(format_report(report))
     return 0 if report.meets_minimums else 1

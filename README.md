@@ -199,7 +199,9 @@ rate-limit wait, and the tokens/calls spent.
 - **`eval/labels.jsonl` is human-owned.** It is created, edited and relabelled only by the
   owner; `label-check` and `eval` read it and never write it, and the interactive
   `label` command appends one record only when the owner presses `a` or `s` (and
-  rewrites only when they press `u`). The agent never writes this file.
+  rewrites only when they press `u`), while `label-import` appends a whole TSV only
+  after the owner types `yes` (it refuses non-interactive input). The agent never
+  writes this file.
 - **No secrets in git.** `.env`, `atlas.db`, `uploads/`, `data/`, resumes and generated
   exports are gitignored and untracked.
 
@@ -222,6 +224,8 @@ python -m atlas.cli eval --with-llm            # + live LLM precision@10 gate (c
 python -m atlas.cli feedback <job_id> good     # or: bad --reason <code>
 python -m atlas.cli label-check                # validate a human-labelled labels file (read-only)
 python -m atlas.cli label                      # interactively label pool jobs (owner: a=apply s=skip u=undo q=quit)
+python -m atlas.cli label-sheet --count 10     # next N pending jobs as a compact text sheet (read-only)
+python -m atlas.cli label-import labels.tsv    # append a TSV of labels after you type "yes"
 python -m atlas.cli selfcheck --fast           # deterministic pre-flight checks
 python -m atlas.cli selfcheck --full           # + coverage / lint / types / mutation / network
 ```
@@ -346,6 +350,17 @@ score or a decision) in a fixed-seed random order, appends
 `{pool_id, url, label, reason, labeled_by}` on the owner's keypress, skips anything
 already labelled so a session is resumable, and ends with the same report as
 `label-check`.
+
+The same order powers the offline pair. `label-sheet --count N` prints the next N
+pending jobs as compact text - `short_id` (first 8 characters of `pool_id`), title,
+company, location, remote, source, posted date, URL, and a description digest (the
+first 250 characters plus up to 6 sentences mentioning experience/years/required/
+must/minimum/senior/lead/own/mentor or a technology name, capped at 1,300 characters)
+with a `[non-English?]` heuristic flag. `label-import FILE` takes a TSV with
+`short_id`, `label` (`a` or `s`) and `reason`, validates every row (known and
+unlabeled short_id, valid label, non-empty reason, no duplicates), prints a summary
+table, and appends to `eval/labels.jsonl` only after you type `yes` - it refuses
+non-interactive input, then prints the 40/15/10 tally and the `label-check` report.
 
 ## Project layout
 
