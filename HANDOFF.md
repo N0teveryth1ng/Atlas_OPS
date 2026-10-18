@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-18)
 
-- Code state as of PR #48, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #48** (base `8abeaa1`).
-- Tests: **1246 passed** (`python -m pytest -q`).
+- Code state as of PR #49, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #49** (base `8abeaa1`).
+- Tests: **1261 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -49,7 +49,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
     weakened (no ignore rules, no disabled test, no relaxed threshold).
   All four are owner/environment-dependent gates and are not marked PASS here.
 
-## Merged PRs #24 to #48
+## Merged PRs #24 to #49
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -78,6 +78,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #46 | `511b943` | 2026-10-17T11:50:17Z | prC1e/date-proper-case | fix(resume): render free-text month names in proper case |
 | #47 | `7ca35f2` | 2026-10-18T04:10:14Z | prC2/resume-review-and-export | feat(resume): review screen, approval and DOCX/PDF export |
 | #48 | `cfbabf7` | 2026-10-18T04:34:27Z | prC2b/pdf-glyph-fold | fix(export): fold PDF glyphs to ASCII at export time; refresh HANDOFF/PRD |
+| #49 | `6ba03c5` | 2026-10-18T05:52:08Z | audit/final-readme-hygiene | docs: rewrite README to the real product; ignore generated exports; final audit notes |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -429,14 +430,15 @@ Agreement"; the page's "Terms of Use" link points to
 - **(e) Groq tier decision.** Decide between the paid Developer tier and staying on the
   ~200K tokens-per-day free limit.
 
-## Final audit (this PR)
+## Final audit (PR #49, merged)
 
-Everything below is in this branch, on top of #48.
+Merged in #49 (`6ba03c5`), on top of #48:
 
 - **README rewritten to the real product** (`README.md`, 395 -> current): what it does,
   the two input modes (`resume` / `description`, `combined`), the pipeline stages, every
   dashboard page (Setup, Profile, Home, Add job, Rejected, Status, job page, application
-  kit, tailored resume) with its route, all 14 CLI commands, the Groq limits and the
+  kit, tailored resume) with its route, every CLI command (14 then; this PR adds
+  `label`), the Groq limits and the
   daily-limit pause, the safety rules (no auto-apply, owner approval before any export,
   `eval/labels.jsonl` human-owned), setup steps with every `.env.example` variable, plus
   config, sources, resilience, decision engine, digest/scheduling, feedback, testing,
@@ -464,13 +466,50 @@ Everything below is in this branch, on top of #48.
   (#14, #15, #16, #17, #18, #21/#38 heads + `task1/himalayas-collect-report`); only
   `main` / `origin/main` remain.
 
+## Interactive label tool (this PR)
+
+Everything below is in this branch, on top of #49.
+
+- **New subcommand `python -m atlas.cli label`** (`atlas/labeling_cli.py` +
+  `cmd_label` in `atlas/cli.py`). It shows **one** unlabeled pool job at a time -
+  title, company, location, remote type, source, posted date, URL and the full
+  description - in a random order drawn with the fixed seed `20261018`. No score,
+  decision, filter result, ranking or model output is ever displayed or stored: the
+  pool is raw JD text only.
+- Keypresses: `a` = apply, `s` = skip (prints the six seniority hints), `u` = undo the
+  last label (removes that line, then re-shows that job), `q` = quit. The reason is a
+  free one-line string; an empty line is rejected and re-prompted. EOF/interrupt quits
+  cleanly.
+- **The file is written only on a keypress**: nothing is written while loading,
+  resuming, tallying or running the final check; each accepted label appends exactly
+  `{pool_id, url, label, reason, labeled_by}` (in that order, `labeled_by: "human"`) -
+  the exact keys `label-check` validates.
+- **Resumable / idempotent**: a `pool_id` already in the labels file is never shown
+  again, so a session can be quit and continued. Live progress and tally are printed
+  after every label (`valid / apply / skip / traps` plus what is still needed of
+  40 / 15 / 10), and the session ends with `validate_labels` + `format_report`, i.e.
+  the same report as `label-check`, with exit `0` only when the minimums are met.
+- **Tests** (`tests/test_labeling_cli.py`, 15 new): every session uses a tmp pool and
+  a tmp labels file driven by scripted fake keypresses; the suite asserts that the
+  real `eval/labeling_pool.jsonl` and `eval/labels.jsonl` are byte-for-byte
+  unchanged, that quit/EOF writes nothing, that records use exactly the five keys,
+  that already-labeled ids are never re-shown, that undo works, that the fixed seed
+  gives a stable shuffled order, and that no score/decision words appear anywhere.
+  `label` also passes through `python -m atlas.cli label --help` / `main([...])` wiring
+  tests, and a missing or empty pool returns rc=2.
+- The agent has **not** run the tool against `eval/labels.jsonl`; labelling is the
+  owner's keypresses only. The refreshed pool holds **80 fresh jobs** (five sources),
+  selected by title keyword class + source round-robin + recency only - no scores,
+  filters, decisions or model output were used.
+
 ## Owner-only
 
 These cannot be done by the agent and are not marked PASS on the agent's own authority.
 
 1. Label **40 real JDs** (>= 15 traps, >= 10 apply) from `eval/labeling_pool.jsonl` into
-   `eval/labels.jsonl` and run `atlas label-check` (feeds G5 / DEC6). The agent must not
-   create, edit, or relabel `eval/labels.jsonl`.
+   `eval/labels.jsonl` with `python -m atlas.cli label` (interactive, resumable; the
+   agent cannot press the keys) and run `atlas label-check` (feeds G5 / DEC6). The agent
+   must not create, edit, or relabel `eval/labels.jsonl`.
 2. Rotate **ALL** keys (Groq, Gemini, Resend, Braintrust) and confirm (G1).
 3. Run `mutmut` under WSL/Linux (G2 / T5).
 4. Authorize the live `python -m atlas.cli eval --with-llm` run (G6, spend).
@@ -487,7 +526,8 @@ These cannot be done by the agent and are not marked PASS on the agent's own aut
 
 Entry point is `python -m atlas.cli`. Commands:
 `profile`, `review`, `status`, `run [--collect] [--limit]`, `decide [--limit]`,
-`explain job_id`, `label-check [--labels] [--pool]`, `schedule`, `collect`,
+`explain job_id`, `label-check [--labels] [--pool]`, `label [--labels] [--pool]`,
+`schedule`, `collect`,
 `eval [--golden] [--with-llm]`, `selfcheck [--fast] [--full] [--report]`,
 `feedback`, `dashboard [--host] [--port]`.
 
@@ -506,11 +546,13 @@ Additional: `python -m atlas.cli selfcheck --full`, `python -m atlas.cli eval`,
 
 ## Limitations
 
-- Golden set is synthetic (20 cases); the staged 70-JD pool is unlabelled, so every
+- Golden set is synthetic (20 cases); the 80-job labeling pool
+  (`eval/labeling_pool.jsonl`) is fresh but still unlabelled, so every
   percentage is a smoke-test figure, not real accuracy. Precision@10 and seniority
   false-positive rate against real data are BLOCKED by G5.
-- Source coverage gap: the staged pool is RemoteOK + Remotive only; Adzuna has no keys
-  and Greenhouse/Lever/Ashby were unreachable from the sandbox.
+- Source coverage gap: the pool spans five sources (Himalayas, RemoteOK, Jobicy,
+  Remotive, Arbeitnow); Adzuna has no keys and Greenhouse/Lever/Ashby have no
+  companies configured.
 - Verifier is a different model but the same provider family (Groq), not fully
   independent.
 - `--fast` replaces LLM calls with fixtures; `--full` does not make live LLM calls, so
