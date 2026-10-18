@@ -2,9 +2,9 @@
 
 ## State (verified 2026-10-18)
 
-- Code state as of PR #47, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #47** (base `8abeaa1`).
-- Tests: **1245 passed** (`python -m pytest -q`).
+- Code state as of PR #48, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #48** (base `8abeaa1`).
+- Tests: **1246 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -26,9 +26,30 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 
 - `selfcheck --fast`: **21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6)**. It exits 1 whenever
   any gate is BLOCKED; that is expected here, not a new failure.
-- `selfcheck --full` not re-run this session.
+- `selfcheck --full` (re-run this session): **27 PASS / 1 FAIL / 3 BLOCKED**, exit 1:
+  - **G5 BLOCKED** — golden set real+human-labelled: `20 cases; count 20 < 40`;
+    `apply_newgrad_01`, `apply_junior_py_02` and `apply_fresher_backend_03` are missing
+    `source`.
+  - **DEC6 BLOCKED** — decision outcomes have human-labelled ground truth:
+    `no human-labelled decision labels`.
+  - **T5 BLOCKED** — mutation score (evaluator/verifier/ranker/filters): `mutmut does not
+    support native Windows (requires WSL)`.
+  - **T7 FAIL** — `no network in unit tests: rc=1`.
+    `pytest-socket==0.8.1` **is** declared (`requirements-dev.txt`) and
+    `check_t7_no_network` runs `pytest -q -p no:randomly --disable-socket`, which then
+    fails: `80 failed, 1166 passed, 159 warnings in 86.35s` — all 80 are the FastAPI
+    `TestClient` tests (`test_dashboard` 41, `test_web_ui` 16, `test_add_job` 10,
+    `test_job_result` 10, `test_kit_route` 3) with
+    `pytest_socket.SocketBlockedError: A test tried to use socket.socket.`, plus
+    `AttributeError: 'ProactorEventLoop' object has no attribute '_ssock'` at interpreter
+    shutdown. Cause: `--disable-socket` rejects any `socket.socket` construction, and on
+    Windows the asyncio Proactor/Selector loop builds its self-pipe with an **AF_INET
+    `socketpair()`**, so merely importing/using `TestClient` trips the block. This is a
+    platform/plugin interaction, not a code defect in `atlas`; the gate was **not**
+    weakened (no ignore rules, no disabled test, no relaxed threshold).
+  All four are owner/environment-dependent gates and are not marked PASS here.
 
-## Merged PRs #24 to #47
+## Merged PRs #24 to #48
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -56,6 +77,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #45 | `90bdd99` | 2026-10-17T11:37:50Z | prC1e/empty-sections-skills-cache | fix(resume): guarantee non-empty sections, cap/dedupe skills, cache on demand |
 | #46 | `511b943` | 2026-10-17T11:50:17Z | prC1e/date-proper-case | fix(resume): render free-text month names in proper case |
 | #47 | `7ca35f2` | 2026-10-18T04:10:14Z | prC2/resume-review-and-export | feat(resume): review screen, approval and DOCX/PDF export |
+| #48 | `cfbabf7` | 2026-10-18T04:34:27Z | prC2b/pdf-glyph-fold | fix(export): fold PDF glyphs to ASCII at export time; refresh HANDOFF/PRD |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -407,6 +429,41 @@ Agreement"; the page's "Terms of Use" link points to
 - **(e) Groq tier decision.** Decide between the paid Developer tier and staying on the
   ~200K tokens-per-day free limit.
 
+## Final audit (this PR)
+
+Everything below is in this branch, on top of #48.
+
+- **README rewritten to the real product** (`README.md`, 395 -> current): what it does,
+  the two input modes (`resume` / `description`, `combined`), the pipeline stages, every
+  dashboard page (Setup, Profile, Home, Add job, Rejected, Status, job page, application
+  kit, tailored resume) with its route, all 14 CLI commands, the Groq limits and the
+  daily-limit pause, the safety rules (no auto-apply, owner approval before any export,
+  `eval/labels.jsonl` human-owned), setup steps with every `.env.example` variable, plus
+  config, sources, resilience, decision engine, digest/scheduling, feedback, testing,
+  layout and security. Every documented command was then executed: `--help` for all 14
+  subcommands (all rc=0), and real runs of `status`, `explain 1`, `label-check`,
+  `eval` (last 12 lines byte-identical, 504/504), `selfcheck --fast`, `review`
+  (incl. `--yes`), `feedback` (good + `bad --reason too_senior`), `collect`
+  (rc=0, `144 new`, one source timed out without aborting the run) and `dashboard`
+  (`/health` + every documented page HTTP 200; export endpoints still **409** with
+  `Approve a version before exporting.`). `run`, `decide`, `schedule` and
+  `eval --with-llm` were verified by argument parsing only and by their no-profile error
+  paths, because they spend LLM tokens or start a run — not authorized this session.
+- **Generated exports can no longer be committed.** `.gitignore` now also ignores
+  `*.docx`, `*.pdf`, `*.odt`, `*.rtf` (below `atlas.db`, `uploads/`, `data/`, `.env`);
+  `.env.example` stays tracked. `eval/labels.jsonl` is deliberately left untracked and
+  **not** ignored so the owner can commit labels for G5.
+- **History/secret audit (counts only).** Across all commits: `.env`, `.env.local`,
+  `profile.json`, `uploads/`, `eval/labeling_pool.jsonl`, `eval/labels.jsonl`,
+  `eval/feedback.jsonl`, `atlas.db`/`*.sqlite`, `*.docx`, `*.pdf` -> **0** ever. Key
+  patterns `gsk_…`, `AIza…`, `BRAINTRUST_API_KEY=`, `brt-`, `GROQ_API_KEY=`,
+  `RESEND_API_KEY=`, `sk-…` -> **0**; `re_[A-Za-z0-9]{30,}` -> **0** (the 15 shorter
+  `re_…` hits are test identifiers such as `test_resume_*`, not keys). `git ls-files`:
+  **149 tracked files**, none of them a DB, env file, resume, upload or generated export.
+- **Branch cleanup.** Every branch from a merged PR was deleted locally and remotely
+  (#14, #15, #16, #17, #18, #21/#38 heads + `task1/himalayas-collect-report`); only
+  `main` / `origin/main` remain.
+
 ## Owner-only
 
 These cannot be done by the agent and are not marked PASS on the agent's own authority.
@@ -420,6 +477,11 @@ These cannot be done by the agent and are not marked PASS on the agent's own aut
 5. Sign off `review_sample.md` (G11).
 6. One complete browser run: upload -> approve -> Find jobs to completion, with
    screenshots.
+7. Decide **T7 on Windows**: `selfcheck --full` fails the network gate only because
+   `pytest-socket --disable-socket` also rejects the AF_INET `socketpair()` that
+   asyncio's event loop builds for its self-pipe (80 TestClient tests). Either run the
+   gate under WSL/Linux or decide explicitly how the self-pipe may be allowed — the agent
+   will not relax the gate itself.
 
 ## How to run
 

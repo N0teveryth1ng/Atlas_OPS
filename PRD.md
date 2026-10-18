@@ -39,7 +39,8 @@ in our own wrapper. Rate-limit headers are read from the raw HTTP response
 ## Non-goals
 auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so).
 The tailored-resume generator, review UI and DOCX/PDF export are all built (PR #37
-refined through #44, plus #45/#46 and the PR #47 review/export screen). The "Add a job"
+refined through #44, plus #45/#46, the PR #47 review/export screen and the PR #48 PDF
+glyph folding). The "Add a job"
 page is built (PRs #33/#34). The
 per-job result page and the owner's own Apply/Skip verdicts (PR #36) are human
 bookkeeping only: verdicts append to the `owner_verdicts` table and never touch
@@ -51,7 +52,7 @@ UNVERIFIED: current measured values, because there is no verified human-labelled
 yet (G5 / DEC6 BLOCKED). Current eval figures are synthetic smoke tests only.
 
 ## Tailored resume
-`atlas/resume.py` (PR #37, refined through #44, plus #45/#46 and the PR #47 UI)
+`atlas/resume.py` (PR #37, refined through #44, plus #45/#46, the PR #47 UI and PR #48)
 drafts a resume tailored to one job from the approved profile: the model may only
 rewrite the candidate's own material, every line must cite a profile **fact id** (a
 sentence-level fact for prose), skills are built in code and alias-deduped (main group
@@ -76,15 +77,26 @@ dash, curly quote or accent and the stored content is unchanged. It is grounded
 generation only: it never submits an application.
 
 ## Current state (2026-10-18)
-Code state as of PR #47, 1245 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #47
+Code state as of PR #48, 1246 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #48
 (base `8abeaa1`). The tailored-resume generator, review UI, inline editing, approval and
 DOCX/PDF export are all merged and working (a regression test covers PDF glyph folding).
-What remains open is the Phase 8 auto-apply hold and the owner-only gates below. See
+A final audit then rewrote `README.md` to the real product (both input modes, the
+pipeline, every dashboard page and route, all 14 CLI commands, Groq limits and the
+daily-limit pause, safety rules, setup with every `.env` variable), added `*.docx`,
+`*.pdf`, `*.odt`, `*.rtf` to `.gitignore` so a generated export can never be committed,
+verified the secret/history audit (0 secret matches in all commits; 149 tracked files,
+none an env file, DB, resume, upload or export), and deleted every merged branch (only
+`main` / `origin/main` remain). `selfcheck --full` was run: **27 PASS / 1 FAIL (T7) /
+3 BLOCKED (G5, DEC6, T5)** — none of them PASS on the agent's own authority. What
+remains open is the Phase 8 auto-apply hold and the owner-only gates below. See
 HANDOFF.md for detail.
 
 ## Owner-only (blocking completion)
 Label 40 real JDs (15 traps, 10 apply) into `eval/labels.jsonl` + `label-check`;
 rotate ALL keys (Groq, Gemini, Resend, Braintrust) and confirm; run mutmut under
 WSL/Linux; authorize `eval --with-llm`; sign off `review_sample.md`; one complete
-browser run with screenshots. The agent must not mark these PASS itself.
+browser run with screenshots; decide T7 on Windows (`pytest-socket --disable-socket`
+collides with asyncio's AF_INET self-pipe socketpair: 80 TestClient tests fail under the
+gate, so it needs WSL/Linux or an explicit owner decision — the agent will not relax it).
+The agent must not mark these PASS itself.
