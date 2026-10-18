@@ -1,10 +1,10 @@
 # HANDOFF.md
 
-## State (verified 2026-10-17)
+## State (verified 2026-10-18)
 
-- Code state as of PR #46, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #46** (base `8abeaa1`).
-- Tests: **1222 passed** (`python -m pytest -q`).
+- Code state as of PR #47, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #47** (base `8abeaa1`).
+- Tests: **1245 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
 - Eval: **unchanged baseline** (`python -m atlas.cli eval`), last 12 lines:
@@ -28,7 +28,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
   any gate is BLOCKED; that is expected here, not a new failure.
 - `selfcheck --full` not re-run this session.
 
-## Merged PRs #24 to #46
+## Merged PRs #24 to #47
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -55,6 +55,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #44 | `d5fce39` | 2026-10-17T07:36:13Z | prC1d/lexical-grounding-repair | fix(resume): ground bullets by sentence facts, repair thin sections, clean tech |
 | #45 | `90bdd99` | 2026-10-17T11:37:50Z | prC1e/empty-sections-skills-cache | fix(resume): guarantee non-empty sections, cap/dedupe skills, cache on demand |
 | #46 | `511b943` | 2026-10-17T11:50:17Z | prC1e/date-proper-case | fix(resume): render free-text month names in proper case |
+| #47 | `7ca35f2` | 2026-10-18T04:10:14Z | prC2/resume-review-and-export | feat(resume): review screen, approval and DOCX/PDF export |
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -79,7 +80,7 @@ kind, #23 non-job-listing filter.
   (opens `/jobs/{id}/kit` for any decision, including SKIP) and a **Your verdict**
   form -> `/rejected` with filter rule + reason -> `/health`. The page also offers
   **Build tailored resume** -> `/jobs/{id}/resume` (background build with a progress
-  page, side-by-side review, inline editing, approval and DOCX/PDF export; PR C2).
+  page, side-by-side review, inline editing, approval and DOCX/PDF export; PR #47).
   **Add a job** (`/add`,
   owner-only; PR #33) pastes a JD and runs the same pipeline; since PR #34 it
   evaluates in a background thread and redirects (303) to `/add/progress`, which polls
@@ -107,12 +108,12 @@ kind, #23 non-job-listing filter.
 - **Prepare application** opens `/jobs/{id}/kit` for any stored decision (APPLY,
   REVIEW, SKIP); the kit gate was widened from APPLY/REVIEW to all three.
 
-## Tailored resume generator (PRs #37, #39, #40, #41, #42, #43, #44, #45, #46, + the C2 review/export UI)
+## Tailored resume generator (PRs #37, #39, #40, #41, #42, #43, #44, #45, #46, + the #47 review/export UI)
 
 - `atlas/resume.py` + `prompts/tailored_resume.md` (version 4) turn the approved
   profile and one parsed job into a `TailoredResume`. Generation stays **on demand
   only** and nothing runs it automatically; the dashboard UI (button, review page,
-  approval and DOCX/PDF export) is added by PR C2 (see below).
+  approval and DOCX/PDF export) is added by PR #47 (see below).
 - The cache key is `(profile hash, job id, prompt version, generator version)`; bump
   the `GENERATOR_VERSION` constant whenever the resume rules change so a stale resume
   is never served.
@@ -188,7 +189,7 @@ kind, #23 non-job-listing filter.
   `generator_version`, `tokens`, `calls`, `edited_at`); `save_tailored_resume` versions
   per job, `latest_tailored_resume`, `find_cached_tailored_resume`,
   `approve_tailored_resume` (idempotent), `approved_tailored_resume`. Only approved
-  versions are exported (C2).
+  versions are exported (#47).
 - Determinism and cost: every resume LLM call uses `temperature 0`, and
   `generate_tailored_resume_cached` caches by
   `(profile hash, job id, prompt version, generator version)` so a repeat build returns
@@ -200,11 +201,14 @@ kind, #23 non-job-listing filter.
   `GroqDailyLimitReached` propagate. Profile/resume text never reaches Braintrust
   (prompt fingerprints only; covered by a test).
 
-## Tailored resume review screen + export (PR C2)
+## Tailored resume review screen + export (PR #47)
 
 - The per-job result page has a **Build tailored resume** link -> `GET /jobs/{id}/resume`.
-  When no resume exists the page offers to build one with an estimated token cost; an
-  **Approve a version before exporting** guard blocks export until a version is approved.
+  When no resume exists the page offers to build one with an estimated token cost.
+- `GET /jobs/{id}/resume/export.docx|.pdf` is gated by **`_export_response`**: it returns
+  **409 "Approve a version before exporting."** while `approved_tailored_resume` is
+  `None`, **404** if the job is not shippable, and only then streams the approved
+  version. An unapproved draft is never exported.
 - `POST /jobs/{id}/resume` starts a build in a **background thread under the existing
   single-run lock** and 303-redirects to `/jobs/{id}/resume/progress`, which polls
   `/api/jobs/{id}/resume-status` for the current step, Groq rate-limit wait, and the
@@ -228,6 +232,15 @@ kind, #23 non-job-listing filter.
   Education), a standard font, **no tables / images / text boxes / header-footer**, and
   filename `Name_Role_Company`. Text is ASCII-normalized and marker-free so the DOCX and
   PDF text match the approved content exactly. `lxml` (BSD) backs `python-docx`.
+- **PDF glyph handling (chosen: fold at export time only).** fpdf2's built-in core
+  Helvetica (WinAnsi) cannot render a non-breaking hyphen (U+2011), en/em dashes, curly
+  quotes, an ellipsis or an arbitrary accented letter, and would emit `?` placeholders.
+  `to_ascii` folds those to plain ASCII (`-`, `'`, `"`, `...`, and NFKD-stripped accents)
+  **in the exported bytes only**; the stored resume text and the DOCX text keep the same
+  folding, so DOCX text == PDF text == `export_text`. A regression test builds a resume
+  full of those glyphs, exports a PDF, extracts it with `pypdf`, and asserts no `?` and
+  no non-ASCII characters. No font is embedded (a non-core font would add a licensed font
+  file); the stored content is never rewritten.
 - **No auto-submission anywhere.** The apply link only opens the job page.
 
 ## Profile editor (PR #38)
@@ -366,27 +379,29 @@ Agreement"; the page's "Terms of Use" link points to
 - **Company ATS pages in `companies.yaml`**: ingest from official job postings at known company ATS URLs if permitted by those terms (separate from scraping YC/WaaS lists).
 - **Owner browsing**: owner manually adds relevant jobs.
 
-## Planned and not built
+## Status of planned items
 
-Nothing below is implemented. Each needs the owner's go-ahead.
+**Done (built and merged):**
 
-- **(a) Tailored resume builder.** BUILT (generator PR #37; fact-ID grounding #39;
+- **(a) Tailored resume builder.** DONE — generator PR #37; fact-ID grounding #39;
   claim-strength + coverage + evidence-linked skills #40; sentence-level facts +
   thin-section repair #44; empty-section guarantee, verbatim fallback, skills cap and
   on-demand cache #45; proper-case dates #46; review screen + approval + DOCX/PDF export
-  in PR C2 — `atlas/resume.py`, `atlas/export.py`, dashboard routes);
-  profile editor BUILT (PR #38; `/profile` captures internships, work, projects,
-  education, links, certifications). It rewrites and reorders content drawn only from
-  the approved profile; every generated line traces back to a profile fact, and unmet
-  requirements are listed but never added. The dashboard button, side-by-side review
-  page (base vs tailored, per-line fact ids / source badge / claim flags), inline
-  editing (new `owner-edited` version), owner approval and ATS-friendly single-column
-  DOCX/PDF export are now in place. No auto-submission.
-- **(b) "Add a job" dashboard page.** BUILT (PR #33; background + progress page in
-  PR #34). Owner pastes a JD's text and link; it is evaluated through the same
-  pipeline with `source = "owner_added"`. The URL is **never fetched**.
+  #47 (`atlas/resume.py`, `atlas/export.py`, dashboard routes). The cache key includes
+  the generator version, the export guard returns **409** until a version is approved,
+  and PDF glyphs fold to ASCII at export time only. Profile editor PR #38. No
+  auto-submission.
+- **(b) "Add a job" dashboard page.** DONE — PR #33, background + progress page PR #34.
+  Owner pastes a JD's text and link; the URL is **never fetched**
+  (`source = "owner_added"`).
+
+**Closed:**
+
 - **(c) YC jobs source.** CLOSED by owner (ToS prohibits automated reading); see Task D.
   Alternatives: Add a job, company ATS pages in `companies.yaml`, owner browsing.
+
+**Remaining (needs the owner's go-ahead):**
+
 - **(d) Phase 8b assisted / auto apply.** Blocked until every gate is GO and the owner
   explicitly says so.
 - **(e) Groq tier decision.** Decide between the paid Developer tier and staying on the
