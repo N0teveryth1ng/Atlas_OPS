@@ -39,7 +39,7 @@ in our own wrapper. Rate-limit headers are read from the raw HTTP response
 ## Non-goals
 auto-applying (Phase 8 / PR 8b on hold until all gates are GO and the owner says so).
 The tailored-resume generator, review UI and DOCX/PDF export are all built (PR #37
-refined through #44, plus #45/#46 and the PR C2 review/export screen). The "Add a job"
+refined through #44, plus #45/#46 and the PR #47 review/export screen). The "Add a job"
 page is built (PRs #33/#34). The
 per-job result page and the owner's own Apply/Skip verdicts (PR #36) are human
 bookkeeping only: verdicts append to the `owner_verdicts` table and never touch
@@ -51,7 +51,7 @@ UNVERIFIED: current measured values, because there is no verified human-labelled
 yet (G5 / DEC6 BLOCKED). Current eval figures are synthetic smoke tests only.
 
 ## Tailored resume
-`atlas/resume.py` (PR #37, refined through #44, plus #45/#46 and the PR C2 UI)
+`atlas/resume.py` (PR #37, refined through #44, plus #45/#46 and the PR #47 UI)
 drafts a resume tailored to one job from the approved profile: the model may only
 rewrite the candidate's own material, every line must cite a profile **fact id** (a
 sentence-level fact for prose), skills are built in code and alias-deduped (main group
@@ -67,15 +67,21 @@ per job and approved by the owner before export. The per-job page opens a side-b
 review screen (base vs tailored, per-line fact ids / source badge / claim flags, Missing
 requirements / Familiar skills / Additional tools / ATS lint), inline editing (each edit
 saves a new `owner-edited` version and warns on a technology/number absent from the
-profile) and approval; only approved versions export to an ATS-friendly single-column
+profile) and approval; the export route returns **409** until a version is approved, and
+only approved versions export to an ATS-friendly single-column
 DOCX (`python-docx`) or PDF (`fpdf2`) with real selectable text and no tables/images/
-text boxes/headers/footers, named `Name_Role_Company`. It is grounded generation
-only: it never submits an application.
+text boxes/headers/footers, named `Name_Role_Company`. Exported text is folded to ASCII
+at export time only, so fpdf2's core font never prints `?` for a non-breaking hyphen,
+dash, curly quote or accent and the stored content is unchanged. It is grounded
+generation only: it never submits an application.
 
-## Current state (2026-10-17)
-Code state as of PR #46, 1222 tests passing, ruff/black/mypy clean, selfcheck --fast
-21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #46
-(base `8abeaa1`). See HANDOFF.md for detail.
+## Current state (2026-10-18)
+Code state as of PR #47, 1245 tests passing, ruff/black/mypy clean, selfcheck --fast
+21 PASS / 0 FAIL / 2 BLOCKED (G5, DEC6). Cumulative work covered by PRs #24 to #47
+(base `8abeaa1`). The tailored-resume generator, review UI, inline editing, approval and
+DOCX/PDF export are all merged and working (a regression test covers PDF glyph folding).
+What remains open is the Phase 8 auto-apply hold and the owner-only gates below. See
+HANDOFF.md for detail.
 
 ## Owner-only (blocking completion)
 Label 40 real JDs (15 traps, 10 apply) into `eval/labels.jsonl` + `label-check`;

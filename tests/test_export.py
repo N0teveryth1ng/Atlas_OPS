@@ -141,3 +141,51 @@ def test_exported_content_passes_the_ats_lint():
     text = export_text(resume)
     for heading in STANDARD_HEADINGS:
         assert heading in text
+
+
+def _glyph_resume() -> TailoredResume:
+    """A resume carrying glyphs fpdf2's core Helvetica cannot render natively."""
+    return TailoredResume(
+        header=ResumeHeader(
+            name="Jos\u00e9 O\u2019Neil",
+            email="jose@example.com",
+            links={"github": "https://github.com/jose"},
+        ),
+        summary=[
+            ResumeLine(
+                text=(
+                    "Re\u2011engineered the pipeline\u2014end to end\u2014"
+                    "using \u201csmart\u201d quotes and an ellipsis\u2026"
+                ),
+                facts=["W1.s1"],
+            )
+        ],
+        skills=["Python"],
+        experience=[
+            ExperienceEntry(
+                role="Data engineer",
+                company="Acme",
+                duration_months=30,
+                dates="Jan 2020 - Jan 2023",
+                bullets=[ResumeLine(text="Built a caf\u00e9 API in Python.", facts=["W1.s1"])],
+            )
+        ],
+        ats=ATSReport(passed=True),
+    )
+
+
+def test_pdf_glyphs_are_folded_to_ascii_so_there_are_no_question_marks():
+    resume = _glyph_resume()
+
+    assert "\u2011" in resume.summary[0].text
+    assert "caf\u00e9" in resume.experience[0].bullets[0].text
+
+    extracted = "\n".join(
+        (page.extract_text() or "") for page in PdfReader(io.BytesIO(export_pdf(resume))).pages
+    )
+
+    assert "?" not in extracted
+    assert _normalize(to_ascii(resume.summary[0].text)) in _normalize(extracted)
+    assert "Re-engineered the pipeline-end to end" in _normalize(extracted)
+    for glyph in ("\u2011", "\u2013", "\u2014", "\u201c", "\u201d", "\u2019", "\u2026", "\u00e9"):
+        assert glyph not in extracted
