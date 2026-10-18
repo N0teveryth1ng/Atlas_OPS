@@ -570,17 +570,24 @@ class TestEvalScoresPublished:
         assert row["metadata"]["experiment"] == EVAL_EXPERIMENT
         assert set(row["scores"]) == {YEAR_ACCURACY_SCORE, SENIORITY_PASSTHROUGH_SCORE}
 
-    def test_decision_agreement_is_not_published_without_labels(self, sdk: FakeSDK) -> None:
+    def test_decision_agreement_is_not_published_without_labels(
+        self, sdk: FakeSDK, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """DEC6 is owner-gated: with no labelled ground truth the score is skipped.
 
         Inventing a ground truth here would manufacture the very number DEC6
-        exists to produce, so the honest answer is a missing score.
+        exists to produce, so the honest answer is a missing score. The labels
+        path is redirected to a fresh tmp file, so the check stays valid whether
+        or not the owner has started labelling the real human-owned file, and it
+        still proves eval never creates a labels file itself.
         """
+        labels = tmp_path / "labels.jsonl"
+        monkeypatch.setattr(evaluation, "DECISION_LABELS_PATH", labels)
         run_eval()
         row = sdk.logger.rows[0]
         assert DECISION_AGREEMENT_SCORE not in row["scores"]
         assert not any("agreement" in name for name in row["scores"])
-        assert not evaluation.DECISION_LABELS_PATH.exists()
+        assert not labels.exists()
 
     def test_run_eval_publishes_exact_report_numbers(self, sdk: FakeSDK) -> None:
         report = evaluate(load_golden_set())
