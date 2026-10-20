@@ -26,6 +26,8 @@ uploads/
 profile.json
 logs/
 eval/feedback.jsonl
+# audit trail of successful label imports (timestamp, file name, sha256, rows)
+eval/label_imports.log
 # raw third-party JD text: kept local, never committed
 eval/labeling_pool.jsonl
 selfcheck_report.json

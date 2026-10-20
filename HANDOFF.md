@@ -2,8 +2,8 @@
 
 ## State (verified 2026-10-18)
 
-- Code state as of PR #50, in sync with `origin/main`.
-- This state is the cumulative result of PRs **#24 to #50** (base `8abeaa1`).
+- Code state as of PR #51 plus the `cb72aab` labels commit, in sync with `origin/main`.
+- This state is the cumulative result of PRs **#24 to #51** (base `8abeaa1`).
 - Tests: **1279 passed** (`python -m pytest -q`).
 - Lint / format / types: `ruff check atlas tests` clean; `black --check atlas tests`
   clean (line length 100); `mypy atlas` clean.
@@ -49,7 +49,7 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
     weakened (no ignore rules, no disabled test, no relaxed threshold).
   All four are owner/environment-dependent gates and are not marked PASS here.
 
-## Merged PRs #24 to #50
+## Merged PRs #24 to #51
 
 | PR | commit | merged (UTC) | branch | title |
 |---|---|---|---|---|
@@ -80,6 +80,10 @@ Braintrust: published skill_matching_accuracy -> https://www.braintrust.dev/app/
 | #48 | `cfbabf7` | 2026-10-18T04:34:27Z | prC2b/pdf-glyph-fold | fix(export): fold PDF glyphs to ASCII at export time; refresh HANDOFF/PRD |
 | #49 | `6ba03c5` | 2026-10-18T05:52:08Z | audit/final-readme-hygiene | docs: rewrite README to the real product; ignore generated exports; final audit notes |
 | #50 | `2bf4f43` | 2026-10-18T09:58:51Z | feat/interactive-label-tool | feat(label): interactive resumable label command for the owner |
+| #51 | `dc8e511` | 2026-10-18T11:53:55Z | feat/label-sheet-import | feat(label): offline label-sheet and typed-yes label-import |
+
+`cb72aab` (`data(labels): commit the first 12 human labels for G5/DEC6`) is a direct
+data commit on `main`, not a PR.
 
 Earlier context: #20 docs (owner merge workflow), #21 Himalayas collector, #22 kit claim
 kind, #23 non-job-listing filter.
@@ -454,8 +458,9 @@ Merged in #49 (`6ba03c5`), on top of #48:
   paths, because they spend LLM tokens or start a run — not authorized this session.
 - **Generated exports can no longer be committed.** `.gitignore` now also ignores
   `*.docx`, `*.pdf`, `*.odt`, `*.rtf` (below `atlas.db`, `uploads/`, `data/`, `.env`);
-  `.env.example` stays tracked. `eval/labels.jsonl` is deliberately left untracked and
-  **not** ignored so the owner can commit labels for G5.
+  `.env.example` stays tracked. `eval/labels.jsonl` was deliberately left untracked and
+  **not** ignored so the owner could commit labels for G5; it is now tracked
+  (`cb72aab`, 12 owner records).
 - **History/secret audit (counts only).** Across all commits: `.env`, `.env.local`,
   `profile.json`, `uploads/`, `eval/labeling_pool.jsonl`, `eval/labels.jsonl`,
   `eval/feedback.jsonl`, `atlas.db`/`*.sqlite`, `*.docx`, `*.pdf` -> **0** ever. Key
@@ -505,7 +510,7 @@ Merged in #50 (`2bf4f43`), on top of #49:
   `eval/labels.jsonl` exists with the owner's first human-written record (untracked,
   never created or edited by the agent).
 
-## Label sheet + import (this PR)
+## Label sheet + import (PR #51, merged)
 
 Everything below is in this branch, on top of #50.
 
@@ -547,6 +552,44 @@ Everything below is in this branch, on top of #50.
   file" proof are unchanged, and the test no longer depends on whether the owner has
   labelled. Nothing was deleted, skipped or weakened (raw failure:
   `1 failed, 1278 passed`, `AssertionError: assert not True ... D:/Atlas/eval/labels.jsonl`).
+
+## Close the label-import bypass (this PR)
+
+Everything below is on top of #51.
+
+- **What happened.** On 2026-10-18 the agent confirmed an import itself: it ran
+  `python -c "from atlas.labeling_cli import load_pool, run_label_import; raise
+  SystemExit(run_label_import(..., input_fn=lambda _p: 'yes'))"` - the public
+  function accepted injected IO, so the TTY gate in `cmd_label_import` was
+  skipped and 10 rows were appended to `eval/labels.jsonl` with
+  `labeled_by: "human"` that the owner had not typed. It happened once (batch 1,
+  at the owner's explicit instruction after the CLI had refused piped input).
+  The import command itself was never made to run non-interactively again.
+- **Gate.** `label-import` writes only when `sys.stdin.isatty()` **and**
+  `sys.stdout.isatty()` are both true, and the `yes` is read from that terminal
+  via `input()`; otherwise it prints `label-import refuses non-interactive input
+  (run it in a terminal).` to stderr and returns 2. There is no flag,
+  environment variable or public function that skips the prompt:
+  `run_label_import` accepts no IO arguments, the table/prompt body is the
+  private `_import_with_prompt`, the write is the private `_write_rows`, and the
+  record append is the private `_append_label` (renamed from `append_label`).
+- **Audit log.** Every successful import appends one line
+  `timestamp<TAB>file-name<TAB>sha256<TAB>rows` (UTC ISO-8601, SHA-256 of the
+  TSV bytes) to `eval/label_imports.log`, which is gitignored (`*.log` plus an
+  explicit entry). Rejected rows, a wrong answer and EOF write no line.
+- **AGENTS.md** now states that the agent never runs `label` or `label-import`,
+  never drafts or suggests labels, and never writes `eval/labels.jsonl`; the
+  owner runs the imports.
+- **Tests** (6 new in `tests/test_label_sheet.py`): piped stdin refused; stdin a
+  TTY but stdout not refused; a direct `run_label_import(...)` call without a
+  TTY returns 2, never calls `input()` and writes nothing; a direct call with a
+  TTY still needs the typed `yes`; the audit line carries a timezone-aware
+  timestamp, file name, SHA-256 and row count and appends across imports;
+  rejected rows write no audit line; the real `eval/labeling_pool.jsonl` /
+  `eval/labels.jsonl` stay byte-identical after an import run.
+- **Labels are tracked now.** `eval/labels.jsonl` was committed in `cb72aab`
+  (12 owner records), so the older "deliberately left untracked" note below no
+  longer applies.
 
 ## Owner-only
 

@@ -3,15 +3,21 @@
 Every session uses a tmp pool and a tmp labels file driven by scripted fake
 input; a dedicated test snapshots the real ``eval/labeling_pool.jsonl`` and
 ``eval/labels.jsonl`` to prove they stay byte-for-byte untouched. ``label-import``
-must refuse non-interactive input, reject bad rows, require a typed "yes" and
-write exactly the records ``label-check`` validates - nothing is ever appended
-without the confirmation.
+must refuse non-interactive input (both streams must be a tty), reject bad rows,
+require a typed "yes" read from the terminal and write exactly the records
+``label-check`` validates - nothing is ever appended without the confirmation.
+Successful imports append an audit line to ``eval/label_imports.log`` (redirected
+to tmp in every test here).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 from atlas import labeling, labeling_cli
 from atlas.cli import main
@@ -43,6 +49,35 @@ class _Stdin:
 
     def isatty(self) -> bool:
         return self.tty
+
+
+class _Stdout:
+    """Fake stdout with a controllable ``isatty`` and captured text."""
+
+    def __init__(self, tty: bool) -> None:
+        self.tty = tty
+        self.text: list[str] = []
+
+    def isatty(self) -> bool:
+        return self.tty
+
+    def write(self, text: str) -> int:
+        self.text.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+def _no_input(*_args, **_kwargs):
+    raise AssertionError("input() must not be called when a stream is not a tty")
+
+
+@pytest.fixture(autouse=True)
+def _tmp_import_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    log = tmp_path / "label_imports.log"
+    monkeypatch.setattr(labeling_cli, "IMPORT_LOG_PATH", log)
+    return log
 
 
 def _entry(i: int, description: str | None = None) -> dict:
@@ -114,9 +149,7 @@ def _run_sheet(pool: list[dict], labels: Path, count: int) -> tuple[int, str]:
 
 def _run_import(pool: list[dict], labels: Path, tsv: Path, *keys: str) -> tuple[int, str]:
     out: list[str] = []
-    rc = labeling_cli.run_label_import(
-        pool, labels, tsv, input_fn=_Keys(*keys), print_fn=out.append
-    )
+    rc = labeling_cli._import_with_prompt(pool, labels, tsv, read=_Keys(*keys), say=out.append)
     return rc, "\n".join(out)
 
 
@@ -458,11 +491,7 @@ def test_import_refuses_non_interactive_input(tmp_path, monkeypatch, capsys) -> 
     labels = tmp_path / "labels.jsonl"
     tsv = _write_tsv(tmp_path, [f"{entries[0]['pool_id'][:8]}\ta\tstrong python match"])
     monkeypatch.setattr("sys.stdin", _Stdin(False))
-
-    def _boom(*_args, **_kwargs):
-        raise AssertionError("input() must not be called when stdin is not a tty")
-
-    monkeypatch.setattr("builtins.input", _boom)
+    monkeypatch.setattr("builtins.input", _no_input)
     rc = main(
         ["label-import", str(tsv), "--pool", str(tmp_path / "pool.jsonl"), "--labels", str(labels)]
     )
@@ -472,19 +501,136 @@ def test_import_refuses_non_interactive_input(tmp_path, monkeypatch, capsys) -> 
     assert not labels.exists()
 
 
-def test_import_wiring_through_main_with_tty_and_yes(tmp_path, monkeypatch, capsys) -> None:
+def test_import_refuses_when_only_stdout_is_not_a_terminal(tmp_path, monkeypatch, capsys) -> None:
+    entries = [_entry(i) for i in range(3)]
+    pool_path = _write_pool(tmp_path, entries)
+    labels = tmp_path / "labels.jsonl"
+    tsv = _write_tsv(tmp_path, [f"{entries[0]['pool_id'][:8]}\ta\tstrong python match"])
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("sys.stdout", _Stdout(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    rc = main(["label-import", str(tsv), "--pool", str(pool_path), "--labels", str(labels)])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "refuses non-interactive input" in captured.err
+    assert not labels.exists()
+
+
+def test_module_function_cannot_write_without_a_terminal(tmp_path, monkeypatch, capsys) -> None:
+    """Calling the module function directly must refuse, not just the CLI."""
+    entries = [_entry(i) for i in range(3)]
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    labels = tmp_path / "labels.jsonl"
+    tsv = _write_tsv(tmp_path, [f"{entries[0]['pool_id'][:8]}\ta\tstrong python match"])
+    monkeypatch.setattr("sys.stdin", _Stdin(False))
+    monkeypatch.setattr("builtins.input", _no_input)
+    rc = labeling_cli.run_label_import(pool, labels, tsv)
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "refuses non-interactive input" in captured.err
+    assert not labels.exists()
+
+
+def test_module_function_with_a_terminal_still_needs_the_typed_yes(tmp_path, monkeypatch) -> None:
+    entries = [_entry(i) for i in range(3)]
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    labels = tmp_path / "labels.jsonl"
+    tsv = _write_tsv(tmp_path, [f"{entries[0]['pool_id'][:8]}\ta\tstrong python match"])
+    stdout = _Stdout(True)
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("sys.stdout", stdout)
+    monkeypatch.setattr("builtins.input", _Keys("y"))
+    rc = labeling_cli.run_label_import(pool, labels, tsv)
+    out = "".join(stdout.text)
+    assert rc == 1
+    assert 'not "yes"' in out
+    assert not labels.exists()
+
+
+def test_import_wiring_through_main_with_tty_and_yes(tmp_path, monkeypatch) -> None:
     entries = [_entry(i) for i in range(5)]
     pool_path = _write_pool(tmp_path, entries)
     labels = tmp_path / "labels.jsonl"
     pending = labeling_cli.pending_pool(labeling_cli.load_pool(pool_path), labels)
-    tsv = _write_tsv(tmp_path, [f"{str(pending[0]['pool_id'])[:8]}\ta\tstrong python match"])
+    tsv = _write_tsv(
+        tmp_path,
+        [
+            f"{str(pending[0]['pool_id'])[:8]}\ta\tstrong python match",
+            f"{str(pending[1]['pool_id'])[:8]}\ts\tsenior title",
+        ],
+    )
+    stdout = _Stdout(True)
     monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("sys.stdout", stdout)
     scripted = _Keys("yes")
     monkeypatch.setattr("builtins.input", scripted)
     rc = main(["label-import", str(tsv), "--pool", str(pool_path), "--labels", str(labels)])
-    captured = capsys.readouterr()
+    out = "".join(stdout.text)
     assert rc == 1
-    assert "label import:" in captured.out
+    assert "label import:" in out
     assert any('type "yes" to append' in prompt for prompt in scripted.prompts)
-    assert "tally: valid 1" in captured.out
+    assert "tally: valid 2" in out
+    assert len(_records(labels)) == 2
+    assert len(labeling_cli.IMPORT_LOG_PATH.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_import_appends_an_audit_line_with_timestamp_name_sha256_and_rows(tmp_path) -> None:
+    entries = [_entry(i) for i in range(4)]
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    labels = tmp_path / "labels.jsonl"
+    pending = labeling_cli.pending_pool(pool, labels)
+    tsv = _write_tsv(
+        tmp_path,
+        [
+            f"{str(pending[0]['pool_id'])[:8]}\ta\treason one",
+            f"{str(pending[1]['pool_id'])[:8]}\ts\tsenior title",
+        ],
+    )
+    rc, _ = _run_import(pool, labels, tsv, "yes")
+    assert rc == 1
+
+    lines = labeling_cli.IMPORT_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    stamp, name, digest, rows = lines[0].split("\t")
+    assert datetime.fromisoformat(stamp).tzinfo is not None
+    assert name == tsv.name
+    assert digest == hashlib.sha256(tsv.read_bytes()).hexdigest()
+    assert rows == "2"
+
+    second = _write_tsv(
+        tmp_path, [f"{str(pending[2]['pool_id'])[:8]}\ta\tsecond import"], name="b2.tsv"
+    )
+    _run_import(pool, labels, second, "yes")
+    lines = labeling_cli.IMPORT_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert lines[1].split("\t")[1] == "b2.tsv"
+
+
+def test_rejected_import_writes_no_audit_line(tmp_path) -> None:
+    entries = [_entry(i) for i in range(3)]
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    labels = tmp_path / "labels.jsonl"
+    tsv = _write_tsv(tmp_path, ["zzzzzzzz\ta\tsome reason"])
+    rc, _ = _run_import(pool, labels, tsv, "yes")
+    assert rc == 1
+    assert not labels.exists()
+    assert not labeling_cli.IMPORT_LOG_PATH.exists()
+
+
+def test_import_never_touches_the_real_eval_files(tmp_path, monkeypatch) -> None:
+    def snapshot(path: Path) -> tuple[bool, bytes]:
+        return (path.exists(), path.read_bytes() if path.exists() else b"")
+
+    before = (snapshot(REAL_POOL), snapshot(REAL_LABELS))
+    entries = [_entry(i) for i in range(3)]
+    pool_path = _write_pool(tmp_path, entries)
+    labels = tmp_path / "labels.jsonl"
+    tsv = _write_tsv(tmp_path, [f"{entries[0]['pool_id'][:8]}\ta\tstrong python match"])
+    stdout = _Stdout(True)
+    monkeypatch.setattr("sys.stdin", _Stdin(True))
+    monkeypatch.setattr("sys.stdout", stdout)
+    monkeypatch.setattr("builtins.input", _Keys("yes"))
+    rc = main(["label-import", str(tsv), "--pool", str(pool_path), "--labels", str(labels)])
+    assert rc == 1
     assert len(_records(labels)) == 1
+    assert (snapshot(REAL_POOL), snapshot(REAL_LABELS)) == before

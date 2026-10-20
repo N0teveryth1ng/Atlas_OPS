@@ -11,7 +11,11 @@ The same fixed-seed order also backs the offline pair:
   (short_id, the fields above, a capped description digest, an optional
   ``[non-English?]`` flag) so the owner can label away from the terminal.
 * ``label-import FILE`` validates a TSV of those short_ids, shows a summary
-  table, and appends to the labels file only after the owner types ``yes``.
+  table, and appends to the labels file only after the owner types ``yes`` on a
+  real terminal (both stdin and stdout must be a tty; there is no flag,
+  environment variable or public function that skips the prompt). Every
+  successful import appends an audit line (UTC timestamp, source file name,
+  SHA-256, row count) to ``eval/label_imports.log``.
 
 Deliberate properties:
 
@@ -32,11 +36,14 @@ explicit keypress from the person running it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import re
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -73,6 +80,12 @@ NON_ENGLISH_RATIO = 0.10
 
 #: Columns of the TSV accepted by ``label-import``.
 TSV_COLUMNS: tuple[str, ...] = ("short_id", "label", "reason")
+
+#: Gitignored audit log: one line per successful import (no JD text).
+IMPORT_LOG_PATH = Path("eval") / "label_imports.log"
+
+#: Shown when either stream is not a real terminal.
+INTERACTIVE_REFUSAL = "label-import refuses non-interactive input (run it in a terminal)."
 
 #: Words that make a description sentence worth quoting in a digest.
 _SENTENCE_HINT_RE = re.compile(
@@ -195,7 +208,7 @@ def _progress_text(pool_size: int, done: int, session: int, left: int) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def append_label(labels_path: Path, entry: dict, label: str, reason: str) -> dict[str, str]:
+def _append_label(labels_path: Path, entry: dict, label: str, reason: str) -> dict[str, str]:
     record = {
         "pool_id": str(entry["pool_id"]),
         "url": str(entry["url"]),
@@ -357,7 +370,7 @@ def run_label_session(
         if reason is None:
             break
 
-        append_label(labels, entry, label, reason)
+        _append_label(labels, entry, label, reason)
         session_labeled += 1
         already.add(str(entry["pool_id"]))
         say(f"saved: {label} {entry['pool_id']} - {reason}")
@@ -594,22 +607,39 @@ def _validate_rows(rows: list[TsvRow], pool: Sequence[dict], labels_path: Path) 
         row.entry = next(entry for entry in pending if str(entry["pool_id"]) == matches[0])
 
 
-def run_label_import(
+def is_interactive_terminal() -> bool:
+    """True only when both stdin and stdout are real terminals."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _audit_import(tsv_path: Path | str, rows: int) -> None:
+    """Append timestamp, source file name, SHA-256 and row count to the audit log."""
+    source = Path(tsv_path)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    stamp = datetime.now(UTC).isoformat(timespec="seconds")
+    IMPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with IMPORT_LOG_PATH.open("a", encoding="utf-8", newline="\n") as fh:
+        fh.write(f"{stamp}\t{source.name}\t{digest}\t{rows}\n")
+        fh.flush()
+
+
+def _write_rows(labels: Path, rows: list[TsvRow]) -> None:
+    """Private write path: only reached after a typed ``yes`` on a real terminal."""
+    for row in rows:
+        if row.entry is None:
+            continue
+        _append_label(labels, row.entry, KEY_TO_LABEL[row.label.lower()], row.reason.strip())
+
+
+def _import_with_prompt(
     pool: Sequence[dict],
     labels_path: Path | str,
     tsv_path: Path | str,
     *,
-    input_fn: Callable[[str], str] | None = None,
-    print_fn: Callable[[str], None] | None = None,
+    read: Callable[[str], str],
+    say: Callable[[str], None],
 ) -> int:
-    """Validate a TSV and append it to the labels file after a typed ``yes``.
-
-    Returns ``2`` for an unusable TSV, ``1`` for rejected rows / no confirmation /
-    unmet minimums, and ``0`` only when everything validated, was confirmed and
-    the label-check minimums are met. Writes nothing on any other path.
-    """
-    read = input_fn if input_fn is not None else input
-    say = print_fn if print_fn is not None else print
+    """Validate, show the table, read the confirmation, then write and audit."""
     labels = Path(labels_path)
     rows, fatal = parse_label_tsv(tsv_path)
     if fatal:
@@ -642,13 +672,31 @@ def run_label_import(
         say(f'aborted - you typed {answer.strip()!r}, not "yes"; nothing was written.')
         return 1
 
-    for row in rows:
-        if row.entry is None:
-            continue
-        append_label(labels, row.entry, KEY_TO_LABEL[row.label.lower()], row.reason.strip())
+    _write_rows(labels, rows)
+    _audit_import(tsv_path, len(rows))
     say(f"appended {len(rows)} label(s) to {labels}")
     pool_by_id = {str(entry.get("pool_id", "")): entry for entry in pool}
     report = validate_labels(labels, pool_by_id=pool_by_id)
     say(_tally_text(report))
     say(format_report(report))
     return 0 if report.meets_minimums else 1
+
+
+def run_label_import(
+    pool: Sequence[dict],
+    labels_path: Path | str,
+    tsv_path: Path | str,
+) -> int:
+    """Validate a TSV and append it only after a ``yes`` typed on a real terminal.
+
+    Refuses with ``2`` (and writes nothing) unless both stdin and stdout are a
+    tty; the confirmation is read from that terminal. There is no flag,
+    environment variable or public function that skips the prompt - the write
+    path is private to this command. Returns ``2`` for an unusable TSV, ``1``
+    for rejected rows / no confirmation / unmet minimums, and ``0`` only when
+    everything validated, was confirmed and the label-check minimums are met.
+    """
+    if not is_interactive_terminal():
+        print(INTERACTIVE_REFUSAL, file=sys.stderr)
+        return 2
+    return _import_with_prompt(pool, labels_path, tsv_path, read=input, say=print)

@@ -6,6 +6,7 @@
 - Paste raw output; never summarize/placeholders; report failures exactly; never write expected/minor/non-blocking unless output proves it.
 - Never push without owner OK; no secrets, resume files, or eval/labeling_pool.jsonl.
 - Never create/edit/relabel eval/labels.jsonl.
+- The agent never runs `label` or `label-import`, never drafts or suggests labels, and never writes eval/labels.jsonl; the owner runs the imports.
 - No lowering thresholds, no deleting/skipping tests, no blanket noqa/type: ignore/pragma no cover.
 - No Phase 8/PR B until owner says GO.
 - One defect per commit + regression test.
