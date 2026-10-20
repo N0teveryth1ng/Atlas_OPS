@@ -9,7 +9,9 @@ The same fixed-seed order also backs the offline pair:
 
 * ``label-sheet --count N`` prints the next N pending jobs as compact text
   (short_id, the fields above, a capped description digest, an optional
-  ``[non-English?]`` flag) so the owner can label away from the terminal.
+  ``[non-English?]`` flag) so the owner can label away from the terminal. Raw-text
+  filters narrow the set: ``--where``/``--exclude`` (repeatable, case-insensitive)
+  and ``--remote-open``; ``--sort recent`` orders by post date instead of the seed.
 * ``label-import FILE`` validates a TSV of those short_ids, shows a summary
   table, and appends to the labels file only after the owner types ``yes`` on a
   real terminal (both stdin and stdout must be a tty; there is no flag,
@@ -158,6 +160,54 @@ def pending_pool(
     """Unlabeled jobs in the same fixed-seed order ``label`` walks them."""
     already = labeled_pool_ids(labels_path)
     return [e for e in ordered_pool(pool, seed=seed) if str(e["pool_id"]) not in already]
+
+
+#: Location tokens that count as "open from anywhere" for ``--remote-open``.
+REMOTE_OPEN_TOKENS = ("worldwide", "anywhere", "india", "apac", "asia", "remote")
+
+
+def _searchable_text(entry: dict) -> str:
+    """Raw pool text the filters match: location, title, first 600 chars of description."""
+    location = str(entry.get("location") or "")
+    title = str(entry.get("title") or "")
+    description = str(entry.get("description") or "")[:600]
+    return f"{location}\n{title}\n{description}".lower()
+
+
+def matches_where(entry: dict, needles: Sequence[str]) -> bool:
+    """True when every needle is a case-insensitive substring of the raw text."""
+    if not needles:
+        return True
+    haystack = _searchable_text(entry)
+    return all(needle.lower() in haystack for needle in needles)
+
+
+def matches_exclude(entry: dict, needles: Sequence[str]) -> bool:
+    """True when no needle appears in the raw text (case-insensitive)."""
+    if not needles:
+        return True
+    haystack = _searchable_text(entry)
+    return all(needle.lower() not in haystack for needle in needles)
+
+
+def _locations(entry: dict) -> list[str]:
+    raw = str(entry.get("location") or "")
+    return [part.strip() for part in re.split(r"[/,]", raw) if part.strip()]
+
+
+def matches_remote_open(entry: dict) -> bool:
+    """Keep worldwide/anywhere/India/APAC/Asia/empty; drop a single named country.
+
+    A location naming several countries is kept (unclear whether India is included);
+    an empty location is kept. This is raw-text matching only, no score or filter.
+    """
+    parts = _locations(entry)
+    if not parts:
+        return True
+    joined = " ".join(parts).lower()
+    if any(token in joined for token in REMOTE_OPEN_TOKENS):
+        return True
+    return len(parts) > 1
 
 
 # --------------------------------------------------------------------------- #
@@ -489,23 +539,44 @@ def run_label_sheet(
     count: int,
     *,
     seed: int = SHUFFLE_SEED,
+    where: Sequence[str] = (),
+    exclude: Sequence[str] = (),
+    remote_open: bool = False,
+    sort: str = "seed",
     print_fn: Callable[[str], None] | None = None,
 ) -> int:
-    """Print the next ``count`` unlabeled jobs in the same order ``label`` uses."""
+    """Print the next ``count`` unlabeled jobs in the same order ``label`` uses.
+
+    Optional raw-text filters narrow the pending set: ``where`` (repeatable,
+    case-insensitive substring match over location/title/description prefix, all
+    must match), ``exclude`` (repeatable, none may match) and ``remote_open``.
+    ``sort="recent"`` orders the matches by ``posted_at`` descending instead of
+    the fixed seed. Only unlabeled jobs are ever shown; nothing is written.
+    """
     say = print_fn if print_fn is not None else print
     if count < 1:
         say("--count must be >= 1")
         return 2
     labels = Path(labels_path)
     pending = pending_pool(pool, labels, seed=seed)
-    shown = pending[:count]
+    matched = [
+        entry
+        for entry in pending
+        if matches_where(entry, where)
+        and matches_exclude(entry, exclude)
+        and (not remote_open or matches_remote_open(entry))
+    ]
+    if sort == "recent":
+        matched.sort(key=lambda entry: str(entry.get("posted_at") or ""), reverse=True)
+    shown = matched[:count]
     say(
         f"label sheet: pool {len(pool)}  labeled {len(pool) - len(pending)}  "
-        f"pending {len(pending)}  showing {len(shown)} (fixed seed {seed})"
+        f"pending {len(pending)}  matched {len(matched)}  showing {len(shown)} "
+        f"(fixed seed {seed})"
     )
     say("raw pool text only - nothing computed, nothing ranked")
     if not shown:
-        say("no pending jobs left to label.")
+        say("no pending jobs matched.")
         return 0
     for index, entry in enumerate(shown, start=1):
         say("")

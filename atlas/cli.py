@@ -683,7 +683,15 @@ def cmd_label_sheet(args: argparse.Namespace) -> int:
     if not pool:
         print(f"No pool jobs in {args.pool}.", file=sys.stderr)
         return 2
-    return run_label_sheet(pool, args.labels, args.count)
+    return run_label_sheet(
+        pool,
+        args.labels,
+        args.count,
+        where=args.where,
+        exclude=args.exclude,
+        remote_open=args.remote_open,
+        sort=args.sort,
+    )
 
 
 def cmd_label_import(args: argparse.Namespace) -> int:
@@ -789,6 +797,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_sheet.add_argument(
         "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
+    )
+    p_sheet.add_argument(
+        "--where",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="Keep jobs whose location/title/description contains TEXT (case-insensitive; repeatable, all must match)",
+    )
+    p_sheet.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="Drop jobs whose location/title/description contains TEXT (case-insensitive; repeatable)",
+    )
+    p_sheet.add_argument(
+        "--remote-open",
+        action="store_true",
+        help="Keep jobs open worldwide/anywhere/India/APAC/Asia or with no country set",
+    )
+    p_sheet.add_argument(
+        "--sort",
+        choices=("seed", "recent"),
+        default="seed",
+        help="Order matches by fixed seed (default) or most recently posted first",
     )
     p_sheet.set_defaults(func=cmd_label_sheet)
 

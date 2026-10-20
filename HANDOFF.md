@@ -591,6 +591,32 @@ Everything below is on top of #51.
   (12 owner records), so the older "deliberately left untracked" note below no
   longer applies.
 
+## Sheet filters (this PR)
+
+Everything below is on top of #52.
+
+- **What.** `label-sheet` gains optional read-only filters over the raw pool text,
+  so the owner can pull a smaller, targeted set of pending jobs to a TSV without
+  touching the fixed-seed order or any score/decision. All matching is
+  case-insensitive substring matching over location + title + the first 600
+  description characters only - never a `fit_score`, decision or evaluator output.
+- **Flags.** `--where TEXT` (repeatable; every value must match), `--exclude TEXT`
+  (repeatable; none may match), `--remote-open` (keep locations that are empty or
+  name worldwide/anywhere/India/APAC/Asia/remote; drop a location naming a single
+  other country), `--sort seed|recent` (`recent` orders matches by `posted_at`
+  descending, default stays the fixed seed). The header now reports both
+  `matched N` and `showing N`.
+- **Unchanged.** Only unlabeled jobs are ever shown; default output with no filters
+  is byte-identical to before; `label-sheet` still writes nothing and leaves
+  `eval/labeling_pool.jsonl` and `eval/labels.jsonl` untouched.
+- **Tests** (9 new in `tests/test_label_sheet.py`): `--where` matches across
+  location/title/description; `--where` is case-insensitive and ANDs all values;
+  `--exclude` drops matches; `--remote-open` keeps worldwide/India/empty/multi-
+  country and drops a single named country; `--sort recent` orders by post date;
+  default output equals the no-op-filters output; filters never surface labeled
+  jobs and never write labels; filters leave the pool file byte-identical; the new
+  flags wire through `main()`.
+
 ## Owner-only
 
 These cannot be done by the agent and are not marked PASS on the agent's own authority.
@@ -617,7 +643,8 @@ These cannot be done by the agent and are not marked PASS on the agent's own aut
 Entry point is `python -m atlas.cli`. Commands:
 `profile`, `review`, `status`, `run [--collect] [--limit]`, `decide [--limit]`,
 `explain job_id`, `label-check [--labels] [--pool]`, `label [--labels] [--pool]`,
-`label-sheet [--count] [--labels] [--pool]`, `label-import FILE [--labels] [--pool]`,
+`label-sheet [--count] [--labels] [--pool] [--where] [--exclude] [--remote-open] [--sort]`,
+`label-import FILE [--labels] [--pool]`,
 `schedule`, `collect`,
 `eval [--golden] [--with-llm]`, `selfcheck [--fast] [--full] [--report]`,
 `feedback`, `dashboard [--host] [--port]`.
