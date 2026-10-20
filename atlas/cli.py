@@ -687,13 +687,15 @@ def cmd_label_sheet(args: argparse.Namespace) -> int:
 
 
 def cmd_label_import(args: argparse.Namespace) -> int:
-    from .labeling_cli import load_pool, run_label_import
+    from .labeling_cli import (
+        INTERACTIVE_REFUSAL,
+        is_interactive_terminal,
+        load_pool,
+        run_label_import,
+    )
 
-    if not sys.stdin.isatty():
-        print(
-            "label-import refuses non-interactive input (run it in a terminal).",
-            file=sys.stderr,
-        )
+    if not is_interactive_terminal():
+        print(INTERACTIVE_REFUSAL, file=sys.stderr)
         return 2
     try:
         pool = load_pool(args.pool)

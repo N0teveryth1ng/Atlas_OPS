@@ -359,8 +359,12 @@ must/minimum/senior/lead/own/mentor or a technology name, capped at 1,300 charac
 with a `[non-English?]` heuristic flag. `label-import FILE` takes a TSV with
 `short_id`, `label` (`a` or `s`) and `reason`, validates every row (known and
 unlabeled short_id, valid label, non-empty reason, no duplicates), prints a summary
-table, and appends to `eval/labels.jsonl` only after you type `yes` - it refuses
-non-interactive input, then prints the 40/15/10 tally and the `label-check` report.
+table, and appends to `eval/labels.jsonl` only after you type `yes` on a real
+terminal - it refuses non-interactive input unless **both** stdin and stdout are a
+TTY, and no flag, environment variable or public function can skip the prompt. It
+then prints the 40/15/10 tally and the `label-check` report. Each successful import
+also appends an audit line (UTC timestamp, source file name, SHA-256, row count) to
+the gitignored `eval/label_imports.log`.
 
 ## Project layout
 
