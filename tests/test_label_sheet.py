@@ -141,9 +141,9 @@ def _seed_labels(labels: Path, entries: list[dict], count: int) -> list[dict]:
     return seeded
 
 
-def _run_sheet(pool: list[dict], labels: Path, count: int) -> tuple[int, str]:
+def _run_sheet(pool: list[dict], labels: Path, count: int, **kwargs: object) -> tuple[int, str]:
     out: list[str] = []
-    rc = labeling_cli.run_label_sheet(pool, labels, count, print_fn=out.append)
+    rc = labeling_cli.run_label_sheet(pool, labels, count, print_fn=out.append, **kwargs)
     return rc, "\n".join(out)
 
 
@@ -189,7 +189,10 @@ def test_sheet_shows_every_required_field_and_header(tmp_path: Path) -> None:
     pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
     rc, out = _run_sheet(pool, tmp_path / "labels.jsonl", 3)
     assert rc == 0
-    assert "label sheet: pool 12  labeled 0  pending 12  showing 3 (fixed seed 20261018)" in out
+    assert (
+        "label sheet: pool 12  labeled 0  pending 12  matched 12  showing 3 (fixed seed 20261018)"
+        in out
+    )
     assert "raw pool text only - nothing computed" in out
     job_lines = [line for line in out.splitlines() if line.startswith("job ")]
     assert len(job_lines) == 3
@@ -217,7 +220,7 @@ def test_sheet_skips_jobs_already_labeled(tmp_path: Path) -> None:
     _seed_labels(labels, entries, 1)
     rc, out = _run_sheet(pool, labels, 10)
     assert rc == 0
-    assert "labeled 1  pending 5  showing 5" in out
+    assert "labeled 1  pending 5  matched 5  showing 5" in out
     assert entries[0]["pool_id"][:8] not in out
     assert len(_field_lines(out, "short_id : ")) == 5
 
@@ -235,7 +238,7 @@ def test_sheet_count_clamps_to_pending_and_rejects_zero(tmp_path: Path) -> None:
     _seed_labels(labels, entries, 4)
     empty_rc, empty_out = _run_sheet(pool, labels, 5)
     assert empty_rc == 0
-    assert "no pending jobs left to label." in empty_out
+    assert "no pending jobs matched." in empty_out
 
 
 def test_sheet_digest_starts_with_prefix_and_caps_at_1300(tmp_path: Path) -> None:
@@ -319,6 +322,172 @@ def test_sheet_contains_no_system_output(tmp_path: Path) -> None:
         "run=-",
     ):
         assert forbidden not in lowered
+
+
+def test_sheet_where_matches_location_title_and_description(tmp_path: Path) -> None:
+    entries = [
+        _entry(0),
+        _entry(1, description="We build services in FastAPI and Postgres for remote teams."),
+        _entry(2),
+    ]
+    entries[1]["location"] = "India"
+    entries[2]["title"] = "Backend FastAPI Engineer"
+    entries[2]["description"] = "Nothing special here."
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+
+    _, fastapi_out = _run_sheet(pool, tmp_path / "labels.jsonl", 10, where=["fastapi"])
+    assert "matched 2" in fastapi_out
+    assert len(_field_lines(fastapi_out, "short_id : ")) == 2
+
+    _, india_out = _run_sheet(pool, tmp_path / "labels.jsonl", 10, where=["INDIA"])
+    assert len(_field_lines(india_out, "short_id : ")) == 1
+    assert entries[1]["pool_id"][:8] in india_out
+
+
+def test_sheet_where_is_case_insensitive_and_all_must_match(tmp_path: Path) -> None:
+    entries = [
+        _entry(0, description="Python backend role in Berlin."),
+        _entry(1, description="Python data role in Berlin."),
+        _entry(2, description="Java backend role in Berlin."),
+    ]
+    for entry in entries:
+        entry["title"] = "Engineer"
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    _, out = _run_sheet(pool, tmp_path / "labels.jsonl", 10, where=["PYTHON", "Backend"])
+    assert "matched 1" in out
+    assert entries[0]["pool_id"][:8] in out
+    assert entries[1]["pool_id"][:8] not in out
+    assert entries[2]["pool_id"][:8] not in out
+
+
+def test_sheet_exclude_drops_matches(tmp_path: Path) -> None:
+    entries = [
+        _entry(0, description="Python backend role in Berlin."),
+        _entry(1, description="Python backend role in the United States."),
+        _entry(2, description="Python backend role in India."),
+    ]
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    _, out = _run_sheet(pool, tmp_path / "labels.jsonl", 10, exclude=["United States", "Java"])
+    assert "matched 2" in out
+    assert entries[1]["pool_id"][:8] not in out
+    assert entries[0]["pool_id"][:8] in out
+    assert entries[2]["pool_id"][:8] in out
+
+
+def test_sheet_remote_open_keeps_worldwide_and_drops_single_country(tmp_path: Path) -> None:
+    entries = [
+        _entry(0),
+        _entry(1),
+        _entry(2),
+        _entry(3),
+        _entry(4),
+        _entry(5),
+    ]
+    entries[0]["location"] = "Worldwide"
+    entries[1]["location"] = "India"
+    entries[2]["location"] = "United States"
+    entries[3]["location"] = "Canada"
+    entries[4]["location"] = None
+    entries[5]["location"] = "Canada, Mexico, USA"
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    _, out = _run_sheet(pool, tmp_path / "labels.jsonl", 10, remote_open=True)
+    assert "matched 4" in out
+    shown = _field_lines(out, "short_id : ")
+    assert entries[0]["pool_id"][:8] in shown
+    assert entries[1]["pool_id"][:8] in shown
+    assert entries[2]["pool_id"][:8] not in shown
+    assert entries[3]["pool_id"][:8] not in shown
+    assert entries[4]["pool_id"][:8] in shown
+    assert entries[5]["pool_id"][:8] in shown
+
+
+def test_sheet_sort_recent_orders_by_posted_date(tmp_path: Path) -> None:
+    entries = [_entry(i) for i in range(4)]
+    entries[0]["posted_at"] = "2026-10-01T00:00:00+00:00"
+    entries[1]["posted_at"] = "2026-10-18T00:00:00+00:00"
+    entries[2]["posted_at"] = "2026-10-05T00:00:00+00:00"
+    entries[3]["posted_at"] = "2026-10-12T00:00:00+00:00"
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    _, out = _run_sheet(pool, tmp_path / "labels.jsonl", 4, sort="recent")
+    shown = _field_lines(out, "short_id : ")
+    expected = [
+        entries[1]["pool_id"][:8],
+        entries[3]["pool_id"][:8],
+        entries[2]["pool_id"][:8],
+        entries[0]["pool_id"][:8],
+    ]
+    assert shown == expected
+
+
+def test_sheet_default_output_is_unchanged_without_filters(tmp_path: Path) -> None:
+    entries = [_entry(i) for i in range(5)]
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    default_rc, default_out = _run_sheet(pool, tmp_path / "labels.jsonl", 5)
+    noop_rc, noop_out = _run_sheet(
+        pool, tmp_path / "labels.jsonl", 5, where=[], exclude=[], remote_open=False, sort="seed"
+    )
+    assert default_rc == noop_rc == 0
+    assert default_out == noop_out
+    assert "matched 5" in default_out
+    assert "showing 5" in default_out
+
+
+def test_sheet_filters_never_show_labeled_jobs(tmp_path: Path) -> None:
+    entries = [_entry(i, description="Python backend role worldwide.") for i in range(4)]
+    pool = labeling_cli.load_pool(_write_pool(tmp_path, entries))
+    labels = tmp_path / "labels.jsonl"
+    _seed_labels(labels, entries, 2)
+    before = labels.read_bytes()
+    _, out = _run_sheet(pool, labels, 10, where=["python"], remote_open=True)
+    assert "matched 2" in out
+    assert len(_field_lines(out, "short_id : ")) == 2
+    assert entries[0]["pool_id"][:8] not in out
+    assert entries[1]["pool_id"][:8] not in out
+    assert labels.read_bytes() == before
+
+
+def test_sheet_filters_are_read_only(tmp_path: Path) -> None:
+    entries = [_entry(i) for i in range(3)]
+    pool_path = _write_pool(tmp_path, entries)
+    pool = labeling_cli.load_pool(pool_path)
+    pool_before = pool_path.read_bytes()
+    labels = tmp_path / "labels.jsonl"
+    _run_sheet(pool, labels, 10, where=["python"], exclude=["senior"], remote_open=True)
+    assert pool_path.read_bytes() == pool_before
+    assert not labels.exists()
+
+
+def test_sheet_filter_flags_wire_through_main(tmp_path: Path) -> None:
+    entries = [
+        _entry(0, description="Python backend role in Berlin."),
+        _entry(1, description="Python backend role in the United States."),
+    ]
+    for entry in entries:
+        entry["title"] = "Engineer"
+        entry["location"] = "Worldwide"
+    entries[1]["location"] = "United States"
+    pool_path = _write_pool(tmp_path, entries)
+    labels = tmp_path / "labels.jsonl"
+    rc = main(
+        [
+            "label-sheet",
+            "--count",
+            "10",
+            "--pool",
+            str(pool_path),
+            "--labels",
+            str(labels),
+            "--where",
+            "python",
+            "--exclude",
+            "united states",
+            "--remote-open",
+            "--sort",
+            "recent",
+        ]
+    )
+    assert rc == 0
+    assert not labels.exists()
 
 
 def test_sheet_never_touches_the_real_eval_files(tmp_path: Path) -> None:

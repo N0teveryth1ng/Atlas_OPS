@@ -366,6 +366,16 @@ then prints the 40/15/10 tally and the `label-check` report. Each successful imp
 also appends an audit line (UTC timestamp, source file name, SHA-256, row count) to
 the gitignored `eval/label_imports.log`.
 
+Read-only filters narrow which pending jobs the sheet shows, all matching the raw
+pool text only (never a score, decision or model output): `--where TEXT` keeps jobs
+whose location, title or first 600 description characters contain TEXT
+(case-insensitive, repeatable, every `--where` must match), `--exclude TEXT` drops
+any job whose raw text contains TEXT (repeatable), and `--remote-open` keeps jobs
+whose location is empty or names worldwide/anywhere/India/APAC/Asia/remote and drops
+a job naming a single other country. The header always reports `matched N`/`showing
+N`; `--sort recent` orders the matches by `posted_at` descending instead of the fixed
+seed. `label-sheet` never writes anything.
+
 ## Project layout
 
 ```
