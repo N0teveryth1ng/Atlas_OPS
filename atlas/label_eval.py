@@ -548,6 +548,7 @@ def run_label_eval(
     else:
         db_path = database
 
+    conn: sqlite3.Connection | None = None
     try:
         conn = connect(db_path)
         init_db(conn)
@@ -592,9 +593,10 @@ def run_label_eval(
         report.tokens_used = int(getattr(budgeted, "tokens_used", 0) or 0) - tokens_before
         report.llm_calls = int(getattr(budgeted, "calls", 0) or 0) - calls_before
         report.skipped_labeled = len(cases) - len(report.cases)
-        conn.close()
         return report
     finally:
+        if conn is not None:
+            conn.close()
         if tmpdir is not None:
             tmpdir.cleanup()
 

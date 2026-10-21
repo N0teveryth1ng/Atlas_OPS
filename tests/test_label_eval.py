@@ -445,6 +445,33 @@ def test_reads_the_approved_profile_from_the_real_db(tmp_path: Path, monkeypatch
     assert len(report.cases) == 1
 
 
+def test_no_approved_profile_returns_instead_of_leaking_the_temp_db(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from atlas.db import connect, init_db
+
+    real = tmp_path / "empty.db"
+    conn = connect(real)
+    init_db(conn)
+    conn.close()
+    monkeypatch.setenv("ATLAS_DB", str(real))
+
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    # database=None forces the private temp dir: the old early return left the
+    # connection open and TemporaryDirectory.cleanup() raised PermissionError on
+    # Windows, masking the report.
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=_CallJsonClient(),
+        settings=get_settings(),
+    )
+    assert report.paused_reason == "no approved profile available"
+    assert report.cases == []
+
+
 # --------------------------------------------------------------------------- #
 # Read-only guarantee and prompt hygiene
 # --------------------------------------------------------------------------- #
