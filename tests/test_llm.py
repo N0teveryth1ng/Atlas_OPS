@@ -314,6 +314,9 @@ def test_long_retry_after_raises_daily_limit_without_sleeping(monkeypatch):
 
     # Sleeping for an hour would never finish the run, so the client must refuse.
     assert sleeps == []
+    # The daily-limit raise must escape the generic transport handler: exactly one
+    # transport call, no retry against a spent daily quota.
+    assert fake.chat.completions.calls == 1
     assert excinfo.value.reset_seconds == 3600.0
     assert "daily limit" in str(excinfo.value).lower()
     assert "1.0h" in str(excinfo.value)
@@ -330,6 +333,8 @@ def test_daily_limit_message_raises_even_without_long_retry_after(monkeypatch):
 
     with pytest.raises(GroqDailyLimitReached):
         client.call_json(schema=Item, system="s", user="u")
+    # A per-day message is not retried either: the quota will not refill mid-run.
+    assert fake.chat.completions.calls == 1
 
 
 @pytest.mark.parametrize(

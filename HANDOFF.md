@@ -617,6 +617,39 @@ Everything below is on top of #52.
   jobs and never write labels; filters leave the pool file byte-identical; the new
   flags wire through `main()`.
 
+## Eval against owner labels (`eval-labels`, this PR)
+
+Everything below is on top of the sheet filters.
+
+- **`python -m atlas.cli eval-labels`** replays the same stages a collected job goes
+  through - cheap filters, parse, hard filters, skill match, evaluator, verifier,
+  decision - over every job in `eval/labeling_pool.jsonl` that the owner has labelled
+  in `eval/labels.jsonl`, and answers "where does the system disagree with me?".
+- **Read-only on the real files.** The labels and pool are only read; the real
+  `atlas.db` is opened read-only (only to fetch the approved profile) and the replay
+  runs in a private temporary database. The owner's label text is never fed to any
+  prompt, alias map, config or fixture (covered by a test).
+- **Zero LLM calls for cheap rejections.** A job the deterministic pre-filter rejects
+  costs nothing; only survivors reach the LLM stages.
+- **Clean stop.** A `GroqDailyLimitReached` or a per-run call/token cap stops the run
+  cleanly, records the reason and reports how many jobs remain; a later run resumes
+  and measures them.
+- **Report.** Confusion matrix (owner apply/skip x system APPLY/REVIEW/SKIP, REVIEW
+  kept as its own column), precision of APPLY, recall of owner-apply jobs
+  (APPLY+REVIEW), the seniority false-pass count, per-source and per-rule breakdowns,
+  the full list of disagreements (owner reason, system outcome/score/confidence,
+  fired rule, URL), the same figures with duplicate postings collapsed by
+  normalized company + title, and a 95% Wilson interval with its sample size next to
+  every proportion. `--max-calls` / `--max-tokens` optionally bound the run.
+- **Output.** The full Markdown report is written to the gitignored
+  `eval/label_eval_report.md` (it quotes job and label text); the console prints the
+  report and `summary_line()` (the headline for this file).
+- **Tests** (`tests/test_label_eval.py`, 14): Wilson values, company/title
+  normalization, the confusion matrix and headline numerators, seniority false-pass,
+  per-source/per-rule, dedupe, a full fake-LLM replay, a cheap rejection costing zero
+  calls, a daily-limit pause that reports the remaining jobs and resumes, the real
+  labels file's SHA-256 unchanged, and no owner label text in any prompt.
+
 ## Owner-only
 
 These cannot be done by the agent and are not marked PASS on the agent's own authority.

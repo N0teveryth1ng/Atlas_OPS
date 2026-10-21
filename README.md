@@ -226,6 +226,7 @@ python -m atlas.cli label-check                # validate a human-labelled label
 python -m atlas.cli label                      # interactively label pool jobs (owner: a=apply s=skip u=undo q=quit)
 python -m atlas.cli label-sheet --count 10     # next N pending jobs as a compact text sheet (read-only)
 python -m atlas.cli label-import labels.tsv    # append a TSV of labels after you type "yes"
+python -m atlas.cli eval-labels                # replay the pipeline over owner-labelled jobs (read-only)
 python -m atlas.cli selfcheck --fast           # deterministic pre-flight checks
 python -m atlas.cli selfcheck --full           # + coverage / lint / types / mutation / network
 ```
@@ -365,6 +366,20 @@ TTY, and no flag, environment variable or public function can skip the prompt. I
 then prints the 40/15/10 tally and the `label-check` report. Each successful import
 also appends an audit line (UTC timestamp, source file name, SHA-256, row count) to
 the gitignored `eval/label_imports.log`.
+
+`eval-labels` measures the pipeline against those human labels. It replays the same
+stages a collected job goes through (cheap filters, parse, hard filters, skill match,
+evaluator, verifier, decision) over every labelled pool job and prints a confusion
+matrix (owner apply/skip x system APPLY/REVIEW/SKIP), precision of APPLY, recall of
+owner-apply jobs (APPLY and REVIEW shown separately), the seniority false-pass count,
+per-source and per-rule breakdowns, the full list of disagreements, and the same
+figures with duplicate postings collapsed by company + title. Every proportion carries
+its sample size and a 95% Wilson interval. Jobs the cheap pre-filter rejects cost zero
+LLM calls; the run stops cleanly at a daily limit or a call/token cap and reports how
+many jobs remain. It is read-only: `eval/labels.jsonl` and `eval/labeling_pool.jsonl`
+are never written and the owner's label reasons never reach a prompt. The full report
+is written to the gitignored `eval/label_eval_report.md` (it quotes job and label
+text).
 
 Read-only filters narrow which pending jobs the sheet shows, all matching the raw
 pool text only (never a score, decision or model output): `--where TEXT` keeps jobs
