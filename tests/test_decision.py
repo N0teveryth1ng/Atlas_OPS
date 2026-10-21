@@ -249,7 +249,45 @@ def test_evaluate_vetoes_full_battery():
     )
     rule_ids = {v.rule_id for v in vetoes}
     assert {"coverage_floor", "seniority_fit"}.issubset(rule_ids)
-    assert all(v.hard for v in vetoes)
+    # coverage_floor is now a soft signal; seniority_fit is still a hard veto
+    assert any(v.hard for v in vetoes if v.rule_id == "seniority_fit")
+    assert not any(v.hard for v in vetoes if v.rule_id == "coverage_floor")
+
+    # verifier veto WITH evidence is hard
+    hard = dec.evaluate_vetoes(
+        parsed=_parsed(),
+        profile=_profile(experience_months=120),
+        verdict=_verdict(),
+        verifier=_verifier(veto=True),
+        skill_match=_skill_match(),
+        critic=None,
+        settings=SETTINGS,
+    )
+    assert any(v.rule_id == "verifier_veto" and v.hard for v in hard)
+
+    # verifier veto WITHOUT evidence is soft
+    soft = dec.evaluate_vetoes(
+        parsed=_parsed(),
+        profile=_profile(experience_months=120),
+        verdict=_verdict(),
+        verifier=VerifierVerdict(veto=True),
+        skill_match=_skill_match(),
+        critic=None,
+        settings=SETTINGS,
+    )
+    assert any(v.rule_id == "verifier_veto" and not v.hard for v in soft)
+
+    # verifier downgrade_to skip is soft
+    down = dec.evaluate_vetoes(
+        parsed=_parsed(),
+        profile=_profile(experience_months=120),
+        verdict=_verdict(),
+        verifier=VerifierVerdict(downgrade_to=Recommendation.skip),
+        skill_match=_skill_match(),
+        critic=None,
+        settings=SETTINGS,
+    )
+    assert any(v.rule_id == "verifier_downgrade" and not v.hard for v in down)
 
     # verifier veto WITH evidence is hard
     hard = dec.evaluate_vetoes(
@@ -560,12 +598,15 @@ def test_evaluate_decision_coverage_veto_skips():
         parsed=_parsed(),
         verdict=_verdict(seniority_fit=90),
         verifier=_verifier(),
-        skill_match=_skill_match(must=0.4),
+        skill_match=_skill_match(must=0.4, missing=["Python"]),
         settings=SETTINGS,
         cache={},
     )
-    assert decision.outcome == DecisionOutcome.skip
-    assert any(v.rule_id == "coverage_floor" for v in decision.vetoes)
+    # Low coverage alone is now a soft signal -> route to REVIEW (never APPLY/SKIP alone)
+    assert decision.outcome == DecisionOutcome.review
+    assert any(v.rule_id == "coverage_floor" and not v.hard for v in decision.vetoes)
+    assert "low skill coverage" in " ".join(decision.notes)
+    assert decision.missing_skills
 
 
 def test_assess_projects_spread_and_median():

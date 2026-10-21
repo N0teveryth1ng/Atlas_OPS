@@ -143,6 +143,15 @@ class DecisionConfig(BaseModel):
     c_apply: float = 0.75
     seniority_floor: float = 50.0
     coverage_floor: float = 0.6
+    #: Proficiency weights used when computing must-have/nice-to-have coverage.
+    #: ``strong`` gets full credit; lower proficiencies are discounted.
+    skill_proficiency_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "strong": 1.0,
+            "working": 0.8,
+            "familiar": 0.6,
+        }
+    )
     # Risk flags each subtract this many points, capped at ``max_risk_penalty``.
     risk_penalty_per_flag: float = 10.0
     max_risk_penalty: float = 40.0

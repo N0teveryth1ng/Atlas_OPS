@@ -102,6 +102,10 @@ decision:
   # Veto floors.
   seniority_floor: 50
   coverage_floor: 0.6
+  skill_proficiency_weights:
+    strong: 1.0
+    working: 0.8
+    familiar: 0.6
   # Each JD red flag subtracts this many points, capped by max_risk_penalty.
   risk_penalty_per_flag: 10
   max_risk_penalty: 40

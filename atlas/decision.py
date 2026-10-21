@@ -192,7 +192,7 @@ def evaluate_vetoes(
                     f"must-have coverage {skill_match.must_have_coverage:.2f} below "
                     f"floor {decision.coverage_floor:.2f}"
                 ),
-                hard=True,
+                hard=False,
             )
         )
 
@@ -305,10 +305,19 @@ def decision_rule(
     *, score: float, confidence: float, vetoes: list[Veto], settings: Settings
 ) -> DecisionOutcome:
     decision = settings.decision
-    if any(veto.hard for veto in vetoes):
+    hard_vetoes = [veto for veto in vetoes if veto.hard]
+    if hard_vetoes:
         return DecisionOutcome.skip
-    if any(veto for veto in vetoes):  # only soft vetoes remain
-        return DecisionOutcome.review
+    soft_vetoes = [veto for veto in vetoes if not veto.hard]
+    if soft_vetoes:
+        # A low-coverage soft veto alone never makes a job auto-APPLY; route to review.
+        if confidence < decision.c_min:
+            return DecisionOutcome.review
+        if score >= decision.apply_threshold and confidence >= decision.c_apply:
+            return DecisionOutcome.review
+        if score >= decision.review_threshold:
+            return DecisionOutcome.review
+        return DecisionOutcome.skip
     if confidence < decision.c_min:
         return DecisionOutcome.review
     if score >= decision.apply_threshold and confidence >= decision.c_apply:
@@ -368,6 +377,9 @@ def decide(
     notes: list[str] = []
     if not profile.projects:
         notes.append("no projects/internships to assess; project_relevance neutral")
+    coverage_veto = next((v for v in vetoes if v.rule_id == "coverage_floor"), None)
+    if coverage_veto is not None and outcome in {DecisionOutcome.review, DecisionOutcome.skip}:
+        notes.append("low skill coverage; review missing skills")
 
     return Decision(
         outcome=outcome,
