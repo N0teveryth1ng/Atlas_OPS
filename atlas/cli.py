@@ -585,6 +585,29 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_eval_labels(args: argparse.Namespace) -> int:
+    from .label_eval import (
+        DEFAULT_REPORT_PATH,
+        format_report,
+        run_label_eval,
+        summary_line,
+        write_report,
+    )
+
+    report = run_label_eval(
+        labels_path=args.labels,
+        pool_path=args.pool,
+        client=_make_client(),
+        max_calls=args.max_calls,
+        max_tokens=args.max_tokens,
+    )
+    print(format_report(report))
+    target = write_report(report, args.report or DEFAULT_REPORT_PATH)
+    print(f"\nReport written to {target}")
+    print(f"Headline: {summary_line(report)}")
+    return 0
+
+
 def cmd_feedback(args: argparse.Namespace) -> int:
     from .db import load_feedback
     from .feedback import export_golden, record_feedback
@@ -864,6 +887,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--with-llm", action="store_true", help="Also run the live LLM precision@10 gate"
     )
     p_eval.set_defaults(func=cmd_eval)
+
+    p_eval_labels = sub.add_parser(
+        "eval-labels",
+        help="Measure the pipeline against the owner's human labels (read-only)",
+    )
+    p_eval_labels.add_argument(
+        "--labels", default="eval/labels.jsonl", help="Path to the labels JSONL file"
+    )
+    p_eval_labels.add_argument(
+        "--pool", default="eval/labeling_pool.jsonl", help="Path to the labeling pool JSONL file"
+    )
+    p_eval_labels.add_argument(
+        "--report", default=None, help="Report output path (default: eval/label_eval_report.md)"
+    )
+    p_eval_labels.add_argument(
+        "--max-calls", type=int, default=None, help="Optional cap on logical LLM calls"
+    )
+    p_eval_labels.add_argument(
+        "--max-tokens", type=int, default=None, help="Optional token budget for the run"
+    )
+    p_eval_labels.set_defaults(func=cmd_eval_labels)
 
     p_self = sub.add_parser("selfcheck", help="Run the pre-Phase-8 audit checks")
     p_self.add_argument("--fast", action="store_true", help="In-process checks only")
