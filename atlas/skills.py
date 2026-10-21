@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from .config import REPO_ROOT
+from .config import REPO_ROOT, get_settings
 from .schemas import Proficiency, Skill
 
 logger = logging.getLogger(__name__)
@@ -32,10 +32,36 @@ SKILLS_PATH = REPO_ROOT / "skills.yaml"
 EMBEDDING_THRESHOLD = 0.83
 RELATED_CREDIT = 0.5
 EMBEDDING_CREDIT = 0.4
+
+
+def _proficiency_weights(settings=None) -> dict[Proficiency, float]:
+    if settings is None:
+        try:
+            settings = get_settings()
+        except (OSError, ValueError, TypeError, ImportError):
+            settings = None
+    if settings is not None:
+        raw = getattr(settings.decision, "skill_proficiency_weights", None) or {}
+        out: dict[Proficiency, float] = {}
+        for key, value in raw.items():
+            try:
+                prof = Proficiency(str(key))
+                out[prof] = float(value)
+            except (ValueError, TypeError):
+                continue
+        if out:
+            return out
+    return {
+        Proficiency.strong: 1.0,
+        Proficiency.working: 0.8,
+        Proficiency.familiar: 0.6,
+    }
+
+
 PROFICIENCY_WEIGHT: dict[Proficiency, float] = {
     Proficiency.strong: 1.0,
-    Proficiency.working: 0.7,
-    Proficiency.familiar: 0.4,
+    Proficiency.working: 0.8,
+    Proficiency.familiar: 0.6,
 }
 
 _STRIP = {" ", ".", "-", "_", "/"}
@@ -141,11 +167,14 @@ def _credit(
     ontology: SkillOntology,
     embedder,
     cache: dict,
+    *,
+    proficiency_weights: dict[Proficiency, float] | None = None,
 ) -> float:
     canonical = ontology.canonicalize(jd_skill)
+    weights = proficiency_weights or _proficiency_weights()
 
     if canonical in profile_by_canonical:
-        return PROFICIENCY_WEIGHT.get(profile_by_canonical[canonical].proficiency, 0.4)
+        return weights.get(profile_by_canonical[canonical].proficiency, 0.6)
 
     if ontology.related(canonical) & set(profile_by_canonical):
         return RELATED_CREDIT
@@ -166,17 +195,41 @@ def match_skills(
     *,
     ontology: SkillOntology | None = None,
     embedder=None,
+    settings=None,
 ) -> SkillMatch:
     ontology = ontology or get_ontology()
     profile_by_canonical = {s.canonical_name: s for s in profile_skills}
     cache: dict = {}
+    weights = _proficiency_weights(settings)
 
     must_credits = [
-        (_credit(s, profile_by_canonical, profile_skills, ontology, embedder, cache), s)
+        (
+            _credit(
+                s,
+                profile_by_canonical,
+                profile_skills,
+                ontology,
+                embedder,
+                cache,
+                proficiency_weights=weights,
+            ),
+            s,
+        )
         for s in must_have
     ]
     nice_credits = [
-        (_credit(s, profile_by_canonical, profile_skills, ontology, embedder, cache), s)
+        (
+            _credit(
+                s,
+                profile_by_canonical,
+                profile_skills,
+                ontology,
+                embedder,
+                cache,
+                proficiency_weights=weights,
+            ),
+            s,
+        )
         for s in nice_to_have
     ]
 
@@ -199,6 +252,7 @@ def explain_skills(
     *,
     ontology: SkillOntology | None = None,
     embedder=None,
+    settings=None,
 ) -> list[dict[str, object]]:
     """Per-must-have credit breakdown: how much credit, and why.
 
@@ -211,10 +265,19 @@ def explain_skills(
     ontology = ontology or get_ontology()
     profile_by_canonical = {s.canonical_name: s for s in profile_skills}
     cache: dict = {}
+    weights = _proficiency_weights(settings)
     details: list[dict[str, object]] = []
     for skill in must_have:
         canonical = ontology.canonicalize(skill)
-        credit = _credit(skill, profile_by_canonical, profile_skills, ontology, embedder, cache)
+        credit = _credit(
+            skill,
+            profile_by_canonical,
+            profile_skills,
+            ontology,
+            embedder,
+            cache,
+            proficiency_weights=weights,
+        )
         if canonical in profile_by_canonical:
             why = f"exact/alias (proficiency={profile_by_canonical[canonical].proficiency.value})"
         elif ontology.related(canonical) & set(profile_by_canonical) or any(
