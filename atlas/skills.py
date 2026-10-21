@@ -191,3 +191,49 @@ def match_skills(
         missing_must_haves=missing,
         matched=matched,
     )
+
+
+def explain_skills(
+    must_have: list[str],
+    profile_skills: list[Skill],
+    *,
+    ontology: SkillOntology | None = None,
+    embedder=None,
+) -> list[dict[str, object]]:
+    """Per-must-have credit breakdown: how much credit, and why.
+
+    The credit is taken from :func:`_credit` - the same function
+    :func:`match_skills` uses - so the numbers here are exactly the ones the
+    coverage figure is built from. ``why`` names the layer that produced the
+    credit: ``exact``/``alias`` (with the profile proficiency), ``related``,
+    ``embedding`` (with its similarity) or ``none``.
+    """
+    ontology = ontology or get_ontology()
+    profile_by_canonical = {s.canonical_name: s for s in profile_skills}
+    cache: dict = {}
+    details: list[dict[str, object]] = []
+    for skill in must_have:
+        canonical = ontology.canonicalize(skill)
+        credit = _credit(skill, profile_by_canonical, profile_skills, ontology, embedder, cache)
+        if canonical in profile_by_canonical:
+            why = f"exact/alias (proficiency={profile_by_canonical[canonical].proficiency.value})"
+        elif ontology.related(canonical) & set(profile_by_canonical) or any(
+            canonical in ontology.related(p.canonical_name) for p in profile_skills
+        ):
+            why = "related"
+        else:
+            best = max(
+                (_similarity(skill, p.name, embedder, cache) for p in profile_skills),
+                default=0.0,
+            )
+            why = f"embedding (similarity={best:.3f})" if best >= EMBEDDING_THRESHOLD else "none"
+        details.append(
+            {
+                "skill": skill,
+                "canonical": canonical,
+                "matched": credit > 0.0,
+                "credit": credit,
+                "why": why,
+            }
+        )
+    return details

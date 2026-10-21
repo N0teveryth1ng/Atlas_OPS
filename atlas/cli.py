@@ -54,6 +54,12 @@ DEFAULT_PROFILE_PATH = REPO_ROOT / "profile.json"
 # --------------------------------------------------------------------------- #
 
 
+def _default_results_path() -> str:
+    from .label_eval import DEFAULT_RESULTS_PATH
+
+    return str(DEFAULT_RESULTS_PATH)
+
+
 def _make_client() -> LLMClient:
     settings = get_settings()
     return LLMClient(
@@ -587,7 +593,9 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 def cmd_eval_labels(args: argparse.Namespace) -> int:
     from .label_eval import (
+        DEFAULT_CHEAP_REPORT_PATH,
         DEFAULT_REPORT_PATH,
+        format_cheap_report,
         format_report,
         run_label_eval,
         summary_line,
@@ -597,14 +605,24 @@ def cmd_eval_labels(args: argparse.Namespace) -> int:
     report = run_label_eval(
         labels_path=args.labels,
         pool_path=args.pool,
-        client=_make_client(),
+        client=None if args.cheap_only else _make_client(),
         max_calls=args.max_calls,
         max_tokens=args.max_tokens,
+        cheap_only=args.cheap_only,
+        results_path=args.results,
+        resume=not args.no_resume,
     )
-    print(format_report(report))
-    target = write_report(report, args.report or DEFAULT_REPORT_PATH)
+    if args.cheap_only:
+        print(format_cheap_report(report))
+    else:
+        print(format_report(report))
+    default_report = DEFAULT_CHEAP_REPORT_PATH if args.cheap_only else DEFAULT_REPORT_PATH
+    target = write_report(report, args.report or default_report)
     print(f"\nReport written to {target}")
-    print(f"Headline: {summary_line(report)}")
+    if not args.cheap_only:
+        print(f"Headline: {summary_line(report)}")
+    if report.results_path:
+        print(f"Per-job results: {report.results_path}")
     return 0
 
 
@@ -906,6 +924,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_eval_labels.add_argument(
         "--max-tokens", type=int, default=None, help="Optional token budget for the run"
+    )
+    p_eval_labels.add_argument(
+        "--cheap-only",
+        action="store_true",
+        help="Run only the LLM-free stages (regex parse + cheap filters) over every label",
+    )
+    p_eval_labels.add_argument(
+        "--results",
+        default=_default_results_path(),
+        help=(
+            "Per-job results JSONL (gitignored). A full run reuses the records already "
+            "in it and never re-spends tokens on a job it has measured"
+        ),
+    )
+    p_eval_labels.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore the stored per-job results and re-measure every job",
     )
     p_eval_labels.set_defaults(func=cmd_eval_labels)
 

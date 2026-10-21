@@ -30,6 +30,10 @@ eval/feedback.jsonl
 eval/label_imports.log
 # eval-labels report: quotes owner label reasons and JD text, kept local
 eval/label_eval_report.md
+# eval-labels per-job results store: quotes JD text, kept local
+eval/label_eval_results.jsonl
+# eval-labels cheap-filter-only report: quotes JD text, kept local
+eval/label_eval_cheap_report.md
 # raw third-party JD text: kept local, never committed
 eval/labeling_pool.jsonl
 selfcheck_report.json
