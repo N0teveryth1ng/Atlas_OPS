@@ -644,11 +644,25 @@ Everything below is on top of the sheet filters.
 - **Output.** The full Markdown report is written to the gitignored
   `eval/label_eval_report.md` (it quotes job and label text); the console prints the
   report and `summary_line()` (the headline for this file).
-- **Tests** (`tests/test_label_eval.py`, 14): Wilson values, company/title
+- **Tests** (`tests/test_label_eval.py`, 16): Wilson values, company/title
   normalization, the confusion matrix and headline numerators, seniority false-pass,
   per-source/per-rule, dedupe, a full fake-LLM replay, a cheap rejection costing zero
   calls, a daily-limit pause that reports the remaining jobs and resumes, the real
   labels file's SHA-256 unchanged, and no owner label text in any prompt.
+- **Preliminary live run (2026-10-21) - preliminary: 10 of 52 labelled jobs
+  measured.** `python -m atlas.cli eval-labels` stopped cleanly at the 200,000-token
+  per-run cap, with 42 jobs remaining.
+  - precision APPLY (preliminary: 10 of 52 labelled jobs measured): n/a (0/0)
+    [0.0%-100.0%]
+  - recall owner-apply APPLY+REVIEW (preliminary: 10 of 52 labelled jobs measured):
+    0.0% (0/2) [0.0%-65.8%]
+  - seniority false-pass (preliminary: 10 of 52 labelled jobs measured): 0/8
+    (0.0%) [0.0%-32.4%]
+  - duplicate-collapsed set (preliminary: 10 of 52 labelled jobs measured): n=10
+  - cost (preliminary: 10 of 52 labelled jobs measured): 60 LLM calls / 202,034
+    tokens
+- The full report is in the gitignored `eval/label_eval_report.md`; a later run
+  replays the labelled set (from the start) with a fresh per-run budget.
 
 ## Owner-only
 
