@@ -9,6 +9,7 @@ from atlas.skills import (
     SkillOntology,
     _cosine,
     _similarity,
+    explain_skills,
     get_ontology,
     load_ontology,
     make_embedder,
@@ -174,3 +175,36 @@ def test_load_ontology_from_custom_file(tmp_path):
     ontology = load_ontology(path)
     assert ontology.canonicalize("rs") == "rust"
     assert ontology.canonicalize("Rust") == "rust"
+
+
+# --------------------------------------------------------------------------- #
+# explain_skills: the per-skill credit breakdown
+# --------------------------------------------------------------------------- #
+
+
+def test_explain_skills_credits_match_the_coverage_figure():
+    profile = _profile("Python", "Docker", proficiency=Proficiency.strong)
+    must = ["Python", "Java"]
+    match = match_skills(must, [], profile)
+    details = explain_skills(must, profile)
+    assert [d["skill"] for d in details] == must
+    assert details[0]["matched"] is True
+    assert details[1]["matched"] is False
+    assert details[1]["credit"] == 0.0
+    assert details[1]["why"] == "none"
+    # The credits are the ones the coverage is built from.
+    total = sum(float(d["credit"]) for d in details)
+    assert total / len(must) == pytest.approx(match.must_have_coverage, abs=1e-4)
+
+
+def test_explain_skills_names_the_proficiency_that_produced_the_credit():
+    profile = _profile("Python", proficiency=Proficiency.familiar)
+    details = explain_skills(["Python"], profile)
+    assert details[0]["canonical"] == "python"
+    assert "familiar" in details[0]["why"]
+
+
+def test_explain_skills_marks_a_related_skill():
+    details = explain_skills(["Django"], _profile("Python"))
+    assert details[0]["matched"] is True
+    assert details[0]["why"] == "related"

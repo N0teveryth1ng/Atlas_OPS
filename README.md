@@ -227,6 +227,7 @@ python -m atlas.cli label                      # interactively label pool jobs (
 python -m atlas.cli label-sheet --count 10     # next N pending jobs as a compact text sheet (read-only)
 python -m atlas.cli label-import labels.tsv    # append a TSV of labels after you type "yes"
 python -m atlas.cli eval-labels                # replay the pipeline over owner-labelled jobs (read-only)
+python -m atlas.cli eval-labels --cheap-only   # LLM-free pass: cheap filters only, zero tokens
 python -m atlas.cli selfcheck --fast           # deterministic pre-flight checks
 python -m atlas.cli selfcheck --full           # + coverage / lint / types / mutation / network
 ```
@@ -380,6 +381,23 @@ many jobs remain. It is read-only: `eval/labels.jsonl` and `eval/labeling_pool.j
 are never written and the owner's label reasons never reach a prompt. The full report
 is written to the gitignored `eval/label_eval_report.md` (it quotes job and label
 text).
+
+Every measured job is also written to the gitignored `eval/label_eval_results.jsonl`
+(one JSONL line per job): the owner's label and reason, the system's decision, score
+and confidence, the rules that fired with their evidence, the parsed must-have and
+nice-to-have lists, the per-skill credit and why, the must-have coverage as a
+numerator/denominator, the dimension scores, and the LLM calls and tokens that job
+cost. A later run reads that file and skips the jobs already measured, so a run that
+stopped at the daily limit never re-spends tokens on work it already did
+(`--no-resume` re-measures everything, `--results PATH` picks another file).
+
+`eval-labels --cheap-only` runs only the LLM-free stages - the deterministic regex
+parse and the cheap pre-filter - over every labelled job. It makes zero LLM calls, so
+it can be run over the whole set at any time, and it prints how many jobs the cheap
+filters reject (and by which rule) against how many pass and need the LLM stages,
+split by the owner's label, plus every owner-apply job the cheap filter rejects with
+its rule and evidence. Its report goes to the gitignored
+`eval/label_eval_cheap_report.md`.
 
 Read-only filters narrow which pending jobs the sheet shows, all matching the raw
 pool text only (never a score, decision or model output): `--where TEXT` keeps jobs

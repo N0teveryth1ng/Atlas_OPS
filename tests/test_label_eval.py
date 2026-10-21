@@ -20,8 +20,12 @@ from atlas.label_eval import (
     Metrics,
     SystemPrediction,
     collapse_duplicates,
+    format_cheap_report,
     format_report,
+    load_all_records,
     load_label_cases,
+    load_stored_results,
+    merge_records,
     normalize_company,
     normalize_title,
     run_label_eval,
@@ -159,6 +163,9 @@ def _profile() -> CandidateProfile:
 
 
 def _pool_entry(i: int, *, title: str | None = None, company: str | None = None) -> dict:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
     return {
         "pool_id": f"pool-{i:03d}",
         "source": "remotive",
@@ -169,8 +176,8 @@ def _pool_entry(i: int, *, title: str | None = None, company: str | None = None)
         "remote_type": "remote",
         "url": f"https://example.test/jobs/{i}",
         "urls": [f"https://example.test/jobs/{i}"],
-        "posted_at": "2026-10-10T00:00:00+00:00",
-        "fetched_at": "2026-10-18T00:00:00+00:00",
+        "posted_at": (now - timedelta(days=1)).isoformat(),
+        "fetched_at": now.isoformat(),
         "description": f"Backend role {i}. Build Python services. 0-2 years experience.",
     }
 
@@ -470,6 +477,281 @@ def test_no_approved_profile_returns_instead_of_leaking_the_temp_db(
     )
     assert report.paused_reason == "no approved profile available"
     assert report.cases == []
+
+
+# --------------------------------------------------------------------------- #
+# Per-job result store (resumable) and the cheap-only run
+# --------------------------------------------------------------------------- #
+
+
+def test_results_file_records_every_job_with_its_audit_details(tmp_path: Path) -> None:
+    entries = [_pool_entry(i) for i in range(2)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit"), ("skip", "senior")])
+    results = tmp_path / "results.jsonl"
+    client, _state = recording_client()
+
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert report.resumed_from_store == 0
+    records = load_all_records(results)
+    assert len(records) == 2
+    by_pool = {r["pool_id"]: r for r in records}
+    for entry in entries:
+        record = by_pool[entry["pool_id"]]
+        assert record["short_id"]
+        assert record["title"] == entry["title"]
+        assert record["company"] == entry["company"]
+        assert record["owner_label"] in {"apply", "skip"}
+        assert record["owner_reason"]
+        assert record["system_decision"] in {"apply", "review", "skip"}
+        assert "score" in record and "confidence" in record
+        assert isinstance(record["fired_rules"], list)
+        assert isinstance(record["vetoes"], list)
+        assert isinstance(record["must_have_skills"], list)
+        assert isinstance(record["nice_to_have_skills"], list)
+        assert isinstance(record["skill_details"], list)
+        assert record["must_have_coverage_denominator"] is not None
+        assert isinstance(record["dimension_scores"], dict)
+        assert record["llm_calls"] >= 0
+        assert record["tokens"] >= 0
+    # The parsed must-have list and the per-skill credit are kept.
+    record = next(r for r in records if r["pool_id"] == entries[0]["pool_id"])
+    assert record["must_have_skills"] == ["Python"]
+    assert record["skill_details"][0]["skill"] == "Python"
+    assert record["skill_details"][0]["credit"] > 0
+    assert record["skill_details"][0]["why"]
+    assert record["must_have_coverage_numerator"] == pytest.approx(1.0)
+    assert record["must_have_coverage_denominator"] == 1
+
+
+def test_second_run_resumes_from_the_store_and_spends_no_tokens(tmp_path: Path) -> None:
+    entries = [_pool_entry(i) for i in range(3)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a"), ("apply", "b"), ("skip", "c")])
+    results = tmp_path / "results.jsonl"
+
+    first = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=recording_client()[0],
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert first.resumed_from_store == 0
+    assert first.llm_calls > 0
+
+    client, state = recording_client()
+    second = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert second.resumed_from_store == 3
+    assert second.llm_calls == 0
+    assert second.tokens_used == 0
+    assert state["prompts"] == []
+    assert [c.prediction.outcome for c in second.cases] == [
+        c.prediction.outcome for c in first.cases
+    ]
+    # The store keeps exactly one record per job.
+    assert len(load_all_records(results)) == 3
+
+
+def test_a_paused_run_resumes_without_repeating_measured_jobs(tmp_path: Path) -> None:
+    entries = [_pool_entry(i) for i in range(3)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a"), ("apply", "b"), ("apply", "c")])
+    results = tmp_path / "results.jsonl"
+
+    # The first job finishes, then the provider reports the daily quota is spent.
+    paused = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=_CallJsonClient(fail_after=4),
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert paused.paused_reason is not None
+    assert paused.remaining == 2
+    assert len(load_all_records(results)) == 1
+
+    resumed = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=_CallJsonClient(),
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert resumed.resumed_from_store == 1
+    assert resumed.remaining == 0
+    assert len(load_all_records(results)) == 3
+    assert len(resumed.cases) == 3
+
+
+def test_no_resume_re_measures_every_job(tmp_path: Path) -> None:
+    entries = [_pool_entry(i) for i in range(2)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a"), ("skip", "b")])
+    results = tmp_path / "results.jsonl"
+
+    run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=recording_client()[0],
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    again = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=recording_client()[0],
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+        resume=False,
+    )
+    assert again.resumed_from_store == 0
+    assert again.llm_calls > 0
+
+
+def test_cheap_only_runs_no_llm_stage_and_reports_the_split(tmp_path: Path) -> None:
+    entries = [
+        _pool_entry(0),
+        _pool_entry(1),
+        _pool_entry(2, title="Senior Backend Engineer"),
+    ]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(
+        tmp_path, entries, [("apply", "fit"), ("skip", "not for me"), ("apply", "senior but fit")]
+    )
+    results = tmp_path / "results.jsonl"
+    client, state = recording_client()
+
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        cheap_only=True,
+        results_path=results,
+    )
+    assert state["prompts"] == []
+    assert report.llm_calls == 0
+    assert report.tokens_used == 0
+    assert len(report.cases) == 3
+    assert len(report.cheap_rejected) == 1
+    assert len(report.cheap_passed) == 2
+    rejected = report.cheap_rejected[0]
+    assert rejected.case.owner_label == "apply"
+    assert "senior_title" in rejected.prediction.fired_rules
+    # A job that passed the cheap gate was never decided: it must not read as SKIP.
+    assert {c.prediction.outcome for c in report.cheap_passed} == {"unknown"}
+    assert rejected.prediction.outcome == "skip"
+
+    text = format_cheap_report(report)
+    assert "rejected by cheap filters" in text
+    assert "passed (needs LLM)" in text
+    assert "senior_title" in text
+    # The owner-apply job the cheap gate rejects is called out by id.
+    assert rejected.case.short_id in text
+
+
+def test_cheap_only_writes_the_results_file_without_measuring(tmp_path: Path) -> None:
+    entries = [_pool_entry(i) for i in range(2)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a"), ("skip", "b")])
+    results = tmp_path / "results.jsonl"
+
+    run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=recording_client()[0],
+        settings=get_settings(),
+        profile=_profile(),
+        cheap_only=True,
+        results_path=results,
+    )
+    records = load_all_records(results)
+    assert len(records) == 2
+    assert all(r["mode"] == "cheap" for r in records)
+    # A cheap record must not make the job look measured to a full run.
+    assert load_stored_results(results, mode="full") == {}
+
+
+def test_a_full_run_keeps_the_cheap_records_in_the_same_file(tmp_path: Path) -> None:
+    entries = [_pool_entry(i) for i in range(2)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a"), ("skip", "b")])
+    results = tmp_path / "results.jsonl"
+
+    run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=recording_client()[0],
+        settings=get_settings(),
+        profile=_profile(),
+        cheap_only=True,
+        results_path=results,
+    )
+    run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=recording_client()[0],
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    records = load_all_records(results)
+    assert {r["mode"] for r in records} == {"cheap", "full"}
+    assert len(records) == 4
+    assert len(load_stored_results(results, mode="full")) == 2
+
+
+def test_merge_records_replaces_only_the_records_of_the_same_mode() -> None:
+    existing = [
+        {"short_id": "a", "mode": "full", "score": 1},
+        {"short_id": "b", "mode": "full", "score": 2},
+        {"short_id": "a", "mode": "cheap", "score": 3},
+    ]
+    merged = merge_records(existing, [{"short_id": "a", "mode": "full", "score": 9}], mode="full")
+    by_key = {(r["short_id"], r["mode"]): r for r in merged}
+    assert by_key[("a", "full")]["score"] == 9
+    assert by_key[("b", "full")]["score"] == 2
+    assert by_key[("a", "cheap")]["score"] == 3
+    assert len(merged) == 3
+
+
+def test_cheap_only_never_writes_the_labels_file(tmp_path: Path) -> None:
+    before = _sha(REAL_LABELS)
+    entries = [_pool_entry(i) for i in range(2)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a"), ("skip", "b")])
+
+    run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=recording_client()[0],
+        settings=get_settings(),
+        profile=_profile(),
+        cheap_only=True,
+        results_path=tmp_path / "results.jsonl",
+    )
+    assert _sha(REAL_LABELS) == before
 
 
 # --------------------------------------------------------------------------- #
