@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from .config import Settings, get_settings
-from .db import connect, get_latest_profile, init_db, upsert_job
+from .db import connect, db_path, get_latest_profile, init_db, upsert_job
 from .filters import apply_cheap_filters
 from .llm import GroqDailyLimitReached, LLMClient
 from .pipeline import (
@@ -553,7 +553,7 @@ def run_label_eval(
         init_db(conn)
 
         if profile is None:
-            profile, source = _load_approved_profile(conn)
+            profile, source = _load_approved_profile()
             report.profile_source = source
         if profile is None:
             report.paused_reason = "no approved profile available"
@@ -606,12 +606,27 @@ def _null_client() -> LLMClient:
     return _LLMClient(api_key=None)
 
 
-def _load_approved_profile(conn: sqlite3.Connection) -> tuple[CandidateProfile | None, str]:
-    """Read the latest approved profile from the real DB (read-only)."""
+def _load_approved_profile() -> tuple[CandidateProfile | None, str]:
+    """Read the latest profile from the real DB, read-only.
+
+    The replay writes only to a private temporary database, so the profile must
+    come from the real ``atlas.db`` (``ATLAS_DB`` when set) - never from the
+    empty temp copy.
+    """
+    real = Path(db_path()).resolve()
+    if not real.exists():
+        return None, ""
+    try:
+        conn = sqlite3.connect(real.as_uri() + "?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error:
+        return None, ""
     try:
         profile = get_latest_profile(conn)
     except sqlite3.Error:
         profile = None
+    finally:
+        conn.close()
     if profile is not None and profile.approved:
         return profile, "real atlas.db (latest approved profile)"
     return profile, "real atlas.db (latest profile)" if profile is not None else ""

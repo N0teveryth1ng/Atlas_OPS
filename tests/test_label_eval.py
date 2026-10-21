@@ -419,6 +419,32 @@ def test_stop_at_daily_limit_reports_remaining_and_resumes(tmp_path: Path) -> No
     assert resumed.cases[0].prediction.outcome == paused.cases[0].prediction.outcome
 
 
+def test_reads_the_approved_profile_from_the_real_db(tmp_path: Path, monkeypatch) -> None:
+    from atlas.db import connect, init_db, save_profile
+
+    real = tmp_path / "real.db"
+    conn = connect(real)
+    init_db(conn)
+    save_profile(conn, _profile())
+    conn.close()
+    monkeypatch.setenv("ATLAS_DB", str(real))
+
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=_CallJsonClient(),
+        settings=get_settings(),
+        database=tmp_path / "replay.db",
+    )
+    # Without this the profile was read from the (empty) private replay DB.
+    assert report.profile_source == "real atlas.db (latest approved profile)"
+    assert report.paused_reason is None
+    assert len(report.cases) == 1
+
+
 # --------------------------------------------------------------------------- #
 # Read-only guarantee and prompt hygiene
 # --------------------------------------------------------------------------- #
