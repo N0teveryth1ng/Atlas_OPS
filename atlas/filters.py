@@ -314,13 +314,14 @@ def _rule_deal_breaker_skill(
 
 
 def _rule_stale_job(
-    job: Job, parsed: ParsedJD, settings: Settings
+    job: Job, parsed: ParsedJD, settings: Settings, *, as_of: datetime | None = None
 ) -> tuple[FilterCheck, list[FilterRejection]]:
+    now = as_of or datetime.now(UTC)
     if job.posted_at and settings.filters.max_job_age_days:
         posted = job.posted_at
         if posted.tzinfo is None:
             posted = posted.replace(tzinfo=UTC)
-        age_days = (datetime.now(UTC) - posted).days
+        age_days = (now - posted).days
         check = _check(
             "stale_job",
             checked=True,
@@ -363,7 +364,8 @@ def _rule_non_job_listing(
     return check, []
 
 
-RuleFn = Callable[[Job, ParsedJD, Settings], tuple[FilterCheck, list[FilterRejection]]]
+RuleFn = Callable[..., tuple[FilterCheck, list[FilterRejection]]]
+
 
 _HARD_RULES: tuple[RuleFn, ...] = (
     _rule_too_much_experience,
@@ -395,22 +397,29 @@ def apply_hard_filters(
     parsed: ParsedJD,
     profile: CandidateProfile,
     settings: Settings,
+    *,
+    as_of: datetime | None = None,
 ) -> FilterResult:
     """Apply every hard rule; return the pass/fail verdict plus reasons.
 
-    Every rule also contributes a :class:`FilterCheck` — what was compared,
-    against what, or why the rule was skipped — so passing jobs remain auditable.
+    Every rule also contributes a :class:`FilterCheck` - what was compared,
+    against what, or why the rule was skipped - so passing jobs remain auditable.
     """
     rejections: list[FilterRejection] = []
     checks: list[FilterCheck] = []
     for rule in _HARD_RULES:
-        check, rule_rejections = rule(job, parsed, settings)
+        if rule is _rule_stale_job:
+            check, rule_rejections = _rule_stale_job(job, parsed, settings, as_of=as_of)
+        else:
+            check, rule_rejections = rule(job, parsed, settings)  # type: ignore[misc]
         checks.append(check)
         rejections.extend(rule_rejections)
     return FilterResult(passed=not rejections, rejections=rejections, checks=checks)
 
 
-def apply_cheap_filters(job: Job, settings: Settings) -> FilterResult:
+def apply_cheap_filters(
+    job: Job, settings: Settings, *, as_of: datetime | None = None
+) -> FilterResult:
     """The deterministic slice of the hard filters that needs no LLM call.
 
     Runs on the regex-only parse. A rejection here means the full pass after the
@@ -423,7 +432,10 @@ def apply_cheap_filters(job: Job, settings: Settings) -> FilterResult:
     rejections: list[FilterRejection] = []
     checks: list[FilterCheck] = []
     for rule in _CHEAP_RULES:
-        check, rule_rejections = rule(job, regex_jd, settings)
+        if rule is _rule_stale_job:
+            check, rule_rejections = _rule_stale_job(job, regex_jd, settings, as_of=as_of)
+        else:
+            check, rule_rejections = rule(job, regex_jd, settings)  # type: ignore[misc]
         checks.append(check)
         rejections.extend(rule_rejections)
     location_check, location_rejections = _rule_location(job, regex_jd, settings)

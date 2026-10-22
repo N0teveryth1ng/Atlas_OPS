@@ -522,6 +522,7 @@ def replay_case(
     conn: sqlite3.Connection,
     run_id: int,
     cheap_only: bool = False,
+    as_of: Any = None,
 ) -> SystemPrediction:
     """Run the pipeline stages for one labelled job and reduce the result."""
     job = case.to_job()
@@ -530,7 +531,7 @@ def replay_case(
     start_tokens = int(getattr(client, "tokens_used", 0) or 0)
     start_calls = int(getattr(client, "calls", 0) or 0)
 
-    cheap = apply_cheap_filters(job, settings)
+    cheap = apply_cheap_filters(job, settings, as_of=as_of)
     if not cheap.passed:
         # Zero LLM calls: the same deterministic gate the live pipeline uses.
         cr = _ColdResult(job_id, job, cheap)
