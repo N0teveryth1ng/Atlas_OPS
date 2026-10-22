@@ -1,4 +1,4 @@
-"""JD Parser Agent — regex pre-pass + LLM, merged conservatively.
+"""JD Parser Agent - regex pre-pass + LLM, merged conservatively.
 
 Section 5.5 of the rework plan. The deterministic regex pass extracts year
 requirements and title seniority first. The LLM adds must-have / nice-to-have
@@ -14,13 +14,14 @@ import re
 from .llm import LLMClient
 from .prompt_store import load_prompt
 from .schemas import ParsedJD, RemoteType, Seniority
+from .skills import get_ontology
 
 logger = logging.getLogger(__name__)
 
 _NUM = r"\d+(?:\.\d+)?"
 
 _RANGE_RE = re.compile(
-    rf"({_NUM})\s*(?:-|–|—|to)\s*({_NUM})\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE
+    rf"({_NUM})\s*(?:-|-|-|to)\s*({_NUM})\s*\+?\s*(?:years?|yrs?)\b", re.IGNORECASE
 )
 _PLUS_RE = re.compile(rf"({_NUM})\s*\+\s*(?:years?|yrs?)\b", re.IGNORECASE)
 _MIN_RE = re.compile(
@@ -48,7 +49,7 @@ _NON_REQ_AFTER_RE = re.compile(
 )
 _FRESHER_RE = re.compile(
     r"\b(fresher|fresh(?:er)?\s+graduate|entry[\s-]?level|no\s+(?:prior\s+)?experience|"
-    r"recent\s+graduate|graduate\s+trainee|trainee|internship|0\s*[-–]\s*1\s*years?)\b",
+    r"recent\s+graduate|graduate\s+trainee|trainee|internship|0\s*[--]\s*1\s*years?)\b",
     re.IGNORECASE,
 )
 
@@ -107,6 +108,123 @@ SENIORITY_RANK: dict[Seniority, int] = {
     Seniority.architect: 7,
     Seniority.manager: 7,
 }
+
+_VAGUE_CONCEPTS = {
+    "ai/ml/nlp concepts",
+    "ai/ml concepts",
+    "ml/nlp concepts",
+    "nlp concepts",
+    "machine learning concepts",
+    "cloud infrastructure",
+    "data structures",
+    "system design patterns",
+    "software design patterns",
+    "design patterns",
+    "apis",
+    "api",
+    "apis in general",
+    "general apis",
+}
+
+_SPOKEN_LANGUAGES = {
+    "english",
+    "spanish",
+    "french",
+    "german",
+    "hindi",
+    "mandarin",
+    "chinese",
+    "japanese",
+    "korean",
+    "arabic",
+    "portuguese",
+    "italian",
+    "russian",
+}
+
+_DEGREE_WORDS = (
+    "bachelor",
+    "master",
+    "phd",
+    "b.tech",
+    "m.tech",
+    "btech",
+    "mtech",
+    "b.e",
+    "m.e",
+    "bsc",
+    "msc",
+)
+
+
+def _norm_skill(s: str) -> str:
+    return " ".join((s or "").lower().strip().split())
+
+
+def _looks_like_named_tool(skill: str, job_text: str) -> bool:
+    s = (skill or "").strip()
+    if not s:
+        return False
+    if any(ch.isupper() for ch in s) and len(s) >= 2:
+        return True
+    if "+" in s or "#" in s:
+        return True
+    if "/" in s and re.search(r"[A-Za-z]+/[A-Za-z]+", s):
+        return True
+    return bool(job_text and s.lower() in job_text.lower() and s.isupper() and len(s) >= 2)
+
+
+def _reclassify_skills(parsed: ParsedJD, job_text: str) -> tuple[list[str], list[str], list[str]]:
+    ontology = get_ontology()
+    must: list[str] = []
+    nice: list[str] = []
+    dropped: list[str] = []
+    for skill in parsed.must_have_skills or []:
+        key = _norm_skill(skill)
+        if key in _SPOKEN_LANGUAGES or any(d in key for d in _DEGREE_WORDS):
+            dropped.append(skill)
+            logger.debug("jd_parser: dropped must-have '%s' (spoken language/degree)", skill)
+            continue
+        if key in _VAGUE_CONCEPTS:
+            nice.append(skill)
+            logger.debug("jd_parser: moved must-have '%s' to nice-to-have (vague concept)", skill)
+            continue
+        canonical = ontology.canonicalize(skill)
+        if canonical in ontology.entries:
+            must.append(skill)
+            continue
+        norm_key = _norm_skill(skill).replace(" ", "").replace("-", "").replace(".", "")
+        canon_key = canonical.replace(" ", "").replace("-", "").replace(".", "")
+        if canon_key and canon_key != norm_key and canonical in ontology.entries:
+            must.append(skill)
+            continue
+        if _looks_like_named_tool(skill, job_text):
+            must.append(skill)
+            continue
+        if len(skill.split()) >= 3:
+            nice.append(skill)
+            logger.debug(
+                "jd_parser: moved must-have '%s' to nice-to-have (not concrete named tool)", skill
+            )
+            continue
+        nice.append(skill)
+        logger.debug("jd_parser: moved must-have '%s' to nice-to-have (conservative)", skill)
+    for skill in parsed.nice_to_have_skills or []:
+        if skill not in nice and skill not in must:
+            nice.append(skill)
+
+    def _dedupe(items: list[str]) -> list[str]:
+        seen = set()
+        out = []
+        for item in items:
+            k = _norm_skill(item)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(item)
+        return out
+
+    return _dedupe(must), _dedupe(nice), dropped
 
 
 def extract_years(text: str) -> tuple[float | None, float | None, str | None]:
@@ -207,7 +325,7 @@ def _more_senior(a: Seniority, b: Seniority) -> Seniority:
     return a if SENIORITY_RANK[a] >= SENIORITY_RANK[b] else b
 
 
-def merge_jd(regex_jd: ParsedJD, llm_jd: ParsedJD) -> ParsedJD:
+def merge_jd(regex_jd: ParsedJD, llm_jd: ParsedJD, job_text: str = "") -> ParsedJD:
     """Merge regex and LLM parses, always taking the more conservative value."""
     merged = llm_jd.model_copy(deep=True)
 
@@ -223,6 +341,15 @@ def merge_jd(regex_jd: ParsedJD, llm_jd: ParsedJD) -> ParsedJD:
     if regex_jd.remote_type != RemoteType.unknown:
         merged.remote_type = regex_jd.remote_type
     merged.red_flags = sorted(set(regex_jd.red_flags) | set(llm_jd.red_flags))
+
+    text = job_text or f"{merged.title or ''}\n{merged.responsibilities_summary or ''}"
+    must, nice, dropped = _reclassify_skills(merged, text)
+    merged.must_have_skills = must
+    merged.nice_to_have_skills = nice
+    if dropped:
+        merged.ambiguities = sorted(
+            set(list(merged.ambiguities) + [f"dropped_must_have:{d}" for d in dropped])
+        )
 
     ambiguities = list(merged.ambiguities)
     if (
@@ -253,6 +380,7 @@ def parse_jd(client: LLMClient, *, title: str, description: str) -> ParsedJD:
         system=system,
         user=f"Title: {title}\n\nDescription:\n{description}",
     )
-    merged = merge_jd(regex_jd, llm_jd)
+    job_text = f"{title}\n{description}"
+    merged = merge_jd(regex_jd, llm_jd, job_text=job_text)
     merged.title = title or merged.title
     return merged
