@@ -28,11 +28,12 @@ import sqlite3
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from .config import Settings, get_settings
-from .db import connect, db_path, get_latest_profile, init_db, upsert_job
+from .db import add_llm_tokens, connect, db_path, get_latest_profile, init_db, upsert_job
 from .filters import apply_cheap_filters
 from .llm import GroqDailyLimitReached, LLMClient, LLMError
 from .pipeline import (
@@ -41,6 +42,7 @@ from .pipeline import (
     _BudgetedClient,
     process_job,
 )
+from .prompt_store import load_prompt
 from .schemas import CandidateProfile, Decision, Job, RemoteType
 
 DEFAULT_LABELS_PATH = Path("eval") / "labels.jsonl"
@@ -77,6 +79,11 @@ def _pct_ci(successes: int, total: int) -> str:
     """A percentage with its sample size and 95% Wilson interval next to it."""
     low, high = wilson_interval(successes, total)
     return f"{_pct(successes / total) if total else 'n/a'} ({successes}/{total}) [{_pct(low)}-{_pct(high)}]"
+
+
+def _esc(text: str) -> str:
+    """Escape pipe characters for safe Markdown table cells."""
+    return text.replace("|", "\\|")
 
 
 # --------------------------------------------------------------------------- #
@@ -192,6 +199,19 @@ class SystemPrediction:
     regex_title_seniority: str = ""
     regex_remote_type: str = ""
     regex_years_quote: str | None = None
+    # Evaluation status: ``"evaluated"`` when the pipeline produced a real
+    # decision (confidence > 0, must-have data present), ``"incomplete"`` when
+    # LLM calls were made but no proper decision resulted, ``"cheap"`` when the
+    # job was rejected by the LLM-free pre-screen (zero LLM calls).
+    status: str = "incomplete"
+    reason: str | None = None
+    # jd_parser prompt version used to parse this job, for version-aware resume.
+    prompt_version: str | None = None
+    # UTC timestamp when the job was (re-)evaluated.
+    as_of: str | None = None
+    # Per-LLM-call audit details: stage, model, tokens, retries, validation
+    # failures, HTTP errors, ok/error.
+    per_call: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _cheap_status(prediction: SystemPrediction) -> str:
@@ -425,11 +445,27 @@ def load_label_cases(
 
 
 def _prediction_from_processed(
-    processed: Any, *, tokens: int, calls: int, profile: CandidateProfile | None = None
+    processed: Any,
+    *,
+    tokens: int,
+    calls: int,
+    profile: CandidateProfile | None = None,
+    per_call: list[dict[str, Any]] | None = None,
+    prompt_version: str | None = None,
+    as_of: str | None = None,
+    cheap: bool = False,
 ) -> SystemPrediction:
     """Reduce a ``ProcessedJob`` to the audit essentials for the report."""
-    pred = SystemPrediction(outcome="skip", tokens=tokens, llm_calls=calls)
+    pred = SystemPrediction(
+        outcome="skip",
+        tokens=tokens,
+        llm_calls=calls,
+        per_call=list(per_call or []),
+        prompt_version=prompt_version,
+        as_of=as_of,
+    )
 
+    # --- cheap-filter rejection: zero LLM calls, definitive skip ------------- #
     filter_result = processed.filter_result
     if filter_result is not None and not filter_result.passed:
         rules = [r.rule_id for r in filter_result.rejections]
@@ -446,16 +482,24 @@ def _prediction_from_processed(
             for r in getattr(filter_result, "rejections", []) or []
         ]
         pred.outcome = "skip"
+        pred.status = "cheap" if cheap else "incomplete"
+        pred.reason = "rejected by cheap filters before any LLM stage"
+        pred.cheap_status = "rejected"
         return pred
 
+    # --- no LLM decision produced ------------------------------------------ #
     decision: Decision | None = processed.decision
     if decision is None:
         # Parse-confidence review or evidence failure: the pipeline surfaced it
         # for a human without a numeric decision.
         pred.outcome = "review" if processed.needs_review else "skip"
         pred.score = float(processed.score or 0.0)
+        pred.status = "incomplete"
+        pred.reason = "no decision produced (parse-confidence review or evidence failure)"
+        pred.cheap_status = "passed" if cheap else ""
         return pred
 
+    # --- real LLM decision ------------------------------------------------- #
     pred.reached_llm = True
     pred.outcome = decision.outcome.value
     pred.score = float(decision.match_score)
@@ -510,6 +554,24 @@ def _prediction_from_processed(
     dims = getattr(decision, "dimensions", None) or {}
     if isinstance(dims, dict):
         pred.dimension_scores = {k: float(v) for k, v in dims.items()}
+
+    # Status: only "evaluated" when a real LLM decision has confidence > 0 and
+    # must-have data; LLM calls that fell short are "incomplete".
+    if calls > 0 and pred.reached_llm:
+        has_must_have_data = bool(pred.must_have_skills) or pred.must_have_coverage is not None
+        if pred.confidence > 0 and has_must_have_data:
+            pred.status = "evaluated"
+            pred.reason = None
+        else:
+            pred.status = "incomplete"
+            parts = []
+            if pred.confidence <= 0:
+                parts.append("confidence 0")
+            if not has_must_have_data:
+                parts.append("no must-have data")
+            pred.reason = "incomplete decision: " + (
+                ", ".join(parts) if parts else "no proper evaluation"
+            )
     return pred
 
 
@@ -530,12 +592,22 @@ def replay_case(
 
     start_tokens = int(getattr(client, "tokens_used", 0) or 0)
     start_calls = int(getattr(client, "calls", 0) or 0)
+    start_call_details = len(getattr(client, "call_details", []) or [])
 
     cheap = apply_cheap_filters(job, settings, as_of=as_of)
     if not cheap.passed:
         # Zero LLM calls: the same deterministic gate the live pipeline uses.
         cr = _ColdResult(job_id, job, cheap)
-        pred = _prediction_from_processed(cr, tokens=0, calls=0, profile=profile)
+        pred = _prediction_from_processed(
+            cr,
+            tokens=0,
+            calls=0,
+            profile=profile,
+            per_call=[],
+            prompt_version=None,
+            as_of=as_of.isoformat() if hasattr(as_of, "isoformat") else None,
+            cheap=True,
+        )
         pred.cheap_status = "rejected"
         return pred
 
@@ -557,19 +629,62 @@ def replay_case(
         pred.regex_years_quote = regex_jd.years_source_quote
         return pred
 
-    processed = process_job(
-        client,
-        job_id,
-        job,
-        profile,
-        settings,
-        conn=conn,
-        cheap_result=cheap,
-    )
+    try:
+        processed = process_job(
+            client,
+            job_id,
+            job,
+            profile,
+            settings,
+            conn=conn,
+            cheap_result=cheap,
+        )
+    except LLMError as exc:
+        # Per-job LLM failure (non-daily 429, transport exhaustion, validation
+        # failure): mark incomplete and continue to the next job. Daily-limit
+        # pauses propagate to run_label_eval to stop the whole run.
+        if isinstance(exc, GroqDailyLimitReached):
+            raise
+        delta_tokens = int(getattr(client, "tokens_used", 0) or 0) - start_tokens
+        delta_calls = int(getattr(client, "calls", 0) or 0) - start_calls
+        all_details = getattr(client, "call_details", []) or []
+        per_call = list(all_details[start_call_details:])
+        try:
+            _parser_text, parser_version = load_prompt("jd_parser")
+        except Exception:  # noqa: BLE001 - graceful fallback for prompt loading
+            parser_version = None
+        pred = SystemPrediction(
+            outcome="skip",
+            tokens=delta_tokens,
+            llm_calls=delta_calls,
+            status="incomplete",
+            reason=f"LLM error: {exc}",
+            per_call=per_call,
+            prompt_version=parser_version,
+            as_of=datetime.now(UTC).isoformat(),
+        )
+        pred.cheap_status = "passed" if cheap.passed else "rejected"
+        return pred
+
     delta_tokens = int(getattr(client, "tokens_used", 0) or 0) - start_tokens
     delta_calls = int(getattr(client, "calls", 0) or 0) - start_calls
+    # Per-call details added during this job's processing.
+    all_details = getattr(client, "call_details", []) or []
+    per_call = list(all_details[start_call_details:])
+    # jd_parser prompt version used for this job's parse.
+    try:
+        _parser_text, parser_version = load_prompt("jd_parser")
+    except Exception:  # noqa: BLE001 - graceful fallback for prompt loading
+        parser_version = None
+    eval_as_of = datetime.now(UTC).isoformat()
     pred = _prediction_from_processed(
-        processed, tokens=delta_tokens, calls=delta_calls, profile=profile
+        processed,
+        tokens=delta_tokens,
+        calls=delta_calls,
+        profile=profile,
+        per_call=per_call,
+        prompt_version=parser_version,
+        as_of=eval_as_of,
     )
     pred.cheap_status = "passed" if cheap.passed else "rejected"
     return pred
@@ -646,6 +761,11 @@ def result_record(
         "regex_title_seniority": prediction.regex_title_seniority,
         "regex_remote_type": prediction.regex_remote_type,
         "regex_years_quote": prediction.regex_years_quote,
+        "status": prediction.status,
+        "reason": prediction.reason,
+        "prompt_version": prediction.prompt_version,
+        "as_of": prediction.as_of,
+        "per_call": list(prediction.per_call),
     }
 
 
@@ -676,6 +796,11 @@ def prediction_from_record(record: dict[str, Any]) -> SystemPrediction:
         regex_title_seniority=str(record.get("regex_title_seniority") or ""),
         regex_remote_type=str(record.get("regex_remote_type") or ""),
         regex_years_quote=record.get("regex_years_quote"),
+        status=str(record.get("status") or "incomplete"),
+        reason=record.get("reason"),
+        prompt_version=record.get("prompt_version"),
+        as_of=record.get("as_of"),
+        per_call=list(record.get("per_call") or []),
     )
 
 
@@ -785,6 +910,21 @@ class LabelEvalReport:
         """Cases that passed the pre-screen and therefore need the LLM stages."""
         return [c for c in self.cases if _cheap_status(c.prediction) == "passed"]
 
+    @property
+    def evaluated_cases(self) -> list[CaseResult]:
+        """Cases with a real LLM decision (excludes incomplete jobs)."""
+        return [c for c in self.cases if c.prediction.status != "incomplete"]
+
+    @property
+    def incomplete_cases(self) -> list[CaseResult]:
+        """Jobs that made LLM calls but produced no proper evaluation, with reasons."""
+        return [c for c in self.cases if c.prediction.status == "incomplete"]
+
+    @property
+    def metrics_evaluated(self) -> Metrics:
+        """Headline metrics over evaluated jobs only (excludes incomplete)."""
+        return Metrics(cases=self.evaluated_cases)
+
 
 def run_label_eval(
     *,
@@ -800,6 +940,10 @@ def run_label_eval(
     cheap_only: bool = False,
     results_path: Path | str | None = None,
     resume: bool = True,
+    only_apply: bool = False,
+    limit: int | None = None,
+    include_duplicates: bool = False,
+    usage_db: Path | str | None = None,
 ) -> LabelEvalReport:
     """Replay the pipeline over labelled pool jobs and build the report.
 
@@ -811,6 +955,12 @@ def run_label_eval(
     through the LLM stages, and the run stops cleanly the moment the provider
     reports the daily limit (or an optional ``max_calls``/``max_tokens`` budget is
     exhausted), leaving :attr:`LabelEvalReport.remaining` jobs unmeasured.
+
+    Ordering: owner-apply jobs first, then owner-skip jobs that pass the cheap
+    filters (LLM-free gate), then owner-skip jobs rejected by the cheap filters.
+    ``only_apply`` restricts to owner-apply jobs; ``limit`` caps the number
+    processed; ``include_duplicates`` keeps duplicate postings (collapsed by
+    normalized company + title when off).
     """
     settings = settings or get_settings()
     cases = load_label_cases(labels_path, pool_path)
@@ -821,6 +971,37 @@ def run_label_eval(
         cheap_only=cheap_only,
         results_path=str(results_path) if results_path else "",
     )
+
+    # --- ordering: owner-apply first, then owner-skip passing cheap filters -- #
+    apply_cases = [c for c in cases if c.owner_label == "apply"]
+    skip_cases = [c for c in cases if c.owner_label == "skip"]
+    skip_passing: list[LabelEvalCase] = []
+    skip_failing: list[LabelEvalCase] = []
+    for case in skip_cases:
+        _cheap = apply_cheap_filters(case.to_job(), settings)
+        (skip_passing if _cheap.passed else skip_failing).append(case)
+    ordered_cases = apply_cases + skip_passing + skip_failing
+    if only_apply:
+        ordered_cases = list(apply_cases)
+    if not include_duplicates:
+        seen: set[tuple[str, str]] = set()
+        deduped: list[LabelEvalCase] = []
+        for case in ordered_cases:
+            key = duplicate_key(case)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(case)
+        ordered_cases = deduped
+    if limit is not None:
+        ordered_cases = ordered_cases[: int(limit)]
+
+    current_version = None
+    if not cheap_only:
+        try:
+            _parser_text, current_version = load_prompt("jd_parser")
+        except Exception:  # noqa: BLE001 - graceful fallback for prompt loading
+            current_version = None
 
     stored: dict[str, dict[str, Any]] = {}
     if results_path is not None and resume:
@@ -856,17 +1037,21 @@ def run_label_eval(
 
         mode = "cheap" if cheap_only else "full"
         new_records: list[dict[str, Any]] = []
-        for index, case in enumerate(cases):
+        for index, case in enumerate(ordered_cases):
             if on_progress is not None:
-                on_progress({"done": index, "total": len(cases), "current": case.short_id})
+                on_progress({"done": index, "total": len(ordered_cases), "current": case.short_id})
             stored_record = stored.get(case.short_id)
             if stored_record is not None and not cheap_only:
-                # Already measured in an earlier run: reuse it, spend nothing.
-                prediction = prediction_from_record(stored_record)
-                report.cases.append(CaseResult(case=case, prediction=prediction))
-                report.resumed_from_store += 1
-                new_records.append(stored_record)
-                continue
+                # Skip only evaluated records built with the current jd_parser
+                # prompt version; re-run incomplete or stale-version records.
+                status = str(stored_record.get("status") or "incomplete")
+                pver = stored_record.get("prompt_version")
+                if status == "evaluated" and pver == current_version:
+                    prediction = prediction_from_record(stored_record)
+                    report.cases.append(CaseResult(case=case, prediction=prediction))
+                    report.resumed_from_store += 1
+                    new_records.append(stored_record)
+                    continue
             try:
                 prediction = replay_case(
                     case,
@@ -879,11 +1064,11 @@ def run_label_eval(
                 )
             except GroqDailyLimitReached as exc:
                 report.paused_reason = f"daily limit: {exc}"
-                report.remaining = len(cases) - index
+                report.remaining = len(ordered_cases) - index
                 break
             except (LLMTokenBudgetExceeded, LLMCallBudgetExceeded) as exc:
                 report.paused_reason = f"budget cap: {exc}"
-                report.remaining = len(cases) - index
+                report.remaining = len(ordered_cases) - index
                 break
             report.cases.append(CaseResult(case=case, prediction=prediction))
             new_records.append(result_record(case, prediction, mode=mode))
@@ -895,6 +1080,15 @@ def run_label_eval(
         report.tokens_used = int(getattr(budgeted, "tokens_used", 0) or 0) - tokens_before
         report.llm_calls = int(getattr(budgeted, "calls", 0) or 0) - calls_before
         report.skipped_labeled = len(cases) - len(report.cases)
+
+        # Record tokens spent against the real local daily-budget table.
+        if usage_db is not None and report.tokens_used > 0:
+            real_conn = connect(usage_db)
+            try:
+                init_db(real_conn)
+                add_llm_tokens(real_conn, report.tokens_used)
+            finally:
+                real_conn.close()
         return report
     finally:
         if conn is not None:
@@ -1051,15 +1245,17 @@ def _matrix_rows(metrics: Metrics) -> list[str]:
 
 def format_report(report: LabelEvalReport) -> str:
     """Render the full report as Markdown (also the console output)."""
-    metrics = report.metrics
-    deduped = report.metrics_deduped
+    metrics = report.metrics_evaluated
+    deduped = Metrics(cases=collapse_duplicates(report.evaluated_cases))
     lines: list[str] = []
     lines.append("# Pipeline vs owner labels")
     lines.append("")
     lines.append(f"- labels: `{report.labels_path}`")
     lines.append(f"- pool: `{report.pool_path}`")
     lines.append(f"- profile: {report.profile_source or 'n/a'}")
-    lines.append(f"- labelled jobs evaluated: {len(report.cases)}")
+    lines.append(f"- labelled jobs loaded: {len(report.cases)}")
+    lines.append(f"- evaluated (confidence > 0, must-have data): {len(report.evaluated_cases)}")
+    lines.append(f"- incomplete (LLM calls, no proper evaluation): {len(report.incomplete_cases)}")
     if report.duplicate_pairs:
         lines.append(f"- duplicate postings collapsed: {report.duplicate_pairs}")
     lines.append(f"- LLM calls: {report.llm_calls}   tokens: {report.tokens_used:,}")
@@ -1071,7 +1267,7 @@ def format_report(report: LabelEvalReport) -> str:
         lines.append(f"- STOPPED: {report.paused_reason}; jobs remaining: {report.remaining}")
     lines.append("")
 
-    lines.append("## Confusion matrix (all labelled jobs)")
+    lines.append("## Confusion matrix (evaluated jobs only)")
     lines.append("")
     lines.extend(_matrix_rows(metrics))
     lines.append("")
@@ -1114,20 +1310,37 @@ def format_report(report: LabelEvalReport) -> str:
     lines.append("## Per job")
     lines.append("")
     lines.append(
-        "| short id | title | company | owner | system | score | conf | rules | calls | tokens |"
+        "| short id | title | company | owner | system | status | score | conf | rules | calls | tokens |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for case in report.cases:
         c = case.case
         p = case.prediction
         rules = ", ".join(p.fired_rules) if p.fired_rules else "-"
         lines.append(
             f"| {c.short_id} | {c.title} | {c.company} | {c.owner_label} | "
-            f"{p.outcome.upper()} | {p.score:.1f} | {p.confidence:.2f} | {rules} | "
+            f"{p.outcome.upper()} | {p.status} | {p.score:.1f} | {p.confidence:.2f} | {rules} | "
             f"{p.llm_calls} | {p.tokens} |"
         )
     lines.append("")
 
+    # --- incomplete jobs with reasons -------------------------------------- #
+    if report.incomplete_cases:
+        lines.append("## Incomplete jobs (excluded from metrics)")
+        lines.append("")
+        lines.append("| short id | title | company | owner | llm_calls | tokens | reason |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for case in report.incomplete_cases:
+            c = case.case
+            p = case.prediction
+            reason = (p.reason or "").replace("|", "\\|")
+            lines.append(
+                f"| {c.short_id} | {c.title} | {c.company} | {c.owner_label} | "
+                f"{p.llm_calls} | {p.tokens} | {reason} |"
+            )
+        lines.append("")
+
+    # --- per-source and per-rule (evaluated jobs) -------------------------- #
     lines.append("## Per source")
     lines.append("")
     lines.append("| source | n | owner apply | system APPLY | precision APPLY | recall APPLY |")
@@ -1148,6 +1361,43 @@ def format_report(report: LabelEvalReport) -> str:
             lines.append(f"- `{rule}`: {count}")
     else:
         lines.append("- (no rules fired)")
+    lines.append("")
+
+    # --- cost report: per-stage aggregation -------------------------------- #
+    stage_calls: dict[str, int] = {}
+    stage_tokens: dict[str, int] = {}
+    for case in report.cases:
+        for call in case.prediction.per_call:
+            stage = str(call.get("stage") or "unknown")
+            stage_calls[stage] = stage_calls.get(stage, 0) + 1
+            stage_tokens[stage] = stage_tokens.get(stage, 0) + int(call.get("tokens") or 0)
+    if stage_calls:
+        lines.append("## Cost report (tokens and calls per LLM stage)")
+        lines.append("")
+        lines.append("| stage | calls | tokens |")
+        lines.append("|---|---|---|")
+        for stage in sorted(stage_calls):
+            lines.append(f"| {stage} | {stage_calls[stage]} | {stage_tokens[stage]} |")
+        lines.append("")
+
+    # --- per-job retries / validation failures ----------------------------- #
+    lines.append("## Per-job LLM call details (retries, validation failures, errors)")
+    lines.append("")
+    lines.append(
+        "| short id | stage | model | tokens | transport_retries | validation_attempts | validation_failures | http_errors | ok | error |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    for case in report.cases:
+        c = case.case
+        for call in case.prediction.per_call:
+            errors = call.get("http_errors") or []
+            lines.append(
+                f"| {c.short_id} | {call.get('stage')} | {call.get('model')} | "
+                f"{call.get('tokens', 0)} | {call.get('transport_retries', 0)} | "
+                f"{call.get('validation_attempts', 0)} | {call.get('validation_failures', 0)} | "
+                f"{','.join(str(e) for e in errors)} | {call.get('ok', False)} | "
+                f"{_esc(call.get('error') or '')} |"
+            )
     lines.append("")
 
     lines.append("## Disagreements")
@@ -1206,12 +1456,12 @@ def write_report(report: LabelEvalReport, path: Path | str = DEFAULT_REPORT_PATH
 
 def summary_line(report: LabelEvalReport) -> str:
     """One-line headline for HANDOFF.md."""
-    m = report.metrics
-    d = report.metrics_deduped
+    m = report.metrics_evaluated
+    d = Metrics(cases=collapse_duplicates(report.evaluated_cases))
     return (
-        f"{len(report.cases)} labelled jobs; "
+        f"{len(report.evaluated_cases)} evaluated jobs; "
         f"precision APPLY {_pct_ci(m.precision_apply_numerator, m.system_apply_total)}; "
         f"recall owner-apply {_pct_ci(m.recall_apply_numerator, m.owner_apply_total)}; "
         f"seniority false-pass {len(m.seniority_false_pass)}; "
-        f"deduped n={len(d.cases)}"
+        f"incomplete {len(report.incomplete_cases)}; deduped n={len(d.cases)}"
     )

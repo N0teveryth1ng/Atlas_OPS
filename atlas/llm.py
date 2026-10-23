@@ -167,6 +167,14 @@ class LLMClient:
         # not transport retries. The dashboard's add-progress page reads this to
         # show how many LLM calls a job has cost so far.
         self.calls: int = 0
+        # Per-call audit record for every logical ``call_json`` invocation: stage
+        # (schema name), model, tokens spent, transport retries, validation
+        # failures, HTTP errors and whether the call produced a valid result.
+        self.call_details: list[dict[str, Any]] = []
+        # Last-call transport metadata, populated by :meth:`_create` and consumed
+        # by :meth:`call_json` to build each per-call record.
+        self._last_http_errors: list[Any] = []
+        self._last_transport_retries: int = 0
 
         self._client: _GroqLike
         if client is not None:
@@ -315,11 +323,16 @@ class LLMClient:
         schema_name: str | None = None,
     ) -> str:
         last_exc: Exception | None = None
+        # Transport metadata for this single ``_create`` invocation (reset each
+        # time so ``call_json`` can snapshot it per logical call).
+        self._last_http_errors = []
+        self._last_transport_retries = 0
         for attempt in range(1, self.max_api_retries + 1):
             try:
                 return self._create_once(messages, model, temperature, json_mode=True, usage=usage)
             except Exception as exc:  # noqa: BLE001 - transport errors vary
                 last_exc = exc
+                self._last_transport_retries = attempt - 1
                 # Not every model supports response_format=json_object. Fall back
                 # to a plain call; the caller still validates the parsed JSON.
                 if _looks_like_json_mode_error(exc):
@@ -329,6 +342,7 @@ class LLMClient:
                         )
                     except Exception as fallback_exc:  # noqa: BLE001
                         last_exc = fallback_exc
+                        self._last_transport_retries = attempt - 1
                 exc_text = str(last_exc).lower() if last_exc else ""
                 status_code = None
                 retry_after = None
@@ -341,6 +355,8 @@ class LLMClient:
                             retry_after = headers.get("retry-after") or headers.get("Retry-After")
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("failed to extract retry headers from LLM exception: %s", exc)
+                if status_code is not None:
+                    self._last_http_errors.append(status_code)
                 effective_status = status_code or (
                     "429" if "rate limit" in exc_text or "429" in exc_text else None
                 )
@@ -427,21 +443,48 @@ class LLMClient:
         span = obs.start_span(f"llm.call_json.{schema.__name__}", metadata=metadata)
         usage: dict[str, int] = {}
 
+        # Per-call audit fields, accumulated across validation retries.
+        call_http_errors: list[Any] = []
+        call_transport_retries = 0
+        validation_attempts = 0
+        validation_failures = 0
+        validation_errors: list[str] = []
+
         last_error: str | None = None
+        ok = False
+        result: TModel | None = None
         for attempt in range(1, self.max_validation_retries + 1):
-            raw = self._create(messages, model, temperature, usage, schema_name=schema.__name__)
+            try:
+                raw = self._create(messages, model, temperature, usage, schema_name=schema.__name__)
+                call_http_errors.extend(self._last_http_errors)
+                call_transport_retries += self._last_transport_retries
+            except Exception as exc:  # transport/daily-limit failure
+                call_http_errors.extend(self._last_http_errors)
+                call_transport_retries += self._last_transport_retries
+                # A daily-limit pause must propagate to the caller so the whole
+                # run stops cleanly; other transport/validation errors become
+                # an incomplete job (handled by replay_case).
+                if isinstance(exc, GroqDailyLimitReached):
+                    raise
+                last_error = str(exc)
+                ok = False
+                break
+
+            # A response was obtained: validate it.
+            validation_attempts += 1
             try:
                 payload = extract_json(raw)
                 result = schema.model_validate(payload)
-                span.set_metadata(validation_attempts=attempt, validation_ok=True)
+                ok = True
+                span.set_metadata(validation_attempts=validation_attempts, validation_ok=True)
                 span.set_metadata(**usage)
                 # The reply itself is not sent: a Verdict quotes the JD back.
                 span.end()
-                return result
+                break
             except (ValueError, ValidationError) as exc:
                 last_error = str(exc)
-                # Only the exception's type: a validation message can quote the
-                # model's reply, and replies are built from the JD.
+                validation_failures += 1
+                validation_errors.append(str(exc))
                 span.set_metadata(validation_ok=False, validation_error_type=type(exc).__name__)
                 logger.warning(
                     "Validation failed for %s (attempt %s/%s): %s",
@@ -462,6 +505,26 @@ class LLMClient:
                         ),
                     }
                 )
+
+        # Per-call audit record.
+        self.call_details.append(
+            {
+                "stage": schema.__name__,
+                "model": model,
+                "tokens": int(usage.get("total_tokens", 0) or 0),
+                "transport_retries": int(call_transport_retries),
+                "validation_attempts": int(validation_attempts),
+                "validation_failures": int(validation_failures),
+                "validation_errors": list(validation_errors),
+                "http_errors": list(call_http_errors),
+                "ok": bool(ok),
+                "error": last_error,
+            }
+        )
+
+        if ok:
+            assert result is not None
+            return result
 
         span.set_metadata(**usage)
         span.end()

@@ -821,3 +821,461 @@ def test_real_files_untouched_by_load(tmp_path: Path) -> None:
 def test_missing_labels_file_raises() -> None:
     with pytest.raises(FileNotFoundError):
         load_label_cases(Path("does-not-exist.jsonl"), Path("also-missing.jsonl"))
+
+
+# --------------------------------------------------------------------------- #
+# Fake transports for status / per-call testing
+# --------------------------------------------------------------------------- #
+
+
+class _HTTP429(Exception):
+    """An exception carrying an HTTP 429 response (not a daily-limit pause)."""
+
+    def __init__(self) -> None:
+        self.response = type("resp", (), {"status_code": 429, "headers": {}})()
+
+
+def _client_with_handler(handler):
+    """An LLMClient whose transport routes every call through ``handler``."""
+    return LLMClient(client=_FakeClient(handler))
+
+
+def _handler_invalid_json(kwargs):
+    return "{not valid json"
+
+
+def _handler_429(kwargs):
+    raise _HTTP429()
+
+
+# --------------------------------------------------------------------------- #
+# Status: evaluated vs incomplete
+# --------------------------------------------------------------------------- #
+
+
+def test_status_evaluated_when_valid_llm_output(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "good fit")])
+    client, _ = recording_client()
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+    )
+    assert len(report.cases) == 1
+    pred = report.cases[0].prediction
+    assert pred.status == "evaluated"
+    assert pred.reason is None
+    assert pred.prompt_version == "2"
+    assert pred.as_of is not None
+    assert len(pred.per_call) > 0
+
+
+def test_status_incomplete_when_invalid_json(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    client = _client_with_handler(_handler_invalid_json)
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+    )
+    assert len(report.cases) == 1
+    pred = report.cases[0].prediction
+    assert pred.status == "incomplete"
+    assert pred.reason is not None and "LLM error" in pred.reason
+    assert pred.outcome == "skip"
+    assert pred.llm_calls >= 1
+    assert any(not c["ok"] for c in pred.per_call)
+
+
+def test_status_incomplete_when_429_error(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    client = _client_with_handler(_handler_429)
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+    )
+    assert len(report.cases) == 1
+    pred = report.cases[0].prediction
+    assert pred.status == "incomplete"
+    assert pred.reason is not None and "LLM error" in pred.reason
+    assert any(429 in (c.get("http_errors") or []) for c in pred.per_call)
+
+
+def test_per_call_details_recorded(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    client, _ = recording_client()
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+    )
+    pred = report.cases[0].prediction
+    assert len(pred.per_call) > 0
+    for call in pred.per_call:
+        assert "stage" in call
+        assert "model" in call
+        assert isinstance(call.get("tokens", 0), int)
+        assert isinstance(call.get("transport_retries", 0), int)
+        assert isinstance(call.get("validation_attempts", 0), int)
+        assert isinstance(call.get("validation_failures", 0), int)
+        assert isinstance(call.get("ok"), bool)
+
+
+# --------------------------------------------------------------------------- #
+# Prompt version and resume
+# --------------------------------------------------------------------------- #
+
+
+def test_prompt_version_stored(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    client, _ = recording_client()
+    results = tmp_path / "results.jsonl"
+    _report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    record = load_all_records(results)[0]
+    assert record["prompt_version"] == "2"
+    assert record["status"] == "evaluated"
+    assert record["as_of"] is not None
+    assert isinstance(record["per_call"], list)
+
+
+def test_older_version_record_is_rerun(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    results = tmp_path / "results.jsonl"
+    results.write_text(
+        json.dumps(
+            {
+                "short_id": entries[0]["pool_id"][:8],
+                "pool_id": entries[0]["pool_id"],
+                "title": entries[0]["title"],
+                "company": entries[0]["company"],
+                "url": entries[0]["url"],
+                "source": entries[0]["source"],
+                "owner_label": "apply",
+                "owner_reason": "fit",
+                "mode": "full",
+                "system_decision": "apply",
+                "score": 85.0,
+                "confidence": 0.9,
+                "fired_rules": [],
+                "vetoes": [],
+                "reasons": [],
+                "must_have_skills": ["Python"],
+                "nice_to_have_skills": [],
+                "skill_details": [],
+                "missing_skills": [],
+                "must_have_coverage": 1.0,
+                "must_have_coverage_numerator": 1.0,
+                "must_have_coverage_denominator": 1,
+                "nice_to_have_coverage": None,
+                "dimension_scores": {},
+                "llm_calls": 4,
+                "tokens": 1000,
+                "reached_llm": True,
+                "cheap_status": "passed",
+                "regex_min_years": None,
+                "regex_max_years": None,
+                "regex_title_seniority": "junior",
+                "regex_remote_type": "remote",
+                "regex_years_quote": None,
+                "status": "evaluated",
+                "reason": None,
+                "prompt_version": "1",
+                "as_of": "2026-01-01T00:00:00+00:00",
+                "per_call": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    client, state = recording_client()
+    _report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert state["prompts"] != []
+    assert _report.resumed_from_store == 0
+
+
+def test_current_version_record_is_skipped(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    results = tmp_path / "results.jsonl"
+    results.write_text(
+        json.dumps(
+            {
+                "short_id": entries[0]["pool_id"][:8],
+                "pool_id": entries[0]["pool_id"],
+                "title": entries[0]["title"],
+                "company": entries[0]["company"],
+                "url": entries[0]["url"],
+                "source": entries[0]["source"],
+                "owner_label": "apply",
+                "owner_reason": "fit",
+                "mode": "full",
+                "system_decision": "apply",
+                "score": 85.0,
+                "confidence": 0.9,
+                "fired_rules": [],
+                "vetoes": [],
+                "reasons": [],
+                "must_have_skills": ["Python"],
+                "nice_to_have_skills": [],
+                "skill_details": [],
+                "missing_skills": [],
+                "must_have_coverage": 1.0,
+                "must_have_coverage_numerator": 1.0,
+                "must_have_coverage_denominator": 1,
+                "nice_to_have_coverage": None,
+                "dimension_scores": {},
+                "llm_calls": 4,
+                "tokens": 1000,
+                "reached_llm": True,
+                "cheap_status": "passed",
+                "regex_min_years": None,
+                "regex_max_years": None,
+                "regex_title_seniority": "junior",
+                "regex_remote_type": "remote",
+                "regex_years_quote": None,
+                "status": "evaluated",
+                "reason": None,
+                "prompt_version": "2",
+                "as_of": "2026-01-01T00:00:00+00:00",
+                "per_call": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    client, state = recording_client()
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert state["prompts"] == []
+    assert report.resumed_from_store == 1
+
+
+# --------------------------------------------------------------------------- #
+# Ordering, dedup, flags
+# --------------------------------------------------------------------------- #
+
+
+def test_duplicates_collapsed_by_default(tmp_path: Path) -> None:
+    entries = [
+        _pool_entry(0, company="Emetlab Ltd.", title="Backend Dev"),
+        _pool_entry(1, company="Emetlab", title="Backend Dev"),
+        _pool_entry(2, company="Other Co", title="Backend Dev"),
+    ]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("skip", "x"), ("apply", "y"), ("apply", "z")])
+    client, _state = recording_client()
+    results = tmp_path / "results.jsonl"
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+    )
+    assert len(report.cases) == 2
+    titles = {c.case.title for c in report.cases}
+    assert titles == {"Backend Dev"}
+    companies = {c.case.company for c in report.cases}
+    assert "Emetlab Ltd." in companies or "Emetlab" in companies
+    assert "Other Co" in companies
+
+
+def test_include_duplicates_keeps_all(tmp_path: Path) -> None:
+    entries = [
+        _pool_entry(0, company="Emetlab Ltd.", title="Backend Dev"),
+        _pool_entry(1, company="Emetlab", title="Backend Dev"),
+    ]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("skip", "x"), ("apply", "y")])
+    client, _ = recording_client()
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        include_duplicates=True,
+    )
+    assert len(report.cases) == 2
+
+
+def test_apply_first_order(tmp_path: Path) -> None:
+    entries = [
+        _pool_entry(0, title="Skip Job A"),
+        _pool_entry(1, title="Apply Job B"),
+        _pool_entry(2, title="Skip Job C"),
+        _pool_entry(3, title="Apply Job D"),
+    ]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(
+        tmp_path,
+        entries,
+        [("skip", "a"), ("apply", "b"), ("skip", "c"), ("apply", "d")],
+    )
+    client, _ = recording_client()
+    results = tmp_path / "results.jsonl"
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        results_path=results,
+        limit=4,
+    )
+    ordered_labels = [c.case.owner_label for c in report.cases]
+    apply_indices = [i for i, l in enumerate(ordered_labels) if l == "apply"]
+    skip_indices = [i for i, l in enumerate(ordered_labels) if l == "skip"]
+    assert all(i < max(skip_indices) for i in apply_indices) or not skip_indices
+
+
+def test_only_apply_flag(tmp_path: Path) -> None:
+    entries = [
+        _pool_entry(0, title="Apply Job"),
+        _pool_entry(1, title="Skip Job"),
+    ]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a"), ("skip", "s")])
+    client, _ = recording_client()
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        only_apply=True,
+    )
+    assert len(report.cases) == 1
+    assert report.cases[0].case.owner_label == "apply"
+
+
+def test_limit_flag(tmp_path: Path) -> None:
+    entries = [_pool_entry(i) for i in range(5)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "a")] * 5)
+    client, _ = recording_client()
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+        limit=2,
+    )
+    assert len(report.cases) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Metrics exclude incomplete jobs
+# --------------------------------------------------------------------------- #
+
+
+def test_metrics_exclude_incomplete_jobs(tmp_path: Path) -> None:
+    entries = [
+        _pool_entry(0, title="Valid Job"),
+        _pool_entry(1, title="Broken Job"),
+    ]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit"), ("apply", "fit")])
+    call_count = {"n": 0}
+
+    def handler(kwargs):
+        call_count["n"] += 1
+        user = kwargs["messages"][1]["content"] if len(kwargs["messages"]) > 1 else ""
+        if "Broken Job" in user:
+            return "{not valid json"
+        return json.dumps(_canned_payload(kwargs["messages"][0]["content"]))
+
+    client = _client_with_handler(handler)
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+    )
+    assert len(report.cases) == 2
+    evaluated = [c for c in report.cases if c.prediction.status == "evaluated"]
+    incomplete = [c for c in report.cases if c.prediction.status == "incomplete"]
+    assert len(evaluated) == 1
+    assert len(incomplete) == 1
+    m = report.metrics_evaluated
+    assert m.system_apply_total >= 0
+    assert len(report.incomplete_cases) == 1
+    assert report.incomplete_cases[0].prediction.reason is not None
+
+
+def test_incomplete_jobs_listed_with_reasons(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    client = _client_with_handler(_handler_invalid_json)
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+    )
+    assert len(report.incomplete_cases) == 1
+    assert report.incomplete_cases[0].prediction.reason is not None
+    text = format_report(report)
+    assert "Incomplete jobs" in text
+
+
+def test_cost_report_per_stage(tmp_path: Path) -> None:
+    entries = [_pool_entry(0)]
+    pool = _write_pool(tmp_path, entries)
+    labels = _write_labels(tmp_path, entries, [("apply", "fit")])
+    client, _ = recording_client()
+    report = run_label_eval(
+        labels_path=labels,
+        pool_path=pool,
+        client=client,
+        settings=get_settings(),
+        profile=_profile(),
+    )
+    text = format_report(report)
+    assert "Cost report" in text
+    assert "calls" in text and "tokens" in text

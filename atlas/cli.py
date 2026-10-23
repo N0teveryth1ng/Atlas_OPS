@@ -32,6 +32,7 @@ from . import __version__
 from .config import REPO_ROOT, get_settings, settings_for_profile
 from .db import (
     connect,
+    db_path,
     finish_run,
     get_latest_profile,
     init_db,
@@ -611,6 +612,10 @@ def cmd_eval_labels(args: argparse.Namespace) -> int:
         cheap_only=args.cheap_only,
         results_path=args.results,
         resume=not args.no_resume,
+        only_apply=args.only_apply,
+        limit=args.limit,
+        include_duplicates=args.include_duplicates,
+        usage_db=db_path(),
     )
     if args.cheap_only:
         print(format_cheap_report(report))
@@ -942,6 +947,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-resume",
         action="store_true",
         help="Ignore the stored per-job results and re-measure every job",
+    )
+    p_eval_labels.add_argument(
+        "--only-apply",
+        action="store_true",
+        help="Only evaluate owner-apply jobs (skip owner-skip jobs)",
+    )
+    p_eval_labels.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum number of jobs to process (after ordering and de-dup)",
+    )
+    p_eval_labels.add_argument(
+        "--include-duplicates",
+        action="store_true",
+        help="Keep duplicate postings (default: collapse by normalized company + title)",
     )
     p_eval_labels.set_defaults(func=cmd_eval_labels)
 
