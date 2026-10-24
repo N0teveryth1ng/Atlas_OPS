@@ -11,10 +11,10 @@ seniority/experience filtering (the author is a fresher).
 Metrics: 
 <img width="1600" height="367" alt="image" src="https://github.com/user-attachments/assets/3ade5043-d213-4796-ba3f-b4ac34fd1253" />
 
-Walkthrough:
+Walkthrough (video):
 [AtlasOps_demo.webm](https://github.com/user-attachments/assets/aa0e7bbe-1948-4ed5-a7b3-48563e0a90f9)
 
-In Action Demo:
+In Action Demo (video):
 https://github.com/user-attachments/assets/68de62b1-1f06-49e6-ab1f-86246338f9f9
 
 
