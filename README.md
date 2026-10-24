@@ -1,453 +1,108 @@
-# Atlas_OPS
+# Atlas
 
-A personal, single-user job-matching tool. It collects postings from job boards and ATS
-pages, filters them with deterministic code, scores the survivors with an LLM, and
-surfaces only roles that are a **genuine fit** for the candidate — with strict
-seniority/experience filtering (the author is a fresher).
+Atlas is a local job-matching tool that collects postings, checks them against an approved candidate profile, and presents the strongest matches with clear evidence.
 
+It combines deterministic filters with structured LLM scoring. Results and decisions are stored locally in SQLite and reviewed in a small web dashboard.
 
-# IN ACTION
+## Demo
 
-Metrics: 
-<img width="1600" height="367" alt="image" src="https://github.com/user-attachments/assets/3ade5043-d213-4796-ba3f-b4ac34fd1253" />
-
-Walkthrough (video):
-[AtlasOps_demo.webm](https://github.com/user-attachments/assets/aa0e7bbe-1948-4ed5-a7b3-48563e0a90f9)
-
-In Action Demo (video):
-https://github.com/user-attachments/assets/68de62b1-1f06-49e6-ab1f-86246338f9f9
-
-
-
-
-
-
-
-It is a CLI + scheduled pipeline **and** a local web dashboard. It optimises for
-**precision and accuracy**, not scale or latency.
-
-Two things it deliberately does **not** do:
-
-- **It never applies anywhere.** There is no auto-apply, no form submission, no
-  headless browser that talks to a job site. Every `APLD` / `NTAPLD` / `PEND` button
-  only records what *you* clicked, in your own SQLite database.
-- **It never rewrites your resume behind your back.** A tailored resume is generated on
-  demand, shown to you for review and editing, and can only be exported as DOCX/PDF
-  after you **approve** a version.
+[Watch a short walkthrough](https://github.com/user-attachments/assets/aa0e7bbe-1948-4ed5-a7b3-48563e0a90f9)
 
 ## What it does
 
-1. Builds a **profile** once from a resume and/or a description, which you review and
-   approve.
-2. Collects, normalises and de-duplicates postings across sources.
-3. Parses each JD (regex + LLM), applies **hard filters in code**, then skill-matches,
-   evaluates, adversarially verifies and ranks each surviving job.
-4. Decides **`apply` / `review` / `skip`** with vetoes, confidence and a full audit
-   trail, and shows the results in a dashboard.
-5. Optionally drafts a **tailored resume** for one job from your approved profile,
-   grounded in your own profile facts, for you to review, edit, approve and export.
+- Builds a candidate profile from a resume PDF, a written description, or both.
+- Collects and deduplicates job postings from configured job boards and company career pages.
+- Filters out roles that miss hard requirements, then scores and explains the remaining matches.
+- Tracks application decisions and shows rejected jobs with their reasons.
+- Prepares an optional, profile-grounded resume for a selected job. You review and approve it before export.
 
-## Two input modes
+Atlas does not submit applications. Application status is updated only when you record it yourself.
 
-The profile is built from one of (or both) — `InputMode` in `atlas/schemas.py`:
+## Quick start
 
-| Mode | Input | Notes |
-|---|---|---|
-| **`resume`** | a resume PDF, max 5 MB | parsed on `/setup`; text is never sent to telemetry |
-| **`description`** | free text you paste (target roles, stack, location, seniority) | no upload needed |
+Requires Python 3.11 or newer.
 
-`/setup` accepts a resume, a description, or both together. The approved profile is the
-only thing the pipeline uses; it is never edited automatically after approval (any change
-you make re-requires approval and re-runs the hard filters).
-
-## Pipeline stages
-
-```
-Resume / description -> Profile (human-approved once)
-                     -> Query planner -> Collectors -> normalise + dedupe (SQLite)
-                     -> JD parser (regex + LLM) -> hard filters (code)
-                     -> skill match (ontology) -> evaluator (LLM)
-                     -> adversarial verifier (different model) -> ranker (weighted)
-                     -> decision engine (apply/review/skip) -> digest + dashboard
-                     -> feedback (bounded tuning)
-```
-
-Design rules: hard constraints first in deterministic code, soft scoring second with an
-LLM; every LLM output is a validated typed object; the LLM judges but code decides; the
-generator and the verifier are separate passes; every job is explainable at each stage;
-and everything is measured against a labelled golden set.
-
-`atlas/pipeline.py` is an explicit state machine, not a free-roaming agent loop. Each
-stage logs to SQLite via `log_stage`, so any decision can be traced afterwards.
-
-## Setup
-
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate            # Windows
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install -r requirements-dev.txt   # test/dev extras
-cp .env.example .env              # fill in real values, NEVER commit .env
+Copy-Item .env.example .env
 ```
 
-Then edit `config.yaml` (preferences), `skills.yaml` (skill ontology) and
-`companies.yaml` (target companies for the ATS collectors — all lists ship empty).
+Add an LLM API key to `.env`. When both are available, Atlas prefers `GEMINI_API_KEY`; otherwise it uses `GROQ_API_KEY`. Configure job preferences in `config.yaml` and, if using company career pages, add target boards in `companies.yaml`.
 
 Start the dashboard:
 
-```bash
-python -m atlas.cli dashboard --port 8000
+```powershell
+python -m atlas.cli dashboard
 ```
 
-### Environment (`.env`)
+Open <http://127.0.0.1:8000>. The dashboard stays on your computer by default. Set `DASHBOARD_PASSWORD` in `.env` before exposing it on a non-local address.
 
-Every variable below is documented in `.env.example`.
+## First run
 
-| Variable | Purpose |
-|---|---|
-| `GROQ_API_KEY` | Groq LLM API key (the only required key) |
-| `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | Adzuna job API |
-| `RECRUITEE_CAREERS_SITES_TOKEN` | Recruitee `X-Careers-Sites-Token` header (required from 2027-02-10) |
-| `RESEND_API_KEY` / `RESEND_FROM_EMAIL` / `RESEND_TO_EMAIL` | Resend email — **legacy; delivery is cancelled and no run path calls it** |
-| `BRAINTRUST_API_KEY` | Optional. Empty = tracing is a local no-op and nothing leaves the machine |
-| `BRAINTRUST_PROJECT` | Trace project name (default `My Project`) |
-| `BRAINTRUST_PROJECT_ID` / `BRAINTRUST_ORG` | Project and org that receive traces and eval scores |
-| `ATLAS_OFFLINE` | `1` forces telemetry off even with a key present |
-| `DASHBOARD_PASSWORD` | Dashboard login; **required to bind a non-loopback host** |
-| `ATLAS_DB` | SQLite path (defaults to `atlas.db`) |
+1. Open **Setup**, add a resume and/or a short description of your target roles, skills, and locations, then build your profile.
+2. Review and approve the profile. Update any fields that need correction.
+3. Choose **Find jobs** to collect and evaluate postings.
+4. Review matches, explanations, and rejected jobs. Record application status manually.
 
-### Observability (optional)
-
-Every model call goes through `atlas.llm.LLMClient`, the single instrumentation point.
-Only an explicit allowlist of non-PII fields is ever sent (stage/job identity, scores,
-decisions, rule ids, model names, prompt versions, latency, token counts). Resume text,
-`profile.json` contents, name, email, phone, prompt text and links other than the job URL
-are dropped first. Telemetry failures can never fail a run.
-
-## Dashboard
-
-`python -m atlas.cli dashboard` serves a local web UI so the whole flow works without a
-terminal. Pages:
-
-| Page | Route | What it does |
-|---|---|---|
-| **Setup** | `/setup` | Upload a resume PDF (≤ 5 MB) and/or paste a description, then **Build profile** |
-| **Profile** | `/profile` | Review/edit every field (level, years, skills, target roles, locations, internships, work, projects, education, links, certifications), then **Approve profile**. The pipeline stays blocked until a profile is approved |
-| **Home** | `/` | **Find jobs** button (background run) plus the results table: only jobs that passed every hard filter with an `APPLY`/`REVIEW` decision, with score, reasons, risk, missing skills, seniority and `APLD`/`NTAPLD`/`PEND` bookkeeping |
-| **Add job** | `/add` | Paste a JD's text and link; it runs the same pipeline as a background thread and redirects to `/add/progress`, which polls `/api/add-status` (current step, Groq rate-limit wait, calls/tokens). The URL is **never fetched** |
-| **Rejected** | `/rejected` | Every hard-filter rejection with its rule, reason and quote, so false rejects are auditable |
-| **Status** | `/status` | Live pipeline state: stage, counts, per-source yield and errors, LLM calls/tokens, ETA, and any pause message. JSON at `/api/status` |
-| **Job page** | `/jobs/{id}` | Score line (`N / 100`), confidence, seniority, missing skills, per-dimension breakdown, vetoes with verbatim quotes, deduped reasons, **Prepare application** (opens the kit) and your own verdict form |
-| **Application kit** | `/jobs/{id}/kit` | Claim extraction and evidence quotes for a single application (human drafting aid) |
-| **Tailored resume** | `/jobs/{id}/resume` | Build, review (base vs tailored side by side, per-line fact citations, source badges, claim flags), edit, approve and export a grounded resume for that one job — see below |
-
-Other routes: `/find` (POST, starts a run), `/health`, `/login` / `/logout`,
-`/api/matched`. Only one run may be in flight at a time (a single-run lock).
-
-### Password and same-origin protection
-
-Set `DASHBOARD_PASSWORD` in `.env`; every route then requires a signed-cookie login
-compared in constant time. With no password set the server **refuses to bind a
-non-loopback address**, so it can only run on `127.0.0.1`. POSTs are rejected on a
-cross-origin `Origin`/`Referer`, and all rendered values are HTML-escaped.
-
-## Tailored resume
-
-For one job at a time, on demand only (never inside a bulk run):
-
-- **Grounded generation.** `atlas/resume.py` plus `prompts/tailored_resume.md` (version
-  4) rewrite only what the approved profile already contains. Every summary sentence and
-  bullet must cite a profile **fact id** (sentence-level for prose), so a line can never
-  borrow unrelated detail. Claim strength (`led`, `owning`, `robust`, …) and any new
-  technology or number are rejected unless a cited fact supports them. Skills are built in
-  code (capped at 14, alias-deduped, evidence-linked) and never invented. Unmet
-  requirements are listed as missing, never added. If the profile lacks detail the
-  generator refuses instead of padding.
-- **Cache and cost.** The cache key is `(profile hash, job id, prompt version, generator
-  version)`; bump `GENERATOR_VERSION` when the rules change. A repeat build is free
-  (0 tokens, 0 calls); **Regenerate** bypasses the cache. Every call is `temperature 0`
-  inside a 3-call-per-resume budget.
-- **Review and editing.** Warnings are deduped to one per section plus a count. Every line
-  is editable; an edit is saved as a **new version** marked `owner-edited` (and stored with
-  an empty `profile_hash` so the cache never serves it). An edit that names a technology or
-  number absent from your profile shows a **warning, not a block**.
-- **Approval, then export.** `GET /jobs/{id}/resume/export.docx|.pdf` returns
-  **409 "Approve a version before exporting."** until you approve a version. The export is
-  a single column of real, selectable text with the standard headings
-  (Summary / Skills / Experience / Projects / Education), no tables, images, text boxes or
-  header/footer, and the filename `Name_Role_Company`. Exported text is folded to plain
-  ASCII at export time only, so the PDF core font never prints `?` for a non-breaking
-  hyphen, dash, curly quote or accent; the stored text is unchanged.
-
-## Groq limits and the daily-limit pause
-
-Groq's free tier is roughly **30 requests/minute**, **1,000 requests/day**, **~8K
-tokens/minute** and **~200K tokens/day**. Rate-limit 429s carry `Retry-After` and
-`x-ratelimit-*` headers.
-
-- **Caps** in `config.yaml` / `RunConfig`: `max_jobs_per_run: 12`,
-  `max_llm_calls_per_run: 100`, `max_llm_tokens_per_run: 120000`,
-  `max_llm_tokens_per_day: 200000`.
-- **All retrying and pacing lives in our own wrapper**: the Groq SDK is built with
-  `max_retries=0`, so its internal backoff cannot bypass our pacing, wait callbacks or
-  daily-limit detection. Rate-limit headers are read from the raw HTTP response (the SDK's
-  parsed object strips them), which is what drives proactive pacing and retry logging.
-- **Daily-limit pause:** a 429 that means the daily limit (or `Retry-After` > 120 s) raises
-  `GroqDailyLimitReached` and the run **pauses** (it does not fail, so jobs stay
-  resumable). `/status` shows `Paused: Groq daily limit reached, resets in about Xh`, with
-  per-UTC-day usage in the `llm_usage` table.
-- **Find jobs refuses to start** when today's tokens are >= 90% of the daily cap or a
-  daily-limit pause is still in effect.
-- **Per-run token cap:** `max_llm_tokens_per_run` raises `LLMTokenBudgetExceeded`, which
-  pauses rather than fails.
-
-Because a resume run costs a few thousand tokens per call, a resume build runs in a
-background thread with its own progress page that shows the current step, the Groq
-rate-limit wait, and the tokens/calls spent.
-
-## Safety rules
-
-- **No auto-apply anywhere.** Phase 8 / assisted apply stays blocked until every
-  pre-Phase-8 gate is GO *and* the owner explicitly says so. The legacy
-  `auto_applications/` bots are retained but not imported by the pipeline.
-- **Owner approval for resumes.** Nothing exports until a version is approved; editing
-  never invents content.
-- **The dashboard only records clicks.** `jobs.application_status` changes when you click
-  `APLD`/`NTAPLD`/`PEND`; the tool never opens an application form.
-- **`eval/labels.jsonl` is human-owned.** It is created, edited and relabelled only by the
-  owner; `label-check` and `eval` read it and never write it, and the interactive
-  `label` command appends one record only when the owner presses `a` or `s` (and
-  rewrites only when they press `u`), while `label-import` appends a whole TSV only
-  after the owner types `yes` (it refuses non-interactive input). The agent never
-  writes this file.
-- **No secrets in git.** `.env`, `atlas.db`, `uploads/`, `data/`, resumes and generated
-  exports are gitignored and untracked.
-
-## CLI
-
-```bash
-python -m atlas.cli profile --resume resume.pdf --describe "target roles..." --out profile.json
-python -m atlas.cli review profile.json        # review + approve an existing profile.json
-python -m atlas.cli status                     # show the latest saved profile
-python -m atlas.cli collect                    # fetch + normalise + dedupe jobs
-python -m atlas.cli run                        # parse -> filter -> evaluate -> verify -> rank -> digest
-python -m atlas.cli run --collect --limit 50   # fetch first, then process
-python -m atlas.cli decide                     # decision engine dry-run (no email)
-python -m atlas.cli decide --limit 25          # dry-run over <= 25 jobs
-python -m atlas.cli explain <job_id>           # print the latest stored decision for a job
-python -m atlas.cli schedule --hour 9          # run once now, then daily at 09:00
-python -m atlas.cli dashboard --port 8000      # web dashboard
-python -m atlas.cli eval                       # golden-set evaluation (deterministic)
-python -m atlas.cli eval --with-llm            # + live LLM precision@10 gate (costs tokens)
-python -m atlas.cli feedback <job_id> good     # or: bad --reason <code>
-python -m atlas.cli label-check                # validate a human-labelled labels file (read-only)
-python -m atlas.cli label                      # interactively label pool jobs (owner: a=apply s=skip u=undo q=quit)
-python -m atlas.cli label-sheet --count 10     # next N pending jobs as a compact text sheet (read-only)
-python -m atlas.cli label-import labels.tsv    # append a TSV of labels after you type "yes"
-python -m atlas.cli eval-labels                # replay the pipeline over owner-labelled jobs (read-only)
-python -m atlas.cli eval-labels --cheap-only   # LLM-free pass: cheap filters only, zero tokens
-python -m atlas.cli selfcheck --fast           # deterministic pre-flight checks
-python -m atlas.cli selfcheck --full           # + coverage / lint / types / mutation / network
-```
-
-`python -m atlas.cli --help` is the authoritative command list.
+You can also enter a posting through **Add job**. Atlas evaluates its text without fetching the supplied URL.
 
 ## Configuration
 
-Preferences live in `config.yaml` (single source of truth). Skill aliases live in
-`skills.yaml`; target ATS companies live in `companies.yaml`. See each file for its keys.
+| File or variable | Purpose |
+| --- | --- |
+| `config.yaml` | Candidate preferences, filters, model names, run limits, and enabled sources |
+| `skills.yaml` | Skill names and aliases used for matching |
+| `companies.yaml` | Company career pages used by ATS collectors |
+| `GEMINI_API_KEY` | Gemini API key; preferred when set |
+| `GROQ_API_KEY` | Groq API key; used when Gemini is not configured |
+| `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | Optional Adzuna access |
+| `DASHBOARD_PASSWORD` | Optional dashboard login; required for non-local binding |
+| `ATLAS_DB` | Optional SQLite database path; defaults to `atlas.db` |
 
-## Sources
+See [`.env.example`](.env.example) for the full environment template. Keep `.env`, resumes, databases, and generated exports out of version control.
 
-Collectors are pluggable (`atlas/collectors/`) and enabled per-source in `config.yaml`
-under `sources:`. Failures in one source never abort a run.
-
-| Source | Type | Default | Needs |
-|---|---|---|---|
-| RemoteOK | feed | on | - |
-| Remotive | feed | on | - |
-| Adzuna | API | on | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
-| Greenhouse | ATS board | on | token in `companies.yaml` |
-| Lever | ATS board | on | token in `companies.yaml` |
-| Ashby | ATS board | on | token in `companies.yaml` |
-| Himalayas | API | on | - |
-| Arbeitnow | API | on | - |
-| Jobicy | API | on | - |
-| We Work Remotely | RSS feed | off | opt-in |
-| SmartRecruiters | ATS board | off | token, opt-in |
-| Workable | ATS board | off | token, opt-in |
-| Recruitee | ATS board | on | tenant in `companies.yaml`, `RECRUITEE_CAREERS_SITES_TOKEN` from 2027-02-10 |
-| Teamtailor | ATS board | off | token, opt-in |
-
-"on" means `sources.<name>: true` in the committed `config.yaml`; a source still runs
-nothing until its requirement is met (ATS collectors only fetch the companies listed in
-`companies.yaml`, which ships with every list empty). Turning a source on asserts you have
-read its terms — see the per-source terms/licensing notes in the previous revision of this
-file for the ones that still need an owner decision (`We Work Remotely`,
-`SmartRecruiters`, `Workable`, `Teamtailor`).
-
-Jobs are stripped of HTML, given a stable dedupe key, merged across boards,
-freshness-filtered and stored in SQLite. When the same job appears on both an aggregator
-and an ATS board, the ATS URL is canonical and every URL stays in `job.urls`.
-
-### Resilience
-
-`atlas/collectors/base.py` has two fetch paths: the original `default_get_json` (3
-attempts, exponential backoff) and `HttpFetcher`, which adds an explicit `HttpPolicy`
-(timeout, attempts, backoff bounds, a cap on how long a `Retry-After` can park you),
-parses `Retry-After` in both delta-seconds and HTTP-date form, and serves raw text for
-XML/Atom feeds. Transport failures, 5xx, 429 and 503 retry; a permanent 4xx does not.
-
-Every source is covered by `tests/fixtures/<source>.json`, replayed offline by
-`tests/replay.py` so no test touches the network.
-
-## Decision engine
-
-`atlas/decision.py` turns a verified evaluation into an explicit `apply` / `review` /
-`skip` outcome with a full audit record. It reuses the evaluator's verdict and the
-verifier's veto/downgrade and adds two LLM judgements: `project_relevance` and an
-adversarial `decision_critic`.
-
-- **Dimensions** (`skills_core`, `skills_secondary`, `education_fit`, `logistics_fit`,
-  `project_relevance`, `role_fit`, `growth_fit`, `seniority_fit`) weighted by
-  `config.yaml: decision.weights` (must sum to 1.0), with a bounded red-flag penalty.
-- **Hard vetoes** force `skip`: coverage below `decision.coverage_floor`, insufficient
-  years (1-year tolerance), `seniority_fit` below `decision.seniority_floor`, a verifier
-  veto or a critic veto. Soft vetoes (a verifier downgrade) force `review`.
-- **Rule** — `hard veto -> skip`; `soft veto or confidence < c_min -> review`;
-  `score >= apply and confidence >= c_apply -> apply`; `score >= review -> review`;
-  otherwise `skip`.
-- **Audit** — each `Decision` stores dimension scores, weights, spreads, vetoes with
-  verbatim evidence, `config_hash`, prompt versions and model names in the `decisions`
-  table. All evidence quotes are validated verbatim against the JD/profile.
-
-## Digest and scheduling
-
-- **Digest** (`atlas/digest.py`) groups a run into **Strong matches**, **Worth a look**
-  and **Needs review**, each with title, company, location, link, fit score, reasons,
-  main risk, missing skills and seniority, plus the funnel summary.
-- **Email delivery is cancelled.** `atlas.cli run` never sends mail; the digest is printed
-  and served by the dashboard. `atlas/emailer.py` remains only for historical
-  idempotency tests.
-- **Scheduling** — `python -m atlas.cli schedule` runs once immediately, then daily at
-  `schedule.daily_hour` (default 09:00 local). For unattended operation use Task
-  Scheduler, cron/systemd or CI. Sending nothing when nothing clears the bar is a valid
-  outcome.
-
-## Feedback
+## Command line
 
 ```bash
-python -m atlas.cli feedback <job_id> good
-python -m atlas.cli feedback <job_id> bad --reason too_senior
-python -m atlas.cli feedback --export        # append labelled cases to eval/feedback.jsonl
+python -m atlas.cli profile --resume resume.pdf --describe "Backend roles in India"
+python -m atlas.cli review profile.json
+python -m atlas.cli status
+python -m atlas.cli collect
+python -m atlas.cli run
+python -m atlas.cli schedule --hour 9
+python -m atlas.cli dashboard
 ```
 
-Reason codes: `too_senior`, `wrong_stack`, `bad_company`, `wrong_location`, `other`,
-`good_fit`. Feedback becomes **bounded** tuning (`atlas/feedback.py`): bad companies are
-blacklisted, good companies get a rank bonus, weights are nudged then renormalised.
+Useful evaluation and feedback commands:
 
-## Testing
+```bash
+python -m atlas.cli eval
+python -m atlas.cli feedback <job_id> good
+python -m atlas.cli selfcheck --fast
+```
+
+Run `python -m atlas.cli --help` for the complete command list. The scheduler runs once immediately, then daily at the configured local hour.
+
+## Development
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                             # unit tests (offline; no network)
-python -m atlas.cli selfcheck --fast         # pre-flight checks
-python -m atlas.cli eval                     # golden-set evaluation
-python eval/eval.py                          # standalone golden-set eval
+python -m pytest
+python -m atlas.cli selfcheck --fast
 ```
 
-`selfcheck` runs the pre-Phase-8 audit checks (hygiene, secrets, gitignore, pinned deps,
-README, tests, coverage, lint/format/types, dead code, network isolation, pipeline
-invariants) and exits non-zero if anything is FAIL or BLOCKED. `--full` adds
-coverage/lint/type/mutation/network checks; `--report out.json` writes the
-machine-readable result.
+Tests use local fixtures and do not require live job-board requests. Evaluation with live LLM calls is separate from the default offline test run.
 
-The golden set lives in `eval/golden_set.jsonl`; the human-labelled set lives in
-`eval/labels.jsonl` (owner-owned) and is validated by `label-check`. Labels are
-produced with `python -m atlas.cli label`, which shows one pool job at a time (title,
-company, location, remote type, source, posted date, URL, full description - never a
-score or a decision) in a fixed-seed random order, appends
-`{pool_id, url, label, reason, labeled_by}` on the owner's keypress, skips anything
-already labelled so a session is resumable, and ends with the same report as
-`label-check`.
+## Data and safety
 
-The same order powers the offline pair. `label-sheet --count N` prints the next N
-pending jobs as compact text - `short_id` (first 8 characters of `pool_id`), title,
-company, location, remote, source, posted date, URL, and a description digest (the
-first 250 characters plus up to 6 sentences mentioning experience/years/required/
-must/minimum/senior/lead/own/mentor or a technology name, capped at 1,300 characters)
-with a `[non-English?]` heuristic flag. `label-import FILE` takes a TSV with
-`short_id`, `label` (`a` or `s`) and `reason`, validates every row (known and
-unlabeled short_id, valid label, non-empty reason, no duplicates), prints a summary
-table, and appends to `eval/labels.jsonl` only after you type `yes` on a real
-terminal - it refuses non-interactive input unless **both** stdin and stdout are a
-TTY, and no flag, environment variable or public function can skip the prompt. It
-then prints the 40/15/10 tally and the `label-check` report. Each successful import
-also appends an audit line (UTC timestamp, source file name, SHA-256, row count) to
-the gitignored `eval/label_imports.log`.
-
-`eval-labels` measures the pipeline against those human labels. It replays the same
-stages a collected job goes through (cheap filters, parse, hard filters, skill match,
-evaluator, verifier, decision) over every labelled pool job and prints a confusion
-matrix (owner apply/skip x system APPLY/REVIEW/SKIP), precision of APPLY, recall of
-owner-apply jobs (APPLY and REVIEW shown separately), the seniority false-pass count,
-per-source and per-rule breakdowns, the full list of disagreements, and the same
-figures with duplicate postings collapsed by company + title. Every proportion carries
-its sample size and a 95% Wilson interval. Jobs the cheap pre-filter rejects cost zero
-LLM calls; the run stops cleanly at a daily limit or a call/token cap and reports how
-many jobs remain. It is read-only: `eval/labels.jsonl` and `eval/labeling_pool.jsonl`
-are never written and the owner's label reasons never reach a prompt. The full report
-is written to the gitignored `eval/label_eval_report.md` (it quotes job and label
-text).
-
-Every measured job is also written to the gitignored `eval/label_eval_results.jsonl`
-(one JSONL line per job): the owner's label and reason, the system's decision, score
-and confidence, the rules that fired with their evidence, the parsed must-have and
-nice-to-have lists, the per-skill credit and why, the must-have coverage as a
-numerator/denominator, the dimension scores, and the LLM calls and tokens that job
-cost. A later run reads that file and skips the jobs already measured, so a run that
-stopped at the daily limit never re-spends tokens on work it already did
-(`--no-resume` re-measures everything, `--results PATH` picks another file).
-
-`eval-labels --cheap-only` runs only the LLM-free stages - the deterministic regex
-parse and the cheap pre-filter - over every labelled job. It makes zero LLM calls, so
-it can be run over the whole set at any time, and it prints how many jobs the cheap
-filters reject (and by which rule) against how many pass and need the LLM stages,
-split by the owner's label, plus every owner-apply job the cheap filter rejects with
-its rule and evidence. Its report goes to the gitignored
-`eval/label_eval_cheap_report.md`.
-
-Read-only filters narrow which pending jobs the sheet shows, all matching the raw
-pool text only (never a score, decision or model output): `--where TEXT` keeps jobs
-whose location, title or first 600 description characters contain TEXT
-(case-insensitive, repeatable, every `--where` must match), `--exclude TEXT` drops
-any job whose raw text contains TEXT (repeatable), and `--remote-open` keeps jobs
-whose location is empty or names worldwide/anywhere/India/APAC/Asia/remote and drops
-a job naming a single other country. The header always reports `matched N`/`showing
-N`; `--sort recent` orders the matches by `posted_at` descending instead of the fixed
-seed. `label-sheet` never writes anything.
-
-## Project layout
-
-```
-atlas/             # pipeline package (incl. atlas/collectors/, atlas/export.py)
-atlas/dashboard.py # local web UI
-prompts/           # versioned prompt files
-config.yaml        # preferences
-skills.yaml        # skill ontology / alias map
-companies.yaml     # target company ATS boards
-eval/              # golden set, skill cases, labels, eval harness
-tests/             # unit + replay tests
-auto_applications/ # legacy Playwright bots, retained for Phase 8 (disabled)
-```
-
-## Security
-
-- Never commit `.env`, `atlas.db`, `uploads/`, `data/`, resumes or generated exports
-  (all gitignored).
-- Rotate any key that was ever committed.
-- The dashboard binds loopback unless `DASHBOARD_PASSWORD` is set.
+- Job, profile, and decision records are stored in the local SQLite database.
+- A profile must be reviewed and approved before it is used for matching.
+- Generated resumes use profile facts and require your approval before export.
+- Atlas never submits applications or sends application forms.
+- Optional Braintrust tracing is disabled when `BRAINTRUST_API_KEY` is empty; set `ATLAS_OFFLINE=1` to force it off.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
