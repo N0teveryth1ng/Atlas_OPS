@@ -5,6 +5,24 @@ pages, filters them with deterministic code, scores the survivors with an LLM, a
 surfaces only roles that are a **genuine fit** for the candidate — with strict
 seniority/experience filtering (the author is a fresher).
 
+
+# IN ACTION
+
+Metrics: 
+<img width="1600" height="367" alt="image" src="https://github.com/user-attachments/assets/3ade5043-d213-4796-ba3f-b4ac34fd1253" />
+
+Walkthrough:
+[AtlasOps_demo.webm](https://github.com/user-attachments/assets/aa0e7bbe-1948-4ed5-a7b3-48563e0a90f9)
+
+In Action Demo:
+https://github.com/user-attachments/assets/68de62b1-1f06-49e6-ab1f-86246338f9f9
+
+
+
+
+
+
+
 It is a CLI + scheduled pipeline **and** a local web dashboard. It optimises for
 **precision and accuracy**, not scale or latency.
 
